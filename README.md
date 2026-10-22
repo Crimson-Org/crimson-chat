@@ -33,7 +33,7 @@ Once a server connects, it lists its rooms busiest first, so you can tick severa
 Each server's rooms and private chats sit in one list, newest first, with rooms as rounded squares and people as circles.\
 A rail of servers appears down the left only when you use more than one.\
 Right-click a room to leave it, or a person to message, mention or look them up, with moderation in rooms you run.\
-Your account on each server holds your nickname, display name, picture and login, wherever that server supports them.\
+Your account on each server sets your nickname, display name, picture and login, wherever that server supports them.\
 Messages from the same person group into bubbles under one avatar, with your own on the right.
 
 ### Modern IRC
