@@ -253,7 +253,7 @@ static GtkWidget *create_empty_page(void) {
 	GtkWidget *page = adw_status_page_new();
 	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), "crimson-chats-symbolic");
 	adw_status_page_set_title(ADW_STATUS_PAGE(page), TEXT_NO_CHATS_TITLE);
-	adw_status_page_set_description(ADW_STATUS_PAGE(page), TEXT_NO_CHATS_DESCRIPTION);
+	adw_status_page_set_description(ADW_STATUS_PAGE(page), NULL);
 	gtk_widget_add_css_class(page, "compact");
 	GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_set_halign(buttons, GTK_ALIGN_CENTER);

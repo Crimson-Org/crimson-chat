@@ -83,8 +83,8 @@ static void fill_appearance(AdwPreferencesDialog *dialog) {
 	add_switches(look, LOOK, G_N_ELEMENTS(LOOK));
 	GtkWidget *chat = add_group(page, TEXT_CONVERSATIONS);
 	const SwitchSetting CHAT[] = {
-		{TEXT_SHOW_EVENTS, TEXT_SHOW_EVENTS_DETAIL, &settings->shows_events},
-		{TEXT_SHOW_IMAGES, TEXT_SHOW_IMAGES_DETAIL, &settings->shows_images},
+		{TEXT_SHOW_EVENTS, NULL, &settings->shows_events},
+		{TEXT_SHOW_IMAGES, NULL, &settings->shows_images},
 		{TEXT_SHOW_TYPING, NULL, &settings->shows_typing},
 	};
 	add_switches(chat, CHAT, G_N_ELEMENTS(CHAT));
@@ -96,7 +96,7 @@ static void fill_notifications(AdwPreferencesDialog *dialog) {
 	GtkWidget *page = add_page(dialog, TEXT_NOTIFICATIONS, "preferences-system-notifications-symbolic");
 	GtkWidget *group = add_group(page, TEXT_NOTIFY_GROUP);
 	const SwitchSetting NOTICES[] = {
-		{TEXT_NOTIFY_MENTIONS, TEXT_NOTIFY_MENTIONS_DETAIL, &settings->notifies_mentions},
+		{TEXT_NOTIFY_MENTIONS, NULL, &settings->notifies_mentions},
 		{TEXT_NOTIFY_PRIVATE, NULL, &settings->notifies_private},
 	};
 	add_switches(group, NOTICES, G_N_ELEMENTS(NOTICES));
@@ -114,13 +114,13 @@ static void fill_privacy(AdwPreferencesDialog *dialog) {
 	GtkWidget *page = add_page(dialog, TEXT_PRIVACY, "security-high-symbolic");
 	GtkWidget *group = add_group(page, TEXT_PRIVACY_GROUP);
 	const SwitchSetting PRIVACY[] = {
-		{TEXT_SEND_TYPING, TEXT_SEND_TYPING_DETAIL, &settings->sends_typing},
-		{TEXT_SEND_READ, TEXT_SEND_READ_DETAIL, &settings->sends_read_markers},
+		{TEXT_SEND_TYPING, NULL, &settings->sends_typing},
+		{TEXT_SEND_READ, NULL, &settings->sends_read_markers},
 	};
 	add_switches(group, PRIVACY, G_N_ELEMENTS(PRIVACY));
 	GtkWidget *window = add_group(page, TEXT_WINDOW_GROUP);
 	const SwitchSetting WINDOW[] = {
-		{TEXT_CLOSE_TO_TRAY, TEXT_CLOSE_TO_TRAY_DETAIL, &settings->closes_to_tray},
+		{TEXT_CLOSE_TO_TRAY, NULL, &settings->closes_to_tray},
 	};
 	add_switches(window, WINDOW, G_N_ELEMENTS(WINDOW));
 }

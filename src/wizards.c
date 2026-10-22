@@ -90,7 +90,8 @@ static AdwNavigationPage *create_step(const char *title, const char *description
 	gtk_widget_add_css_class(image, "guide-icon");
 	gtk_box_append(GTK_BOX(box), image);
 	gtk_box_append(GTK_BOX(box), create_label(title, "title-1"));
-	gtk_box_append(GTK_BOX(box), create_label(description, "guide-description"));
+	if (description)
+		gtk_box_append(GTK_BOX(box), create_label(description, "guide-description"));
 	if (content) {
 		gtk_widget_set_margin_top(content, 12);
 		gtk_box_append(GTK_BOX(box), content);
@@ -246,7 +247,7 @@ static void push_connection_step(Guide *guide) {
 			? session->record->name : session->record->host) : g_strdup(TEXT_THIS_COMPUTER);
 		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
 		adw_action_row_set_subtitle(ADW_ACTION_ROW(row), session ? TEXT_THROUGH_BOUNCER_DETAIL
-			: TEXT_THIS_COMPUTER_DETAIL);
+			: NULL);
 		GtkWidget *check = gtk_check_button_new();
 		if (first)
 			gtk_check_button_set_group(GTK_CHECK_BUTTON(check), GTK_CHECK_BUTTON(first));
@@ -259,7 +260,7 @@ static void push_connection_step(Guide *guide) {
 		gtk_list_box_append(GTK_LIST_BOX(list), row);
 	}
 	GtkWidget *button = create_button(TEXT_CONNECT, G_CALLBACK(finish_server), guide);
-	adw_navigation_view_push(guide->pages, create_step(TEXT_STAY_CONNECTED_TITLE, TEXT_STAY_CONNECTED_BODY,
+	adw_navigation_view_push(guide->pages, create_step(TEXT_STAY_CONNECTED_TITLE, NULL,
 		"crimson-chats-symbolic", list, button));
 }
 
@@ -272,12 +273,41 @@ static void continue_from_nick(Guide *guide) {
 }
 
 
+/* Nicks start with a capital, so a lowercase login name from the computer does not become one */
+static char *capitalize_nick(const char *nick) {
+	if (!nick || !*nick)
+		return g_strdup("");
+	gunichar first = g_utf8_get_char(nick);
+	char upper[8] = {0};
+	g_unichar_to_utf8(g_unichar_toupper(first), upper);
+	return g_strconcat(upper, g_utf8_next_char(nick), NULL);
+}
+
+
+static void capitalize_typed_nick(GtkEditable *editable, gpointer data) {
+	const char *text = gtk_editable_get_text(editable);
+	if (!*text || !g_unichar_islower(g_utf8_get_char(text)))
+		return;
+	g_autofree char *capitalized = capitalize_nick(text);
+	int position = gtk_editable_get_position(editable);
+	gtk_editable_set_text(editable, capitalized);
+	gtk_editable_set_position(editable, position);
+}
+
+
+void capitalize_nick_field(GtkWidget *row) {
+	g_signal_connect(row, "changed", G_CALLBACK(capitalize_typed_nick), NULL);
+}
+
+
 static void push_nick_step(Guide *guide) {
 	GtkWidget *list = create_boxed_list();
-	guide->nick = add_entry(list, TEXT_NICKNAME, g_get_user_name(), FALSE);
+	g_autofree char *nick = capitalize_nick(g_get_user_name());
+	guide->nick = add_entry(list, TEXT_NICKNAME, nick, FALSE);
+	capitalize_nick_field(guide->nick);
 	guide->account_row = adw_expander_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(guide->account_row), TEXT_HAVE_ACCOUNT);
-	adw_expander_row_set_subtitle(ADW_EXPANDER_ROW(guide->account_row), TEXT_HAVE_ACCOUNT_DETAIL);
+	adw_expander_row_set_subtitle(ADW_EXPANDER_ROW(guide->account_row), NULL);
 	adw_expander_row_set_show_enable_switch(ADW_EXPANDER_ROW(guide->account_row), TRUE);
 	adw_expander_row_set_enable_expansion(ADW_EXPANDER_ROW(guide->account_row), FALSE);
 	guide->account = adw_entry_row_new();
@@ -290,9 +320,8 @@ static void push_nick_step(Guide *guide) {
 	GtkWidget *button = create_button(guide->bouncers->len ? TEXT_CONTINUE : TEXT_CONNECT,
 		G_CALLBACK(continue_from_nick), guide);
 	watch_required(button, guide->nick, NULL);
-	g_autofree char *description = g_strdup_printf(TEXT_NICK_BODY, guide->network_name);
-	adw_navigation_view_push(guide->pages, create_step(TEXT_NICK_TITLE, description, "avatar-default-symbolic",
-		list, button));
+	adw_navigation_view_push(guide->pages, create_step(TEXT_NICK_TITLE, NULL, "avatar-default-symbolic", list,
+		button));
 }
 
 
@@ -320,12 +349,12 @@ static void push_address_step(Guide *guide) {
 	guide->port = add_port(list, TLS_PORT);
 	guide->tls = adw_switch_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(guide->tls), TEXT_USE_TLS);
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(guide->tls), TEXT_USE_TLS_DETAIL);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(guide->tls), NULL);
 	adw_switch_row_set_active(ADW_SWITCH_ROW(guide->tls), TRUE);
 	gtk_list_box_append(GTK_LIST_BOX(list), guide->tls);
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_from_address), guide);
 	watch_required(button, guide->host, NULL);
-	adw_navigation_view_push(guide->pages, create_step(TEXT_ADDRESS_TITLE, TEXT_ADDRESS_BODY,
+	adw_navigation_view_push(guide->pages, create_step(TEXT_ADDRESS_TITLE, NULL,
 		"network-server-symbolic", list, button));
 }
 
@@ -362,9 +391,9 @@ void show_server_guide(Window *window) {
 	for (guint index = 0; index < G_N_ELEMENTS(KNOWN_NETWORKS); index++)
 		gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(KNOWN_NETWORKS[index].name,
 			KNOWN_NETWORKS[index].about, FALSE));
-	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, TEXT_OTHER_SERVER_DETAIL, TRUE));
+	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, TRUE));
 	g_signal_connect(list, "row-activated", G_CALLBACK(pick_network), guide);
-	adw_navigation_view_push(guide->pages, create_step(TEXT_PICK_NETWORK_TITLE, TEXT_PICK_NETWORK_BODY,
+	adw_navigation_view_push(guide->pages, create_step(TEXT_PICK_NETWORK_TITLE, NULL,
 		"crimson-chats-symbolic", list, NULL));
 	adw_dialog_present(guide->dialog, GTK_WIDGET(window->window));
 }
@@ -393,7 +422,7 @@ static AdwNavigationPage *create_login_step(Guide *guide, const char *username) 
 	guide->password = add_entry(list, TEXT_PASSWORD, NULL, TRUE);
 	GtkWidget *button = create_button(TEXT_CONNECT, G_CALLBACK(finish_bouncer), guide);
 	watch_required(button, guide->username, guide->password);
-	return create_step(TEXT_LOGIN_TITLE, TEXT_LOGIN_BODY, "dialog-password-symbolic", list, button);
+	return create_step(TEXT_LOGIN_TITLE, NULL, "dialog-password-symbolic", list, button);
 }
 
 
@@ -408,7 +437,7 @@ static AdwNavigationPage *create_bouncer_address_step(Guide *guide, const Bounce
 	guide->port = add_port(list, hint && hint->port ? hint->port : TLS_PORT);
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_to_login), guide);
 	watch_required(button, guide->host, NULL);
-	return create_step(TEXT_BOUNCER_ADDRESS_TITLE, TEXT_BOUNCER_ADDRESS_BODY, "network-server-symbolic", list,
+	return create_step(TEXT_BOUNCER_ADDRESS_TITLE, NULL, "network-server-symbolic", list,
 		button);
 }
 
@@ -474,9 +503,7 @@ void show_invite_dialog(Window *window, CrimsonNetwork *network) {
 		show_toast(window, TEXT_INVITES_NEED_BOUNCER);
 		return;
 	}
-	const char *name = session->record->name ? session->record->name : session->record->host;
-	g_autofree char *body = g_strdup_printf(TEXT_INVITE_BODY, name);
-	AdwDialog *alert = adw_alert_dialog_new(TEXT_INVITE_PEOPLE, body);
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_INVITE_PEOPLE, NULL);
 	static const char *const CHOICES[] = {TEXT_INVITE_ONE, TEXT_INVITE_FIVE, TEXT_INVITE_TWENTY_FIVE,
 		TEXT_INVITE_ANYONE, NULL};
 	GtkWidget *uses = gtk_drop_down_new_from_strings(CHOICES);

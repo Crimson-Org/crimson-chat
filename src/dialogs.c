@@ -1,5 +1,6 @@
 #include "../lang/en.h"
 #include "dialogs.h"
+#include "wizards.h"
 
 #define DIALOG_WIDTH 480
 #define DIALOG_HEIGHT 640
@@ -183,18 +184,19 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 	form->port = add_port_row(server, port);
 	form->tls = adw_switch_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(form->tls), TEXT_USE_TLS);
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(form->tls), TEXT_USE_TLS_DETAIL);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(form->tls), NULL);
 	adw_switch_row_set_active(ADW_SWITCH_ROW(form->tls), record ? record->uses_tls
 		: g_strcmp0(lookup_attribute(network, "tls"), "0") != 0);
 	g_signal_connect(form->tls, "notify::active", G_CALLBACK(switch_tls), form);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(server), form->tls);
 	GtkWidget *identity = add_group(page, TEXT_IDENTITY, NULL);
 	form->nick = add_entry_row(identity, TEXT_NICKNAME, record ? record->nick : lookup_attribute(network, "nickname"));
+	capitalize_nick_field(form->nick);
 	form->username = add_entry_row(identity, TEXT_USERNAME, record ? record->username
 		: lookup_attribute(network, "username"));
 	form->realname = add_entry_row(identity, TEXT_REAL_NAME, record ? record->realname
 		: lookup_attribute(network, "realname"));
-	GtkWidget *login = add_group(page, TEXT_LOGIN, TEXT_LOGIN_DETAIL);
+	GtkWidget *login = add_group(page, TEXT_LOGIN, NULL);
 	form->account = add_entry_row(login, TEXT_ACCOUNT, record ? record->sasl_username
 		: lookup_attribute(network, "sasl-username"));
 	form->password = add_password_row(login, TEXT_PASSWORD, record ? record->sasl_password : NULL);
@@ -266,7 +268,7 @@ void show_bouncer_dialog(Window *window, Session *editing) {
 	form->editing = editing;
 	const AccountRecord *record = editing->record;
 	GtkWidget *page = adw_preferences_page_new();
-	GtkWidget *group = add_group(page, TEXT_BOUNCER, TEXT_BOUNCER_DETAIL);
+	GtkWidget *group = add_group(page, TEXT_BOUNCER, NULL);
 	form->name = add_entry_row(group, TEXT_NAME, record->name);
 	form->host = add_entry_row(group, TEXT_ADDRESS, record->host);
 	form->port = add_port_row(group, record->port);

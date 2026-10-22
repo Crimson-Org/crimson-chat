@@ -188,7 +188,7 @@ static void add_connection_details(WebAnswer *answer, WebRequest *request, const
 	g_autofree char *name = NULL, *port = NULL;
 	split_host(request->host, &name, &port);
 	add_text(answer, "<dl><dt>Address</dt><dd><code>%s</code></dd><dt>Port</dt><dd><code>%s</code></dd>"
-		"<dt>Username</dt><dd><code>%s</code></dd><dt>Password</dt><dd>The one you chose</dd>"
+		"<dt>Username</dt><dd><code>%s</code></dd>"
 		"<dt>Fingerprint</dt><dd><code>%s</code></dd></dl>", name, port, user_name, request->bouncer->fingerprint);
 	g_autofree char *escaped_name = g_uri_escape_string(name, NULL, FALSE);
 	g_autofree char *escaped_user = g_uri_escape_string(user_name, NULL, FALSE);
@@ -197,8 +197,6 @@ static void add_connection_details(WebAnswer *answer, WebRequest *request, const
 		"?host=%s&amp;port=%s&amp;username=%s&amp;name=%s\">Open in Crimson Chat</a>"
 		"<a class=\"button quiet\" href=\"%s\">Download Crimson Chat</a></div>", escaped_name, port, escaped_user,
 		escaped_label, DOWNLOAD_ADDRESS);
-	add_text(answer, "<p style=\"margin-top:16px\">When Crimson Chat asks about the certificate, trust it only if "
-		"its fingerprint matches the one above.</p>");
 }
 
 
@@ -225,7 +223,7 @@ static const char *read_field(WebRequest *request, const char *name) {
 
 static void show_sign_in(WebAnswer *answer, WebRequest *request, const char *problem) {
 	start_page(answer, request->bouncer->name);
-	add_text(answer, "<h1>%s</h1><p>Sign in to the Crimson Chat bouncer.</p>", request->bouncer->name);
+	add_text(answer, "<h1>%s</h1>", request->bouncer->name);
 	if (problem)
 		add_text(answer, "<p class=\"error\">%s</p>", problem);
 	add_text(answer, "<form method=\"post\" action=\"/login\"><label for=\"username\">Username</label>"
@@ -244,8 +242,8 @@ static char *describe_uses(int uses) {
 
 
 static void add_invite_list(WebAnswer *answer, WebRequest *request) {
-	add_text(answer, "<h2>Invites</h2><p>Anyone with an invite link can register their own account here.</p>"
-		"<form method=\"post\" action=\"/invites\"><label for=\"uses\">How many people may use it</label>"
+	add_text(answer, "<h2>Invites</h2>"
+		"<form method=\"post\" action=\"/invites\"><label for=\"uses\">Uses</label>"
 		"<select id=\"uses\" name=\"uses\"><option value=\"1\">One person</option><option value=\"5\">Five people"
 		"</option><option value=\"25\">Twenty-five people</option><option value=\"-1\">Anyone with the link</option>"
 		"</select><button>Create Invite</button></form>");
@@ -263,7 +261,7 @@ static void add_invite_list(WebAnswer *answer, WebRequest *request) {
 
 static void show_home(WebAnswer *answer, WebRequest *request, BouncerUser *user) {
 	start_page(answer, request->bouncer->name);
-	add_text(answer, "<h1>%s</h1><p>Signed in as %s.</p><h2>Connect Crimson Chat</h2>", request->bouncer->name,
+	add_text(answer, "<h1>%s</h1><p>%s</p>", request->bouncer->name,
 		user->name);
 	add_connection_details(answer, request, user->name);
 	if (user->is_admin)
@@ -297,20 +295,19 @@ static void show_invite(WebAnswer *answer, WebRequest *request, const char *toke
 	if (count_invite_uses(request->bouncer->database, token) == 0) {
 		answer->status = 404;
 		start_page(answer, "Invite not found");
-		add_text(answer, "<h1>This invite is no longer valid</h1><p>Ask the person who sent it for a new link.</p>");
+		add_text(answer, "<h1>This invite has expired</h1>");
 		end_page(answer);
 		return;
 	}
 	start_page(answer, request->bouncer->name);
-	add_text(answer, "<h1>You've been invited to %s!</h1><p>Pick a username and password for your account on this "
-		"Crimson Chat bouncer, which keeps you connected to IRC while you are away.</p>", request->bouncer->name);
+	add_text(answer, "<h1>You've been invited to %s!</h1>", request->bouncer->name);
 	if (problem)
 		add_text(answer, "<p class=\"error\">%s</p>", problem);
 	add_text(answer, "<form method=\"post\" action=\"/invite\"><input type=\"hidden\" name=\"token\" value=\"%s\">"
 		"<label for=\"username\">Username</label><input id=\"username\" name=\"username\" autocomplete=\"username\" "
 		"maxlength=\"32\" required><label for=\"password\">Password</label><input id=\"password\" name=\"password\" "
 		"type=\"password\" autocomplete=\"new-password\" minlength=\"8\" required><label for=\"repeat\">"
-		"Repeat the password</label><input id=\"repeat\" name=\"repeat\" type=\"password\" "
+		"Repeat password</label><input id=\"repeat\" name=\"repeat\" type=\"password\" "
 		"autocomplete=\"new-password\" required><button>Create Account</button></form>", token);
 	end_page(answer);
 }
@@ -338,8 +335,7 @@ static void register_invited(WebAnswer *answer, WebRequest *request) {
 	}
 	use_invite(request->bouncer->database, token);
 	start_page(answer, "Welcome");
-	add_text(answer, "<h1>Welcome, %s!</h1><p>Your account is ready. Open Crimson Chat, choose Add a Bouncer and "
-		"enter these details.</p>", user->name);
+	add_text(answer, "<h1>Welcome, %s!</h1><p>Add a bouncer in Crimson Chat with these details.</p>", user->name);
 	add_connection_details(answer, request, user->name);
 	end_page(answer);
 }
