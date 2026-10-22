@@ -71,6 +71,13 @@ static void open_requested_room(CrimsonRoom *room, gpointer data) {
 }
 
 
+static void forget_network(CrimsonNetwork *network, gpointer data) {
+	Window *window = get_main_window();
+	if (window)
+		forget_network_in_window(window, network);
+}
+
+
 static void share_invite(Session *session, const char *token, const char *uses, const char *port, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
@@ -128,7 +135,7 @@ static void open_settings(GSimpleAction *action, GVariant *parameter, gpointer a
 static void add_server(GSimpleAction *action, GVariant *parameter, gpointer application) {
 	Window *window = get_main_window();
 	if (window)
-		show_server_guide(window, NULL);
+		show_server_guide(window);
 }
 
 
@@ -168,7 +175,7 @@ static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_problem, open_requested_room,
-		share_invite};
+		share_invite, forget_network};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},

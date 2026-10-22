@@ -35,6 +35,11 @@ void fill_room_avatar(AdwAvatar *avatar, CrimsonRoom *room, int size) {
 	const char *name = room->kind == ROOM_CHANNEL && *title == '#' ? title + 1 : title;
 	adw_avatar_set_size(avatar, size);
 	adw_avatar_set_text(avatar, name);
+	/* Rooms are rounded squares and people are round, so the two read apart at a glance */
+	if (room->kind == ROOM_PRIVATE)
+		gtk_widget_remove_css_class(GTK_WIDGET(avatar), "room-avatar");
+	else
+		gtk_widget_add_css_class(GTK_WIDGET(avatar), "room-avatar");
 	const char *url = room->kind == ROOM_SERVER ? room->network->icon_url : find_metadata(room, NULL, "avatar");
 	g_autofree char *sized = fill_image_size(url, size * 2);
 	show_avatar_image(avatar, sized);

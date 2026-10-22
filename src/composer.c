@@ -327,3 +327,11 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 void focus_composer_field(Composer *composer) {
 	gtk_widget_grab_focus(composer->field);
 }
+
+
+void mention_in_composer(Composer *composer, const char *nick) {
+	g_autofree char *text = get_field_text(composer);
+	g_autofree char *mention = *text ? g_strdup_printf("%s ", nick) : g_strdup_printf("%s: ", nick);
+	gtk_text_buffer_insert_at_cursor(composer->buffer, mention, -1);
+	gtk_widget_grab_focus(composer->field);
+}

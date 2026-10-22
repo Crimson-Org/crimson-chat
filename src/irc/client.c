@@ -403,6 +403,21 @@ static gboolean handle_registration(IrcClient *client, const IrcMessage *message
 }
 
 
+/* Lines replayed from history describe the past, so a person who left back then is not removed from the room now */
+static gboolean is_history_line(IrcClient *client, const IrcMessage *message) {
+	const char *reference = get_irc_tag(message, "batch");
+	while (reference) {
+		IrcBatch *batch = g_hash_table_lookup(client->batches, reference);
+		if (!batch)
+			return FALSE;
+		if (g_strcmp0(batch->type, "chathistory") == 0)
+			return TRUE;
+		reference = batch->outer;
+	}
+	return FALSE;
+}
+
+
 static void track_batch(IrcClient *client, const IrcMessage *message) {
 	const char *reference = get_irc_parameter(message, 0);
 	if (!reference || (*reference != '+' && *reference != '-'))
@@ -431,7 +446,8 @@ static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data
 	if (g_str_equal(message->command, "BATCH"))
 		track_batch(client, message);
 	g_autoptr(GPtrArray) affected = g_ptr_array_new_with_free_func(g_free);
-	update_irc_state(client->state, message, affected);
+	if (!is_history_line(client, message))
+		update_irc_state(client->state, message, affected);
 	if (g_str_equal(message->command, "001")) {
 		client->failure = IRC_FAILURE_NONE;
 		set_status(client, IRC_CLIENT_REGISTERED, NULL);

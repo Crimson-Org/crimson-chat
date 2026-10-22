@@ -576,6 +576,8 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 	NetworkWork *work = get_network_work(network);
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
 	g_autofree char *text = join_parameters(message, 1);
+	if ((g_strv_contains(WHOIS_REPLIES, command) || number == 401) && collect_profile(network, number, message))
+		return;
 	if (g_strv_contains(WHOIS_REPLIES, command)) {
 		add_status(work->whois_room ? work->whois_room : network->server_room, message, text);
 		if (g_str_equal(command, "318"))
@@ -597,6 +599,8 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 			announce_room_change(room);
 		return;
 	}
+	if (collect_room_listing(network, number, message))
+		return;
 	if (number == 730 || number == 731) {
 		deliver_presence(network, message, number == 730);
 		return;
@@ -635,9 +639,14 @@ static void deliver_rename(CrimsonNetwork *network, const IrcMessage *message) {
 
 static void deliver_metadata(CrimsonNetwork *network, const IrcMessage *message) {
 	gboolean is_reply = g_str_equal(message->command, "761");
-	CrimsonRoom *room = find_room(network, get_irc_parameter(message, is_reply ? 1 : 0));
+	const char *target = get_irc_parameter(message, is_reply ? 1 : 0);
+	CrimsonRoom *room = find_room(network, target);
 	if (room)
 		announce_room_change(room);
+	/* The user's own details change how the profile and the network show them */
+	IrcState *state = get_network_state(network);
+	if (target && state && (g_str_equal(target, "*") || is_own_nick(state, target)))
+		announce_network_change(network);
 }
 
 

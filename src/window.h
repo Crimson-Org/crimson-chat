@@ -10,18 +10,24 @@ typedef struct Window Window;
 typedef struct RoomList RoomList;
 typedef struct Conversation Conversation;
 
-/* The main window: a rail of networks, the rooms of the chosen one and the open conversation */
+/* The main window: a welcome until there is a server, then a rail of servers when there are several, the rooms
+ * of the chosen one and the open conversation */
 struct Window {
 	AdwApplicationWindow *window;
 	Chat *chat;
 	AdwToastOverlay *toasts;
+	GtkWidget *pages, *welcome, *welcome_bouncer, *welcome_server;
+	/* Says what is connecting or reconnecting, shown after a moment so a quick connection does not flash */
+	AdwBanner *banner;
+	guint banner_source;
+	char *lost_name;
 	AdwNavigationSplitView *split;
-	GtkWidget *rail, *rail_list, *all_button;
+	GtkWidget *rail, *rail_list;
 	RoomList *room_list;
 	Conversation *conversation;
-	/* The server or bouncer the room list shows, or NULL for every chat */
-	Session *account;
-	/* The rail only shows in a wide window with more than one server or bouncer */
+	/* The server whose rooms the list shows, NULL only while there is none */
+	CrimsonNetwork *network;
+	/* The rail only shows in a wide window with more than one server */
 	gboolean is_narrow, has_rail, is_quitting;
 	guint refresh_source;
 	Tray *tray;
@@ -32,11 +38,11 @@ Window *create_window(GtkApplication *application, Chat *chat);
 Window *get_main_window(void);
 void open_room(Window *window, CrimsonRoom *room);
 CrimsonRoom *get_open_room(Window *window);
-void choose_account(Window *window, Session *account);
-/* The chosen account, or the only one when there is no rail to choose from */
-Session *get_menu_account(Window *window);
-/* Everything about a server or bouncer, with its networks' server messages, settings and removal */
-GMenuModel *create_account_menu(Session *account);
+void choose_network(Window *window, CrimsonNetwork *network);
+/* Everything about one server, and the other servers to switch to when there is no rail to show them */
+GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network);
+/* The menu button for the whole app, which also names the bouncer and holds its settings */
+GtkWidget *create_main_menu_button(Window *window);
 void show_toast(Window *window, const char *text);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);
@@ -45,14 +51,13 @@ void hide_window(Window *window);
 gboolean is_room_in_view(Window *window, CrimsonRoom *room);
 /* Opens the network and room from the last run, once the chats from the last run are back */
 void restore_window_choice(Window *window);
-GMenuModel *create_main_menu(void);
 /* An unread badge, crimson for a mention or a private message and grey for ordinary chatter */
 void style_unread_badge(GtkWidget *badge, guint count, gboolean has_mention);
 
 /* Room list */
 RoomList *create_room_list(Window *window);
 GtkWidget *get_room_list_widget(RoomList *list);
-void show_room_list_account(RoomList *list, Session *account);
+void show_room_list_network(RoomList *list, CrimsonNetwork *network);
 void select_listed_room(RoomList *list, CrimsonRoom *room);
 void resort_room_list(RoomList *list);
 void set_room_list_narrow(RoomList *list, gboolean is_narrow);

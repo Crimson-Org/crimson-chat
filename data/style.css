@@ -167,27 +167,46 @@ headerbar.top-bar menubutton > button {
 	color: #f2f2f4;
 }
 
-.account-bar > button {
-	margin: 6px 8px;
-	padding: 6px 10px;
-	border-radius: 12px;
+/* An avatar draws through an inner node, which takes the corner shape */
+.room-avatar,
+.room-avatar * {
+	border-radius: 28%;
+}
+
+.add-chat {
+	margin: 16px;
+	min-width: 48px;
+	min-height: 48px;
+	box-shadow: 0 2px 8px alpha(black, 0.3);
+}
+
+.help-text {
+	margin: 6px;
+}
+
+.guide-error {
+	color: var(--accent-color);
+}
+
+.picker {
+	margin: 0 16px 16px;
+}
+
+.picker-list {
 	background: none;
 }
 
-.account-bar > button:hover {
-	background-color: alpha(currentColor, 0.07);
+.picker-row {
+	padding: 6px 4px;
 }
 
-.account-name {
+.picker-name {
 	font-weight: 700;
 }
 
-.account-state {
+.picker-topic,
+.picker-users {
 	color: alpha(currentColor, 0.6);
-}
-
-.account-state.is-offline {
-	color: var(--accent-color);
 }
 
 /* The conversation */
@@ -441,3 +460,7 @@ headerbar.top-bar menubutton > button {
 .name-color-5 { color: #0090ff; }
 .name-color-6 { color: #8e4ec6; }
 .name-color-7 { color: #d6409f; }
+
+.profile {
+	margin: 0 24px 24px;
+}

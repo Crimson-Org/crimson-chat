@@ -3,6 +3,7 @@
 
 #define ACCOUNTS_FILE "accounts.ini"
 #define ROOMS_FILE "rooms.ini"
+#define PROFILES_FILE "profiles.ini"
 #define ACCOUNT_PREFIX "account "
 #define DEFAULT_PORT 6697
 #define CACHED_ROOMS_PER_NETWORK 200
@@ -210,4 +211,24 @@ void save_room_cache(GListModel *networks) {
 	g_autofree char *path = get_state_file_path(ROOMS_FILE);
 	save_key_file(file, path);
 	g_clear_pointer(&room_cache, g_key_file_unref);
+}
+
+
+void load_network_profile(const char *key, char **display_name, char **picture) {
+	g_autofree char *path = get_config_file_path(PROFILES_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	*display_name = g_key_file_get_string(file, key, "display-name", NULL);
+	*picture = g_key_file_get_string(file, key, "picture", NULL);
+}
+
+
+void save_network_profile(const char *key, const char *display_name, const char *picture) {
+	g_autofree char *path = get_config_file_path(PROFILES_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	g_key_file_remove_group(file, key, NULL);
+	if (display_name && *display_name)
+		g_key_file_set_string(file, key, "display-name", display_name);
+	if (picture && *picture)
+		g_key_file_set_string(file, key, "picture", picture);
+	save_key_file(file, path);
 }

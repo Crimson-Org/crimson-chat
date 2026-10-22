@@ -28,8 +28,12 @@ Crimson Chat looks and feels like a modern messenger, and its bouncer keeps your
 
 ### A messenger layout
 
-A narrow window is a single list of rooms and private chats, newest first, with avatars, previews and unread counts.\
-A wide window adds a rail of networks down the left, the rooms of the chosen network and the open conversation.\
+The first start welcomes you with a choice between a bouncer and a server, followed by a short guide for either.\
+Once a server connects, it lists its rooms busiest first, so you can tick several and join them at once.\
+Each server's rooms and private chats sit in one list, newest first, with rooms as rounded squares and people as circles.\
+A rail of servers appears down the left only when you use more than one.\
+Right-click a room to leave it, or a person to message, mention or look them up, with moderation in rooms you run.\
+Your profile on each server sets your nickname, display name and picture wherever that server supports them.\
 Messages from the same person group into bubbles under one avatar, with your own on the right.
 
 ### Modern IRC

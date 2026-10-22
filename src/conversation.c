@@ -1,6 +1,8 @@
 #include "../lang/en.h"
+#include "settings.h"
 #include "common/startup.h"
 #include "composer.h"
+#include "profile.h"
 #include "formatting.h"
 #include "images.h"
 #include "message-row.h"
@@ -17,8 +19,7 @@
 struct Conversation {
 	Window *window;
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller, *jump_button;
-	GtkWidget *member_view, *empty_note, *room_menu;
-	GMenuModel *chat_menu;
+	GtkWidget *member_view, *empty_note;
 	GtkStringList *members;
 	GtkNoSelection *messages;
 	Composer *composer;
@@ -257,6 +258,72 @@ static const char *describe_role(char symbol) {
 }
 
 
+/* Whether the user can moderate the open channel, as its operator or half-operator */
+static gboolean can_moderate(Conversation *conversation, IrcState *state, IrcChannel *channel) {
+	g_autofree char *own = fold_state_name(state, state->nick);
+	const char *symbols = g_hash_table_lookup(channel->members, own);
+	return symbols && strpbrk(symbols, "~&@%");
+}
+
+
+static void append_member_item(GMenu *menu, const char *label, const char *action, const char *nick) {
+	g_autoptr(GMenuItem) item = g_menu_item_new(label, NULL);
+	g_menu_item_set_action_and_target_value(item, action, g_variant_new_string(nick));
+	g_menu_append_item(menu, item);
+}
+
+
+static GMenuModel *create_member_menu(Conversation *conversation, const char *nick) {
+	GMenu *menu = g_menu_new();
+	GMenu *person = g_menu_new();
+	append_member_item(person, TEXT_SEND_MESSAGE, "member.message", nick);
+	append_member_item(person, TEXT_MENTION, "member.mention", nick);
+	append_member_item(person, TEXT_VIEW_PROFILE, "member.profile", nick);
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(person));
+	g_object_unref(person);
+	IrcState *state = get_network_state(conversation->room->network);
+	IrcChannel *channel = state ? find_irc_channel(state, conversation->room->name) : NULL;
+	if (!channel || !can_moderate(conversation, state, channel) || is_own_nick(state, nick))
+		return G_MENU_MODEL(menu);
+	g_autofree char *folded = fold_state_name(state, nick);
+	const char *symbols = g_hash_table_lookup(channel->members, folded);
+	gboolean is_operator = symbols && strchr(symbols, '@');
+	gboolean has_voice = symbols && strchr(symbols, '+');
+	GMenu *moderation = g_menu_new();
+	append_member_item(moderation, is_operator ? TEXT_REMOVE_OPERATOR : TEXT_MAKE_OPERATOR,
+		is_operator ? "member.deop" : "member.op", nick);
+	append_member_item(moderation, has_voice ? TEXT_REMOVE_VOICE : TEXT_GIVE_VOICE,
+		has_voice ? "member.devoice" : "member.voice", nick);
+	append_member_item(moderation, TEXT_KICK, "member.kick", nick);
+	append_member_item(moderation, TEXT_BAN, "member.ban", nick);
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(moderation));
+	g_object_unref(moderation);
+	return G_MENU_MODEL(menu);
+}
+
+
+static void forget_member_menu(GtkPopover *popover, gpointer data) {
+	g_idle_add_once((GSourceOnceFunc)gtk_widget_unparent, popover);
+}
+
+
+/* Right-clicking a person offers what can be done with them, and moderation where the user may moderate */
+static void open_member_menu(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	const char *nick = gtk_label_get_text(g_object_get_data(G_OBJECT(row), "name"));
+	if (!conversation->room || !nick || !*nick)
+		return;
+	g_autoptr(GMenuModel) model = create_member_menu(conversation, nick);
+	GtkWidget *popover = gtk_popover_menu_new_from_model(model);
+	gtk_widget_set_parent(popover, row);
+	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
+	gtk_widget_set_halign(popover, GTK_ALIGN_START);
+	g_signal_connect(popover, "closed", G_CALLBACK(forget_member_menu), NULL);
+	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
 static void set_up_member(GtkSignalListItemFactory *factory, GtkListItem *item, gpointer data) {
 	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	gtk_widget_add_css_class(row, "member-row");
@@ -277,6 +344,10 @@ static void set_up_member(GtkSignalListItemFactory *factory, GtkListItem *item, 
 	g_object_set_data(G_OBJECT(row), "avatar", avatar);
 	g_object_set_data(G_OBJECT(row), "name", name);
 	g_object_set_data(G_OBJECT(row), "role", role);
+	GtkGesture *click = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+	g_signal_connect(click, "pressed", G_CALLBACK(open_member_menu), data);
+	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(click));
 	gtk_list_item_set_child(item, row);
 }
 
@@ -301,6 +372,78 @@ static void bind_member(GtkSignalListItemFactory *factory, GtkListItem *item, Co
 }
 
 
+static void message_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	open_person(g_variant_get_string(parameter, NULL), data);
+}
+
+
+static void mention_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Conversation *conversation = data;
+	mention_in_composer(conversation->composer, g_variant_get_string(parameter, NULL));
+}
+
+
+static void show_member_profile(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Conversation *conversation = data;
+	if (conversation->room)
+		show_profile(conversation->window, conversation->room, g_variant_get_string(parameter, NULL));
+}
+
+
+static void send_channel_mode(Conversation *conversation, const char *mode, const char *nick) {
+	if (conversation->room && conversation->room->network->client)
+		send_irc_client_command(conversation->room->network->client, "MODE", conversation->room->name, mode, nick,
+			NULL);
+}
+
+
+static void moderate_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Conversation *conversation = data;
+	const char *name = g_action_get_name(G_ACTION(action));
+	const char *nick = g_variant_get_string(parameter, NULL);
+	CrimsonRoom *room = conversation->room;
+	if (!room || !room->network->client)
+		return;
+	static const struct {
+		const char *action, *mode;
+	} MODES[] = {{"op", "+o"}, {"deop", "-o"}, {"voice", "+v"}, {"devoice", "-v"}};
+	for (guint index = 0; index < G_N_ELEMENTS(MODES); index++) {
+		if (g_str_equal(name, MODES[index].action))
+			send_channel_mode(conversation, MODES[index].mode, nick);
+	}
+	/* A ban covers the person's host where it is known, so a new nick does not get around it */
+	if (g_str_equal(name, "ban")) {
+		IrcState *state = get_network_state(room->network);
+		IrcUser *user = state ? find_irc_user(state, nick) : NULL;
+		g_autofree char *mask = user && user->host ? g_strdup_printf("*!*@%s", user->host)
+			: g_strdup_printf("%s!*@*", nick);
+		send_channel_mode(conversation, "+b", mask);
+	}
+	if (g_str_equal(name, "kick") || g_str_equal(name, "ban"))
+		send_irc_client_command(room->network->client, "KICK", room->name, nick, NULL);
+}
+
+
+static void add_member_actions(Conversation *conversation) {
+	static const GActionEntry ENTRIES[] = {
+		{"message", message_member, "s", NULL, NULL, {0}},
+		{"mention", mention_member, "s", NULL, NULL, {0}},
+		{"profile", show_member_profile, "s", NULL, NULL, {0}},
+		{"op", moderate_member, "s", NULL, NULL, {0}},
+		{"deop", moderate_member, "s", NULL, NULL, {0}},
+		{"voice", moderate_member, "s", NULL, NULL, {0}},
+		{"devoice", moderate_member, "s", NULL, NULL, {0}},
+		{"kick", moderate_member, "s", NULL, NULL, {0}},
+		{"ban", moderate_member, "s", NULL, NULL, {0}},
+	};
+	GSimpleActionGroup *group = g_simple_action_group_new();
+	g_action_map_add_action_entries(G_ACTION_MAP(group), ENTRIES, G_N_ELEMENTS(ENTRIES), conversation);
+	gtk_widget_insert_action_group(conversation->member_view, "member", G_ACTION_GROUP(group));
+	g_object_unref(group);
+}
+
+
+/* Double-clicking a person opens a private chat with them, while one click only picks them */
 static void open_member(GtkListView *view, guint position, Conversation *conversation) {
 	g_autoptr(GtkStringObject) item = g_list_model_get_item(G_LIST_MODEL(conversation->members), position);
 	if (item)
@@ -364,16 +507,19 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
 	gtk_widget_add_css_class(header, "top-bar");
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new(TEXT_MEMBERS_TITLE, NULL));
-	adw_header_bar_set_show_end_title_buttons(ADW_HEADER_BAR(header), FALSE);
+	/* The panel sits at the window's right edge, so its header carries the window buttons there */
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
 	gtk_box_append(GTK_BOX(panel), header);
 	conversation->members = gtk_string_list_new(NULL);
 	GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
 	g_signal_connect(factory, "setup", G_CALLBACK(set_up_member), conversation);
 	g_signal_connect(factory, "bind", G_CALLBACK(bind_member), conversation);
-	GtkNoSelection *selection = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(conversation->members)));
+	GtkSingleSelection *selection = gtk_single_selection_new(G_LIST_MODEL(g_object_ref(conversation->members)));
+	gtk_single_selection_set_autoselect(selection, FALSE);
+	gtk_single_selection_set_can_unselect(selection, TRUE);
+	gtk_single_selection_set_selected(selection, GTK_INVALID_LIST_POSITION);
 	conversation->member_view = gtk_list_view_new(GTK_SELECTION_MODEL(selection), factory);
-	gtk_list_view_set_single_click_activate(GTK_LIST_VIEW(conversation->member_view), TRUE);
+	add_member_actions(conversation);
 	gtk_widget_add_css_class(conversation->member_view, "member-list");
 	g_signal_connect(conversation->member_view, "activate", G_CALLBACK(open_member), conversation);
 	GtkWidget *scroller = gtk_scrolled_window_new();
@@ -402,13 +548,6 @@ static void follow_member_panel(AdwOverlaySplitView *split, GParamSpec *spec, Co
 }
 
 
-static GMenuModel *create_room_menu(void) {
-	GMenu *menu = g_menu_new();
-	g_menu_append(menu, TEXT_LEAVE, "win.leave-room");
-	return G_MENU_MODEL(menu);
-}
-
-
 static GtkWidget *create_header(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
 	gtk_widget_add_css_class(header, "top-bar");
@@ -430,12 +569,6 @@ static GtkWidget *create_header(Conversation *conversation) {
 	gtk_box_append(GTK_BOX(title), texts);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), title);
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
-	conversation->room_menu = gtk_menu_button_new();
-	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(conversation->room_menu), "view-more-symbolic");
-	conversation->chat_menu = create_room_menu();
-	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(conversation->room_menu), conversation->chat_menu);
-	gtk_widget_set_tooltip_text(conversation->room_menu, TEXT_ROOM_MENU);
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), conversation->room_menu);
 	conversation->members_button = gtk_toggle_button_new();
 	gtk_button_set_icon_name(GTK_BUTTON(conversation->members_button), "system-users-symbolic");
 	gtk_widget_set_tooltip_text(conversation->members_button, TEXT_MEMBERS_TOOLTIP);
@@ -510,18 +643,20 @@ CrimsonRoom *get_conversation_room(Conversation *conversation) {
 static void fill_header(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	g_autofree char *title = describe_room_title(room);
-	g_autofree char *subtitle = describe_room_subtitle(room);
+	g_autofree char *topic = room->topic ? strip_irc_formatting(room->topic) : NULL;
+	/* A room's topic says what it is about, so it takes the place of the member count unless someone types */
+	gboolean shows_topic = room->kind == ROOM_CHANNEL && topic && *topic
+		&& !(is_room_typing(room) && get_settings()->shows_typing);
+	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : describe_room_subtitle(room);
 	gtk_label_set_text(GTK_LABEL(conversation->title), title);
 	gtk_label_set_text(GTK_LABEL(conversation->subtitle), subtitle);
+	gtk_widget_set_tooltip_text(conversation->subtitle, shows_topic ? topic : NULL);
 	if (is_room_typing(room))
 		gtk_widget_add_css_class(conversation->subtitle, "typing");
 	else
 		gtk_widget_remove_css_class(conversation->subtitle, "typing");
-	g_autofree char *topic = room->topic ? strip_irc_formatting(room->topic) : NULL;
-	gtk_widget_set_tooltip_text(conversation->title, topic);
 	fill_room_avatar(ADW_AVATAR(conversation->avatar), room, HEADER_AVATAR_SIZE);
 	gtk_widget_set_visible(conversation->members_button, room->kind == ROOM_CHANNEL);
-	gtk_widget_set_visible(conversation->room_menu, room->kind != ROOM_SERVER);
 }
 
 

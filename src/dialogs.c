@@ -12,7 +12,7 @@ typedef struct {
 	Window *window;
 	AdwDialog *dialog;
 	GtkWidget *save_button;
-	GtkWidget *name, *host, *port, *tls, *nick, *username, *realname, *account, *password, *server_password;
+	GtkWidget *name, *host, *port, *tls, *account, *password, *server_password;
 	Session *editing;
 	CrimsonNetwork *bouncer_network;
 } ServerForm;
@@ -121,12 +121,6 @@ static GHashTable *collect_attributes(ServerForm *form) {
 	put_attribute(attributes, "tls", adw_switch_row_get_active(ADW_SWITCH_ROW(form->tls)) ? "1" : "0");
 	if (read_row(form->name))
 		put_attribute(attributes, "name", read_row(form->name));
-	if (read_row(form->nick))
-		put_attribute(attributes, "nickname", read_row(form->nick));
-	if (read_row(form->username))
-		put_attribute(attributes, "username", read_row(form->username));
-	if (read_row(form->realname))
-		put_attribute(attributes, "realname", read_row(form->realname));
 	if (read_row(form->server_password))
 		put_attribute(attributes, "pass", read_row(form->server_password));
 	if (read_row(form->account))
@@ -144,9 +138,11 @@ static AccountRecord *collect_account(ServerForm *form) {
 	record->host = g_strdup(read_row(form->host));
 	record->port = (int)adw_spin_row_get_value(ADW_SPIN_ROW(form->port));
 	record->uses_tls = adw_switch_row_get_active(ADW_SWITCH_ROW(form->tls));
-	record->nick = g_strdup(read_row(form->nick));
-	record->username = g_strdup(read_row(form->username));
-	record->realname = g_strdup(read_row(form->realname));
+	/* The nickname and real name belong to the profile, so the server settings keep them as they are */
+	record->nick = g_strdup(form->editing->record->nick);
+	record->username = g_strdup(form->editing->record->username);
+	record->realname = g_strdup(form->editing->record->realname);
+	record->channels = g_strdupv(form->editing->record->channels);
 	record->password = g_strdup(read_row(form->server_password));
 	record->sasl_username = g_strdup(read_row(form->account));
 	record->sasl_password = g_strdup(read_row(form->password));
@@ -189,18 +185,11 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 		: g_strcmp0(lookup_attribute(network, "tls"), "0") != 0);
 	g_signal_connect(form->tls, "notify::active", G_CALLBACK(switch_tls), form);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(server), form->tls);
-	GtkWidget *identity = add_group(page, TEXT_IDENTITY, NULL);
-	form->nick = add_entry_row(identity, TEXT_NICKNAME, record ? record->nick : lookup_attribute(network, "nickname"));
-	capitalize_nick_field(form->nick);
-	form->username = add_entry_row(identity, TEXT_USERNAME, record ? record->username
-		: lookup_attribute(network, "username"));
-	form->realname = add_entry_row(identity, TEXT_REAL_NAME, record ? record->realname
-		: lookup_attribute(network, "realname"));
-	GtkWidget *login = add_group(page, TEXT_LOGIN, NULL);
-	form->account = add_entry_row(login, TEXT_ACCOUNT, record ? record->sasl_username
+	form->server_password = add_password_row(server, TEXT_SERVER_PASSWORD, record ? record->password : NULL);
+	GtkWidget *login = add_group(page, TEXT_SASL_ACCOUNT, NULL);
+	form->account = add_entry_row(login, TEXT_ACCOUNT_NAME, record ? record->sasl_username
 		: lookup_attribute(network, "sasl-username"));
 	form->password = add_password_row(login, TEXT_PASSWORD, record ? record->sasl_password : NULL);
-	form->server_password = add_password_row(login, TEXT_SERVER_PASSWORD, record ? record->password : NULL);
 	g_signal_connect(form->host, "changed", G_CALLBACK(check_server_form), form);
 }
 
@@ -217,7 +206,7 @@ static void open_server_form(Window *window, Session *editing, CrimsonNetwork *b
 	g_signal_connect(form->save_button, "clicked", G_CALLBACK(save_server_form), form);
 	check_server_form(NULL, form);
 	adw_dialog_present(form->dialog, GTK_WIDGET(window->window));
-	gtk_widget_grab_focus(read_row(form->host) ? form->nick : form->host);
+	gtk_widget_grab_focus(form->host);
 }
 
 
@@ -252,15 +241,20 @@ static void finish_bouncer_removal(AdwAlertDialog *alert, const char *response, 
 		return;
 	if (settings)
 		adw_dialog_close(settings);
-	forget_account_in_window(get_main_window(), session);
+	Window *window = get_main_window();
+	for (guint index = 0; index < session->networks->len; index++)
+		forget_network_in_window(window, g_ptr_array_index(session->networks, index));
 	remove_account(session);
 }
 
 
-/* Asks before removing a bouncer login, over its settings when they are open and over the window otherwise */
+/* Asks before disconnecting from the bouncer, over its settings when they are open and over the window
+ * otherwise; the servers stay on the bouncer */
 static void ask_bouncer_removal(Window *window, Session *session, AdwDialog *settings) {
-	AdwDialog *alert = adw_alert_dialog_new(TEXT_REMOVE_BOUNCER_TITLE, TEXT_REMOVE_BOUNCER_BODY);
-	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_REMOVE, NULL);
+	g_autofree char *title = g_strdup_printf(TEXT_DISCONNECT_BOUNCER_TITLE, describe_account_name(session));
+	AdwDialog *alert = adw_alert_dialog_new(title, TEXT_DISCONNECT_BOUNCER_BODY);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_DISCONNECT,
+		NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
 	g_object_set_data(G_OBJECT(alert), "settings", settings);
 	g_signal_connect(alert, "response", G_CALLBACK(finish_bouncer_removal), session);
@@ -375,11 +369,6 @@ static void ask_for_name(Window *window, CrimsonNetwork *network, gboolean is_jo
 }
 
 
-void show_join_dialog(Window *window, CrimsonNetwork *network) {
-	ask_for_name(window, network, TRUE);
-}
-
-
 void show_message_dialog(Window *window, CrimsonNetwork *network) {
 	ask_for_name(window, network, FALSE);
 }
@@ -393,8 +382,17 @@ static void finish_trust(AdwAlertDialog *alert, const char *response, gpointer d
 }
 
 
+static AdwDialog *trust_alert;
+
+
+static void forget_trust_alert(AdwDialog *alert, gpointer data) {
+	trust_alert = NULL;
+}
+
+
+/* The question can come up over a guide that is still open, but only once at a time */
 void ask_certificate_trust(Window *window, Session *session, const char *hash) {
-	if (!hash || adw_application_window_get_visible_dialog(window->window))
+	if (!hash || trust_alert)
 		return;
 	g_autofree char *fingerprint = format_certificate_hash(hash);
 	g_autofree char *host = g_markup_escape_text(session->record->host, -1);
@@ -407,6 +405,8 @@ void ask_certificate_trust(Window *window, Session *session, const char *hash) {
 	g_object_set_data(G_OBJECT(alert), "session", session);
 	g_object_set_data_full(G_OBJECT(alert), "hash", g_strdup(hash), g_free);
 	g_signal_connect(alert, "response", G_CALLBACK(finish_trust), NULL);
+	g_signal_connect(alert, "closed", G_CALLBACK(forget_trust_alert), NULL);
+	trust_alert = alert;
 	adw_dialog_present(alert, GTK_WIDGET(window->window));
 }
 
@@ -416,34 +416,25 @@ static void finish_removal(AdwAlertDialog *alert, const char *response, gpointer
 	Window *window = get_main_window();
 	if (g_strcmp0(response, "remove") != 0)
 		return;
+	forget_network_in_window(window, network);
+	if (network->bouncer_id)
+		delete_bouncer_network(network);
+	else
+		remove_account(network->session);
+}
+
+
+/* The window lets go of a server before it goes, since the list and the open room point into it */
+void forget_network_in_window(Window *window, CrimsonNetwork *network) {
 	CrimsonRoom *open = get_open_room(window);
 	if (open && open->network == network)
 		show_conversation_room(window->conversation, NULL);
-	if (network->bouncer_id) {
-		delete_bouncer_network(network);
-		return;
-	}
-	forget_account_in_window(window, network->session);
-	remove_account(network->session);
+	if (window->network == network)
+		choose_network(window, NULL);
 }
 
 
-/* The window lets go of an account before it goes, since the rail and the open room point into it */
-void forget_account_in_window(Window *window, Session *session) {
-	CrimsonRoom *open = get_open_room(window);
-	if (open && open->network->session == session)
-		show_conversation_room(window->conversation, NULL);
-	if (window->account == session)
-		choose_account(window, NULL);
-}
-
-
-void confirm_account_removal(Window *window, Session *session) {
-	if (!session->record->is_bouncer) {
-		if (session->networks->len)
-			confirm_network_removal(window, g_ptr_array_index(session->networks, 0));
-		return;
-	}
+void confirm_bouncer_disconnect(Window *window, Session *session) {
 	ask_bouncer_removal(window, session, NULL);
 }
 

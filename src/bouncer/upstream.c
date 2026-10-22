@@ -148,6 +148,8 @@ static void tell_new_nick(Downstream *downstream, gpointer data) {
 
 static void handle_status(IrcClient *client, IrcClientStatus status, const char *reason, gpointer data) {
 	Upstream *upstream = data;
+	if (upstream->is_removed)
+		return;
 	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	add_attribute(attributes, "state", describe_upstream_state(upstream));
 	g_hash_table_insert(attributes, g_strdup("error"), g_strdup(status == IRC_CLIENT_DISCONNECTED && reason

@@ -13,3 +13,5 @@ GtkWidget *get_composer_widget(Composer *composer);
 void switch_composer_room(Composer *composer, CrimsonRoom *room);
 void reply_in_composer(Composer *composer, CrimsonMessage *message);
 void focus_composer_field(Composer *composer);
+/* Puts a person's nick into the message, at the start as "Nick: " or where the cursor is */
+void mention_in_composer(Composer *composer, const char *nick);

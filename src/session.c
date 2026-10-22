@@ -1,10 +1,17 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "formatting.h"
 #include "session.h"
 
 #define CACHE_DELAY_SECONDS 2
 #define WORK_KEY "work"
+/* The name a bouncer announces when its owner gave it none */
+#define BOUNCER_DEFAULT_NAME "crimson-chat-bouncer"
+/* A server that can filter first lists only channels above this size, and lists all of them when that
+ * finds fewer than the count after it, as on a small network */
+#define BUSY_ROOM_FILTER ">9"
+#define FEW_BUSY_ROOMS 20
 
 /* Every capability Crimson Chat understands, which servers grant where they support it */
 static const char *const CLIENT_CAPS[] = {
@@ -24,7 +31,33 @@ static const char *const CONTROL_CAPS[] = {
 static void connect_network(CrimsonNetwork *network);
 
 
+static void free_listed_room(ListedRoom *room) {
+	g_free(room->name);
+	g_free(room->topic);
+	g_free(room);
+}
+
+
+static void free_profile(Profile *profile) {
+	g_free(profile->nick);
+	g_free(profile->user);
+	g_free(profile->host);
+	g_free(profile->realname);
+	g_free(profile->server);
+	g_free(profile->account);
+	g_free(profile->away);
+	g_free(profile->channels);
+	g_free(profile);
+}
+
+
 static void free_network_work(NetworkWork *work) {
+	if (work->listing_ready)
+		work->listing_ready(NULL, work->listing_data);
+	if (work->profile_ready)
+		work->profile_ready(NULL, work->profile_data);
+	g_clear_pointer(&work->profile, free_profile);
+	g_clear_pointer(&work->listing, g_ptr_array_unref);
 	g_hash_table_unref(work->history);
 	g_hash_table_unref(work->multiline);
 	g_hash_table_unref(work->pending);
@@ -139,12 +172,14 @@ static void adopt_network_name(CrimsonNetwork *network) {
 		: network->session->record->name;
 	const char *host = network->bouncer_id ? g_hash_table_lookup(network->attributes, "host")
 		: network->session->record->host;
-	if (!name || (given && g_strcmp0(given, host) != 0))
+	if (!name || g_strcmp0(name, network->name) == 0 || (given && g_strcmp0(given, host) != 0))
 		return;
 	g_free(network->name);
 	network->name = g_strdup(name);
 	g_free(network->server_room->name);
 	network->server_room->name = g_strdup(name);
+	announce_network_change(network);
+	save_chat_cache_later(network->session->chat);
 }
 
 
@@ -168,10 +203,23 @@ static void watch_private_rooms(CrimsonNetwork *network) {
 }
 
 
+/* Servers forget a display name and picture when the connection ends, so each connection sets them again */
+static void restore_own_profile(CrimsonNetwork *network) {
+	g_autofree char *display_name = NULL, *picture = NULL;
+	load_network_profile(network->key, &display_name, &picture);
+	if (display_name)
+		send_irc_client_command(network->client, "METADATA", "*", "SET", "display-name", display_name, NULL);
+	if (picture)
+		send_irc_client_command(network->client, "METADATA", "*", "SET", "avatar", picture, NULL);
+}
+
+
 static void start_registered_network(CrimsonNetwork *network) {
 	adopt_network_name(network);
-	if (can_network(network, "draft/metadata-2"))
+	if (can_network(network, "draft/metadata-2")) {
 		send_irc_client_command(network->client, "METADATA", "*", "SUB", "avatar", "display-name", "color", NULL);
+		restore_own_profile(network);
+	}
 	if (!network->bouncer_id)
 		join_saved_channels(network);
 	watch_private_rooms(network);
@@ -188,10 +236,14 @@ static void start_registered_network(CrimsonNetwork *network) {
 /* A failed login or a first connection that fails says so once, until the account connects again */
 static void report_failure(Session *session, IrcClient *client, IrcClientStatus status, const char *reason) {
 	IrcFailure failure = get_irc_client_failure(client);
-	if (status == IRC_CLIENT_REGISTERED)
+	if (status == IRC_CLIENT_REGISTERED) {
 		session->has_reported_failure = FALSE;
-	if (status != IRC_CLIENT_DISCONNECTED || failure == IRC_FAILURE_NONE || failure == IRC_FAILURE_CERTIFICATE
-		|| session->has_reported_failure || !reason)
+		session->has_connected = TRUE;
+	}
+	/* A refused login needs the user, and so does a server never reached, while a dropped connection
+	 * reconnects by itself */
+	gboolean needs_user = failure == IRC_FAILURE_LOGIN || (failure == IRC_FAILURE_NETWORK && !session->has_connected);
+	if (status != IRC_CLIENT_DISCONNECTED || !needs_user || session->has_reported_failure || !reason)
 		return;
 	session->has_reported_failure = TRUE;
 	g_autofree char *text = g_strdup_printf(TEXT_ACCOUNT_PROBLEM, describe_account_name(session), reason);
@@ -223,9 +275,33 @@ static void handle_network_status(IrcClient *client, IrcClientStatus status, con
 }
 
 
+static void drop_network(Session *session, CrimsonNetwork *network);
+
+
+static void drop_gone_network(gpointer data) {
+	g_autoptr(CrimsonNetwork) network = data;
+	Session *session = network->session;
+	if (g_ptr_array_find(session->networks, network, NULL)) {
+		drop_network(session, network);
+		save_chat_cache_later(session->chat);
+	}
+}
+
+
+/* A bouncer refuses a network it no longer has, which only means it was removed elsewhere */
+static gboolean is_gone_network(const IrcMessage *message) {
+	return g_str_equal(message->command, "FAIL") && g_strcmp0(get_irc_parameter(message, 0), "BOUNCER") == 0
+		&& g_strcmp0(get_irc_parameter(message, 1), "INVALID_NETID") == 0;
+}
+
+
 static void handle_network_received(IrcClient *client, const IrcMessage *message, GPtrArray *affected,
 	gpointer data) {
 	CrimsonNetwork *network = data;
+	if (network->bouncer_id && is_gone_network(message)) {
+		g_idle_add_once(drop_gone_network, g_object_ref(network));
+		return;
+	}
 	handle_network_message(network, message, affected);
 	if (g_str_equal(message->command, "005"))
 		adopt_network_name(network);
@@ -268,6 +344,7 @@ static CrimsonNetwork *find_bouncer_network(Session *session, const char *networ
 
 
 static void drop_network(Session *session, CrimsonNetwork *network) {
+	session->chat->events.network_removed(network, session->chat->data);
 	if (network->client)
 		disconnect_irc_client(network->client, NULL);
 	guint position = 0;
@@ -293,6 +370,9 @@ static void update_bouncer_network(Session *session, const IrcMessage *message) 
 		return;
 	}
 	g_autoptr(GHashTable) attributes = parse_irc_attributes(text);
+	/* Only a full description adds a network, so a late state change for a removed one cannot bring it back */
+	if (!network && !g_hash_table_contains(attributes, "host"))
+		return;
 	gboolean is_new = !network;
 	if (is_new) {
 		g_autofree char *key = g_strconcat(session->record->id, "/", network_id, NULL);
@@ -324,17 +404,70 @@ static void update_bouncer_network(Session *session, const IrcMessage *message) 
 }
 
 
+/* A bouncer added by its address takes the name its owner gave it */
+static void adopt_bouncer_name(Session *session, IrcClient *client) {
+	const char *name = get_irc_support(get_irc_client_state(client), "NETWORK");
+	const char *given = session->record->name;
+	if (!name || g_str_equal(name, BOUNCER_DEFAULT_NAME) || (given && g_strcmp0(given, session->record->host) != 0))
+		return;
+	g_free(session->record->name);
+	session->record->name = g_strdup(name);
+	save_chat_accounts(session->chat);
+}
+
+
+/* The full network list the bouncer sends on login is the truth, so networks remembered from before that
+ * it no longer has are dropped instead of being retried */
+static void follow_network_listing(Session *session, const IrcMessage *message) {
+	const char *reference = get_irc_parameter(message, 0);
+	if (!reference || strlen(reference) < 2)
+		return;
+	if (*reference == '+' && g_strcmp0(get_irc_parameter(message, 1), "soju.im/bouncer-networks") == 0) {
+		g_free(session->listing_batch);
+		session->listing_batch = g_strdup(reference + 1);
+		g_clear_pointer(&session->listed_ids, g_hash_table_unref);
+		session->listed_ids = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+		return;
+	}
+	if (*reference != '-' || g_strcmp0(reference + 1, session->listing_batch) != 0 || !session->listed_ids)
+		return;
+	for (guint index = session->networks->len; index-- > 0;) {
+		CrimsonNetwork *network = g_ptr_array_index(session->networks, index);
+		if (network->bouncer_id && !g_hash_table_contains(session->listed_ids, network->bouncer_id))
+			drop_network(session, network);
+	}
+	g_clear_pointer(&session->listed_ids, g_hash_table_unref);
+	g_clear_pointer(&session->listing_batch, g_free);
+	save_chat_cache_later(session->chat);
+}
+
+
 static void handle_control_received(IrcClient *client, const IrcMessage *message, GPtrArray *affected,
 	gpointer data) {
 	Session *session = data;
 	const char *subcommand = get_irc_parameter(message, 0);
-	if (g_str_equal(message->command, "BOUNCER") && g_strcmp0(subcommand, "NETWORK") == 0)
+	/* The name comes with the server's details, which follow the welcome */
+	if (g_str_equal(message->command, "005")) {
+		adopt_bouncer_name(session, client);
+		announce_account_change(session->item);
+	} else if (g_str_equal(message->command, "BATCH")) {
+		follow_network_listing(session, message);
+	} else if (g_str_equal(message->command, "BOUNCER") && g_strcmp0(subcommand, "NETWORK") == 0) {
+		const char *batch = get_irc_tag(message, "batch");
+		if (session->listed_ids && g_strcmp0(batch, session->listing_batch) == 0 && get_irc_parameter(message, 1))
+			g_hash_table_add(session->listed_ids, g_strdup(get_irc_parameter(message, 1)));
 		update_bouncer_network(session, message);
+	}
 	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "INVITE") == 0
 		&& get_irc_parameter(message, 3))
 		session->chat->events.invite_ready(session, get_irc_parameter(message, 1), get_irc_parameter(message, 2),
 			get_irc_parameter(message, 3), session->chat->data);
-	else if (g_str_equal(message->command, "FAIL"))
+	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "ADMIN") == 0) {
+		session->is_admin = TRUE;
+		g_free(session->web_port);
+		session->web_port = g_strdup(get_irc_parameter(message, 1));
+		announce_account_change(session->item);
+	} else if (g_str_equal(message->command, "FAIL"))
 		session->chat->events.show_problem(get_irc_parameter(message, count_irc_parameters(message) - 1),
 			session->chat->data);
 }
@@ -499,6 +632,9 @@ void remove_account(Session *session) {
 		g_list_store_remove(chat->accounts, position);
 	g_object_unref(session->item);
 	g_free(session->control_error);
+	g_free(session->web_port);
+	g_free(session->listing_batch);
+	g_clear_pointer(&session->listed_ids, g_hash_table_unref);
 	free_account_record(session->record);
 	g_ptr_array_unref(session->networks);
 	g_free(session);
@@ -542,4 +678,160 @@ void reconnect_network(CrimsonNetwork *network) {
 		connect_session(network->session);
 	else
 		connect_network(network);
+}
+
+
+Session *find_bouncer(Chat *chat) {
+	for (guint index = 0; index < chat->sessions->len; index++) {
+		Session *session = g_ptr_array_index(chat->sessions, index);
+		if (session->record->is_bouncer)
+			return session;
+	}
+	return NULL;
+}
+
+
+void cancel_room_listing(CrimsonNetwork *network) {
+	NetworkWork *work = get_network_work(network);
+	work->listing_ready = NULL;
+	work->listing_data = NULL;
+	g_clear_pointer(&work->listing, g_ptr_array_unref);
+}
+
+
+void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, gpointer data) {
+	cancel_room_listing(network);
+	NetworkWork *work = get_network_work(network);
+	work->listing = g_ptr_array_new_with_free_func((GDestroyNotify)free_listed_room);
+	work->listing_ready = ready;
+	work->listing_data = data;
+	IrcState *state = get_network_state(network);
+	const char *filters = state ? get_irc_support(state, "ELIST") : NULL;
+	/* Big networks list tens of thousands of channels, so a server that filters by size first sends busy ones */
+	work->is_listing_busy = filters && strpbrk(filters, "Uu");
+	if (work->is_listing_busy)
+		send_irc_client_command(network->client, "LIST", BUSY_ROOM_FILTER, NULL);
+	else
+		send_irc_client_command(network->client, "LIST", NULL);
+}
+
+
+static int order_listed_rooms(gconstpointer first, gconstpointer second) {
+	const ListedRoom *one = *(ListedRoom *const *)first, *other = *(ListedRoom *const *)second;
+	if (one->users != other->users)
+		return one->users > other->users ? -1 : 1;
+	return g_ascii_strcasecmp(one->name, other->name);
+}
+
+
+gboolean collect_room_listing(CrimsonNetwork *network, int number, const IrcMessage *message) {
+	NetworkWork *work = get_network_work(network);
+	if (number != 321 && number != 322 && number != 323)
+		return FALSE;
+	if (!work->listing)
+		return TRUE;
+	if (number == 322 && get_irc_parameter(message, 1)) {
+		ListedRoom *room = g_new0(ListedRoom, 1);
+		room->name = g_strdup(get_irc_parameter(message, 1));
+		room->users = (guint)g_ascii_strtoull(get_irc_parameter(message, 2) ? get_irc_parameter(message, 2) : "0",
+			NULL, 10);
+		room->topic = strip_irc_formatting(get_irc_parameter(message, 3));
+		g_ptr_array_add(work->listing, room);
+	} else if (number == 323 && work->is_listing_busy && work->listing->len < FEW_BUSY_ROOMS) {
+		work->is_listing_busy = FALSE;
+		g_ptr_array_set_size(work->listing, 0);
+		send_irc_client_command(network->client, "LIST", NULL);
+	} else if (number == 323) {
+		g_autoptr(GPtrArray) rooms = g_steal_pointer(&work->listing);
+		g_ptr_array_sort(rooms, order_listed_rooms);
+		RoomListingReady ready = work->listing_ready;
+		gpointer data = work->listing_data;
+		work->listing_ready = NULL;
+		work->listing_data = NULL;
+		if (ready)
+			ready(rooms, data);
+	}
+	return TRUE;
+}
+
+
+void cancel_profile(CrimsonNetwork *network, gpointer data) {
+	NetworkWork *work = get_network_work(network);
+	if (work->profile_data != data)
+		return;
+	work->profile_ready = NULL;
+	work->profile_data = NULL;
+	g_clear_pointer(&work->profile, free_profile);
+}
+
+
+void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady ready, gpointer data) {
+	NetworkWork *work = get_network_work(network);
+	cancel_profile(network, work->profile_data);
+	work->profile = g_new0(Profile, 1);
+	work->profile->nick = g_strdup(nick);
+	work->profile->is_found = TRUE;
+	work->profile_ready = ready;
+	work->profile_data = data;
+	/* Asking with the nick twice reaches the person's own server, which knows how long they have been idle */
+	send_irc_client_command(network->client, "WHOIS", nick, nick, NULL);
+}
+
+
+static void set_profile_text(char **field, const char *text) {
+	g_free(*field);
+	*field = text && *text ? g_strdup(text) : NULL;
+}
+
+
+gboolean collect_profile(CrimsonNetwork *network, int number, const IrcMessage *message) {
+	NetworkWork *work = get_network_work(network);
+	Profile *profile = work->profile;
+	const char *nick = get_irc_parameter(message, 1);
+	if (!profile || !nick || g_ascii_strcasecmp(nick, profile->nick) != 0)
+		return FALSE;
+	const char *last = get_irc_parameter(message, count_irc_parameters(message) - 1);
+	switch (number) {
+	case 311:
+		set_profile_text(&profile->nick, nick);
+		set_profile_text(&profile->user, get_irc_parameter(message, 2));
+		set_profile_text(&profile->host, get_irc_parameter(message, 3));
+		set_profile_text(&profile->realname, last);
+		break;
+	case 312:
+		set_profile_text(&profile->server, get_irc_parameter(message, 2));
+		break;
+	case 317:
+		profile->idle_seconds = g_ascii_strtoll(get_irc_parameter(message, 2), NULL, 10);
+		break;
+	case 319:
+		set_profile_text(&profile->channels, last);
+		break;
+	case 330:
+		set_profile_text(&profile->account, get_irc_parameter(message, 2));
+		break;
+	case 301:
+		set_profile_text(&profile->away, last);
+		break;
+	case 671:
+		profile->is_secure = TRUE;
+		break;
+	case 401:
+		profile->is_found = FALSE;
+		break;
+	case 318: {
+		ProfileReady ready = work->profile_ready;
+		gpointer data = work->profile_data;
+		work->profile = NULL;
+		work->profile_ready = NULL;
+		work->profile_data = NULL;
+		if (ready)
+			ready(profile, data);
+		free_profile(profile);
+		break;
+	}
+	default:
+		break;
+	}
+	return TRUE;
 }

@@ -198,7 +198,9 @@ static GPtrArray *list_support_tokens(Downstream *downstream) {
 	GPtrArray *tokens = g_ptr_array_new_with_free_func(g_free);
 	if (!downstream->upstream) {
 		g_ptr_array_add(tokens, g_strdup("CASEMAPPING=ascii"));
-		g_ptr_array_add(tokens, g_strdup("NETWORK=" BOUNCER_NAME));
+		/* The name the owner gave the bouncer, which an app shows instead of its address */
+		const char *name = downstream->bouncer->name ? downstream->bouncer->name : BOUNCER_NAME;
+		g_ptr_array_add(tokens, g_strdup_printf("NETWORK=%s", name));
 		return tokens;
 	}
 	GHashTableIter iterator;
@@ -302,6 +304,9 @@ static void finish_registration(Downstream *downstream) {
 		downstream->upstream ? " to " : "", downstream->upstream ? downstream->upstream->record.host : "");
 	drop_missing_caps(downstream, NULL);
 	send_welcome(downstream);
+	/* An admin's app offers invites and the website's admin page, so it learns the website's port */
+	if (!downstream->upstream && downstream->user->is_admin && has_downstream_cap(downstream, "crimson-chat/invites"))
+		send_from_bouncer(downstream, "CRIMSON", "ADMIN", downstream->bouncer->web_port, NULL);
 	if (downstream->upstream)
 		replay_upstream(downstream);
 	else if (has_downstream_cap(downstream, "soju.im/bouncer-networks-notify"))

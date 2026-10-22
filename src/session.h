@@ -16,6 +16,8 @@ typedef struct {
 	void (*room_opened)(CrimsonRoom *room, gpointer data);
 	/* A bouncer created an invite, with its token, its uses or * for unlimited, and its website's port */
 	void (*invite_ready)(Session *session, const char *token, const char *uses, const char *port, gpointer data);
+	/* A network is about to go, whatever removed it, so nothing keeps pointing into it */
+	void (*network_removed)(CrimsonNetwork *network, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */
@@ -39,8 +41,34 @@ struct Session {
 	char *control_error;
 	GPtrArray *networks;
 	CrimsonAccount *item;
-	gboolean has_reported_failure;
+	/* Whether the account ever got through, after which dropped connections only reconnect quietly */
+	gboolean has_reported_failure, has_connected;
+	/* A bouncer admin can invite people and open the bouncer's admin page on this port */
+	gboolean is_admin;
+	char *web_port;
+	/* The bouncer's full list of networks while it arrives, by batch reference and the ids it named */
+	char *listing_batch;
+	GHashTable *listed_ids;
 };
+
+/* A channel a server listed, for the room picker */
+typedef struct {
+	char *name, *topic;
+	guint users;
+} ListedRoom;
+
+/* Hands over the listed rooms, most people first, or NULL when the network went away before the end */
+typedef void (*RoomListingReady)(GPtrArray *rooms, gpointer data);
+
+/* What WHOIS tells about a person, for their profile */
+typedef struct {
+	char *nick, *user, *host, *realname, *server, *account, *away, *channels;
+	gint64 idle_seconds;
+	gboolean is_found, is_secure;
+} Profile;
+
+/* Hands over the profile, or NULL when the network went away before the answer */
+typedef void (*ProfileReady)(Profile *profile, gpointer data);
 
 /* Work in progress on a network, kept per connection */
 typedef struct {
@@ -52,6 +80,16 @@ typedef struct {
 	/* A channel the user asked to join, opened once the server confirms it */
 	char *opening_room;
 	guint typing_source;
+	/* The channel list being collected for the room picker, and who waits for it */
+	GPtrArray *listing;
+	RoomListingReady listing_ready;
+	gpointer listing_data;
+	/* Whether the list asked only for busy channels, so a short answer is asked again in full */
+	gboolean is_listing_busy;
+	/* The profile being collected from WHOIS replies, and who waits for it */
+	Profile *profile;
+	ProfileReady profile_ready;
+	gpointer profile_data;
 } NetworkWork;
 
 /* Frees what a network collects while a history batch arrives */
@@ -72,6 +110,18 @@ void save_chat_accounts(Chat *chat);
 /* Saves the room list soon, so many changes in a row write the file once */
 void save_chat_cache_later(Chat *chat);
 NetworkWork *get_network_work(CrimsonNetwork *network);
+/* The one bouncer the user is connected to, if any */
+Session *find_bouncer(Chat *chat);
+/* Asks the server for its channels, the busy ones only when it can filter them */
+void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, gpointer data);
+void cancel_room_listing(CrimsonNetwork *network);
+/* Takes the server's channel list replies while a listing is wanted, returning whether it took the line */
+gboolean collect_room_listing(CrimsonNetwork *network, int number, const IrcMessage *message);
+void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady ready, gpointer data);
+/* Stops waiting for a profile, if the one asked for is still this caller's */
+void cancel_profile(CrimsonNetwork *network, gpointer data);
+/* Takes WHOIS replies about the person a profile was asked for, returning whether it took the line */
+gboolean collect_profile(CrimsonNetwork *network, int number, const IrcMessage *message);
 
 void add_bouncer_network(Session *session, GHashTable *attributes);
 void change_bouncer_network(CrimsonNetwork *network, GHashTable *attributes);

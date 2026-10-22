@@ -52,6 +52,8 @@ struct Upstream {
 	GQueue pending_echoes;
 	/* Keys given with JOIN, kept with the channel once the server confirms it */
 	GHashTable *channel_keys;
+	/* Set while the network is being removed, so its last disconnect announces nothing */
+	gboolean is_removed;
 };
 
 /* A client logged in to the bouncer, bound to one network or managing the network list */

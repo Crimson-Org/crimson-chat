@@ -26,3 +26,6 @@ void load_room_cache(CrimsonNetwork *network);
 /* The bouncer networks of an account seen on the last run, as network keys and their names */
 GPtrArray *list_cached_networks(const char *account_id, GPtrArray **names);
 void save_room_cache(GListModel *networks);
+/* The display name and picture the user chose on a server, which servers forget when the connection ends */
+void load_network_profile(const char *key, char **display_name, char **picture);
+void save_network_profile(const char *key, const char *display_name, const char *picture);

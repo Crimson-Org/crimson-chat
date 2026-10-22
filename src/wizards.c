@@ -1,12 +1,15 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "dialogs.h"
+#include "room-picker.h"
 #include "wizards.h"
 
 #define GUIDE_WIDTH 460
 #define GUIDE_HEIGHT 680
 #define CONTENT_WIDTH 400
 #define ICON_SIZE 72
+#define HELP_WIDTH_CHARS 34
 #define NETWORK_AVATAR_SIZE 40
 #define TLS_PORT 6697
 #define HTTPS_PORT 443
@@ -34,19 +37,33 @@ typedef struct {
 	int server_port;
 	gboolean uses_tls;
 	GtkWidget *host, *port, *tls, *nick, *account_row, *account, *password, *username;
-	/* The bouncer choices of the last server step, after the choice of this computer alone */
-	GPtrArray *bouncers, *choices;
-	/* The bouncer a network is being added to, which skips the choice of where to connect from */
-	Session *fixed_bouncer;
-	GtkWidget *finish_button;
+	/* The bouncer that keeps the new server, when the user is connected to one */
+	Session *bouncer;
+	/* What the last step connects, watched until it is connected: a bouncer login, or a server and,
+	 * on a bouncer, the networks it had before so the new one can be told apart */
+	Session *connecting;
+	CrimsonNetwork *network;
+	GPtrArray *known_networks;
+	GtkWidget *connecting_label;
+	gulong watch_handler;
+	GObject *watched;
 } Guide;
 
 
+/* The guide holds what it watches, so a server removed meanwhile is still there to let go of */
+static void stop_watching(Guide *guide) {
+	if (guide->watched && guide->watch_handler)
+		g_signal_handler_disconnect(guide->watched, guide->watch_handler);
+	g_clear_object(&guide->watched);
+	guide->watch_handler = 0;
+}
+
+
 static void free_guide(Guide *guide) {
+	stop_watching(guide);
 	g_free(guide->network_name);
 	g_free(guide->server_host);
-	g_ptr_array_unref(guide->bouncers);
-	g_ptr_array_unref(guide->choices);
+	g_clear_pointer(&guide->known_networks, g_ptr_array_unref);
 	g_free(guide);
 }
 
@@ -54,8 +71,6 @@ static void free_guide(Guide *guide) {
 static Guide *create_guide(Window *window, const char *title) {
 	Guide *guide = g_new0(Guide, 1);
 	guide->window = window;
-	guide->bouncers = g_ptr_array_new();
-	guide->choices = g_ptr_array_new();
 	guide->dialog = adw_dialog_new();
 	adw_dialog_set_title(guide->dialog, title);
 	adw_dialog_set_content_width(guide->dialog, GUIDE_WIDTH);
@@ -82,9 +97,26 @@ static GtkWidget *create_label(const char *text, const char *css_class) {
 }
 
 
-/* One step of a guide: an icon, a heading, a short explanation, the questions and the button onwards */
+GtkWidget *create_help_button(const char *text) {
+	GtkWidget *label = gtk_label_new(text);
+	gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+	gtk_label_set_max_width_chars(GTK_LABEL(label), HELP_WIDTH_CHARS);
+	gtk_label_set_xalign(GTK_LABEL(label), 0);
+	gtk_widget_add_css_class(label, "help-text");
+	GtkWidget *popover = gtk_popover_new();
+	gtk_popover_set_child(GTK_POPOVER(popover), label);
+	GtkWidget *button = gtk_menu_button_new();
+	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "dialog-question-symbolic");
+	gtk_menu_button_set_popover(GTK_MENU_BUTTON(button), popover);
+	gtk_widget_set_tooltip_text(button, TEXT_HELP);
+	return button;
+}
+
+
+/* One step of a guide: an icon, a heading, a short explanation, the questions, the button onwards and the
+ * help its corner button pops up */
 static AdwNavigationPage *create_step(const char *title, const char *description, const char *icon,
-	GtkWidget *content, GtkWidget *button) {
+	GtkWidget *content, GtkWidget *button, const char *help) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_add_css_class(box, "guide-step");
 	GtkWidget *image = gtk_image_new_from_icon_name(icon);
@@ -113,6 +145,8 @@ static AdwNavigationPage *create_step(const char *title, const char *description
 	/* The heading in the page already names the step, so the header bar only carries Back and Close */
 	GtkWidget *header = adw_header_bar_new();
 	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
+	if (help)
+		adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_help_button(help));
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
 	return adw_navigation_page_new(toolbar, title);
@@ -177,24 +211,101 @@ static void watch_required(GtkWidget *button, GtkWidget *first, GtkWidget *secon
 }
 
 
-static void collect_bouncers(Guide *guide) {
-	Chat *chat = guide->window->chat;
-	for (guint index = 0; index < chat->sessions->len; index++) {
-		Session *session = g_ptr_array_index(chat->sessions, index);
-		if (session->record->is_bouncer)
-			g_ptr_array_add(guide->bouncers, session);
+static void leave_connecting(Guide *guide);
+
+
+/* Connected: a bouncer login is done, and a server goes on to its rooms */
+static void finish_connecting(Guide *guide) {
+	stop_watching(guide);
+	if (guide->connecting) {
+		adw_dialog_close(guide->dialog);
+		return;
+	}
+	choose_network(guide->window, guide->network);
+	AdwNavigationPage *picker = create_room_picker_page(guide->window, guide->network, guide->dialog);
+	adw_navigation_view_replace(guide->pages, &picker, 1);
+}
+
+
+static void show_connecting_error(Guide *guide, const char *error) {
+	gtk_label_set_text(GTK_LABEL(guide->connecting_label), error ? error : "");
+	gtk_widget_set_visible(guide->connecting_label, error && *error);
+}
+
+
+static void follow_network(CrimsonNetwork *network, Guide *guide) {
+	if (network->state == NETWORK_CONNECTED)
+		finish_connecting(guide);
+	else
+		show_connecting_error(guide, network->error);
+}
+
+
+static void watch_network(Guide *guide, CrimsonNetwork *network) {
+	stop_watching(guide);
+	guide->network = network;
+	choose_network(guide->window, network);
+	guide->watched = g_object_ref(G_OBJECT(network));
+	guide->watch_handler = g_signal_connect(network, "changed", G_CALLBACK(follow_network), guide);
+	follow_network(network, guide);
+}
+
+
+/* A bouncer announces the new network a moment later, as the one it did not have before */
+static void find_new_network(GListModel *networks, guint position, guint removed, guint added, Guide *guide) {
+	for (guint index = 0; index < guide->bouncer->networks->len; index++) {
+		CrimsonNetwork *network = g_ptr_array_index(guide->bouncer->networks, index);
+		if (!g_ptr_array_find(guide->known_networks, network, NULL)) {
+			watch_network(guide, network);
+			return;
+		}
 	}
 }
 
 
-static Session *get_chosen_bouncer(Guide *guide) {
-	if (guide->fixed_bouncer)
-		return guide->fixed_bouncer;
-	for (guint index = 0; index < guide->choices->len; index++) {
-		if (gtk_check_button_get_active(g_ptr_array_index(guide->choices, index)))
-			return index < guide->bouncers->len ? g_ptr_array_index(guide->bouncers, index) : NULL;
+static void follow_login(CrimsonAccount *account, Guide *guide) {
+	if (read_account_state(account->session) == NETWORK_CONNECTED)
+		finish_connecting(guide);
+	else
+		show_connecting_error(guide, read_account_error(account->session));
+}
+
+
+/* A spinner while the connection is made, with Back undoing what the guide just added */
+static void push_connecting_step(Guide *guide, const char *name) {
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
+	gtk_box_append(GTK_BOX(box), adw_spinner_new());
+	guide->connecting_label = create_label(NULL, "guide-error");
+	gtk_widget_set_visible(guide->connecting_label, FALSE);
+	gtk_box_append(GTK_BOX(box), guide->connecting_label);
+	g_autofree char *title = g_strdup_printf(TEXT_CONNECTING_TO, name);
+	AdwNavigationPage *page = create_step(title, NULL, "network-server-symbolic", box, NULL, TEXT_HELP_CONNECTING);
+	adw_navigation_page_set_can_pop(page, FALSE);
+	GtkWidget *back = gtk_button_new_with_label(TEXT_BACK);
+	gtk_widget_add_css_class(back, "pill");
+	gtk_widget_set_halign(back, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_top(back, 12);
+	g_signal_connect_swapped(back, "clicked", G_CALLBACK(leave_connecting), guide);
+	gtk_box_append(GTK_BOX(box), back);
+	adw_navigation_view_push(guide->pages, page);
+}
+
+
+static void leave_connecting(Guide *guide) {
+	stop_watching(guide);
+	if (guide->connecting) {
+		remove_account(guide->connecting);
+		guide->connecting = NULL;
+	} else if (guide->network && guide->network->bouncer_id) {
+		delete_bouncer_network(guide->network);
+	} else if (guide->network) {
+		forget_network_in_window(guide->window, guide->network);
+		remove_account(guide->network->session);
 	}
-	return NULL;
+	guide->network = NULL;
+	AdwNavigationPage *page = adw_navigation_view_get_visible_page(guide->pages);
+	adw_navigation_page_set_can_pop(page, TRUE);
+	adw_navigation_view_pop(guide->pages);
 }
 
 
@@ -204,78 +315,44 @@ static void put_attribute(GHashTable *attributes, const char *name, const char *
 }
 
 
-/* The last answer either adds the network to a bouncer or saves a direct account */
+/* The last answer adds the server to the bouncer when there is one, or connects to it from here */
 static void finish_server(Guide *guide) {
-	Session *bouncer = get_chosen_bouncer(guide);
 	const char *host = guide->server_host;
 	int port = guide->server_port;
-	gboolean uses_tls = guide->uses_tls;
 	gboolean has_account = adw_expander_row_get_enable_expansion(ADW_EXPANDER_ROW(guide->account_row));
 	const char *account = has_account ? read_entry(guide->account) : NULL;
 	const char *password = has_account ? read_entry(guide->password) : NULL;
-	if (bouncer) {
+	push_connecting_step(guide, guide->network_name);
+	if (guide->bouncer) {
 		g_autoptr(GHashTable) attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 		g_autofree char *port_text = g_strdup_printf("%d", port);
 		put_attribute(attributes, "name", guide->network_name);
 		put_attribute(attributes, "host", host);
 		put_attribute(attributes, "port", port_text);
-		put_attribute(attributes, "tls", uses_tls ? "1" : "0");
+		put_attribute(attributes, "tls", guide->uses_tls ? "1" : "0");
 		put_attribute(attributes, "nickname", read_entry(guide->nick));
 		put_attribute(attributes, "sasl-username", account);
 		put_attribute(attributes, "sasl-password", password);
-		add_bouncer_network(bouncer, attributes);
-		choose_account(guide->window, bouncer);
-	} else {
-		AccountRecord *record = g_new0(AccountRecord, 1);
-		record->id = create_account_id();
-		record->name = g_strdup(guide->network_name);
-		record->host = g_strdup(host);
-		record->port = port;
-		record->uses_tls = uses_tls;
-		record->nick = g_strdup(read_entry(guide->nick));
-		record->sasl_username = g_strdup(account);
-		record->sasl_password = g_strdup(password);
-		Session *session = add_account(guide->window->chat, record);
-		save_chat_accounts(guide->window->chat);
-		choose_account(guide->window, session);
+		g_clear_pointer(&guide->known_networks, g_ptr_array_unref);
+		guide->known_networks = g_ptr_array_copy(guide->bouncer->networks, NULL, NULL);
+		guide->watched = g_object_ref(G_OBJECT(guide->window->chat->networks));
+		guide->watch_handler = g_signal_connect(guide->window->chat->networks, "items-changed",
+			G_CALLBACK(find_new_network), guide);
+		add_bouncer_network(guide->bouncer, attributes);
+		return;
 	}
-	adw_dialog_close(guide->dialog);
-}
-
-
-static void push_connection_step(Guide *guide) {
-	GtkWidget *list = create_boxed_list();
-	GtkWidget *first = NULL;
-	for (guint index = 0; index <= guide->bouncers->len; index++) {
-		Session *session = index < guide->bouncers->len ? g_ptr_array_index(guide->bouncers, index) : NULL;
-		GtkWidget *row = adw_action_row_new();
-		g_autofree char *title = session ? g_strdup_printf(TEXT_THROUGH_BOUNCER, session->record->name
-			? session->record->name : session->record->host) : g_strdup(TEXT_THIS_COMPUTER);
-		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-		adw_action_row_set_subtitle(ADW_ACTION_ROW(row), session ? TEXT_THROUGH_BOUNCER_DETAIL
-			: NULL);
-		GtkWidget *check = gtk_check_button_new();
-		if (first)
-			gtk_check_button_set_group(GTK_CHECK_BUTTON(check), GTK_CHECK_BUTTON(first));
-		else
-			first = check;
-		gtk_check_button_set_active(GTK_CHECK_BUTTON(check), index == 0);
-		adw_action_row_add_prefix(ADW_ACTION_ROW(row), check);
-		adw_action_row_set_activatable_widget(ADW_ACTION_ROW(row), check);
-		g_ptr_array_add(guide->choices, check);
-		gtk_list_box_append(GTK_LIST_BOX(list), row);
-	}
-	GtkWidget *button = create_button(TEXT_CONNECT, G_CALLBACK(finish_server), guide);
-	adw_navigation_view_push(guide->pages, create_step(TEXT_STAY_CONNECTED_TITLE, NULL,
-		"crimson-chats-symbolic", list, button));
-}
-
-
-static void continue_from_nick(Guide *guide) {
-	if (guide->bouncers->len && !guide->fixed_bouncer)
-		push_connection_step(guide);
-	else
-		finish_server(guide);
+	AccountRecord *record = g_new0(AccountRecord, 1);
+	record->id = create_account_id();
+	record->name = g_strdup(guide->network_name);
+	record->host = g_strdup(host);
+	record->port = port;
+	record->uses_tls = guide->uses_tls;
+	record->nick = g_strdup(read_entry(guide->nick));
+	record->sasl_username = g_strdup(account);
+	record->sasl_password = g_strdup(password);
+	Session *session = add_account(guide->window->chat, record);
+	save_chat_accounts(guide->window->chat);
+	watch_network(guide, g_ptr_array_index(session->networks, 0));
 }
 
 
@@ -323,12 +400,10 @@ static void push_nick_step(Guide *guide) {
 	adw_expander_row_add_row(ADW_EXPANDER_ROW(guide->account_row), guide->account);
 	adw_expander_row_add_row(ADW_EXPANDER_ROW(guide->account_row), guide->password);
 	gtk_list_box_append(GTK_LIST_BOX(list), guide->account_row);
-	gboolean has_choice = guide->bouncers->len && !guide->fixed_bouncer;
-	GtkWidget *button = create_button(has_choice ? TEXT_CONTINUE : TEXT_CONNECT,
-		G_CALLBACK(continue_from_nick), guide);
+	GtkWidget *button = create_button(TEXT_CONNECT, G_CALLBACK(finish_server), guide);
 	watch_required(button, guide->nick, NULL);
 	adw_navigation_view_push(guide->pages, create_step(TEXT_NICK_TITLE, NULL, "avatar-default-symbolic", list,
-		button));
+		button, TEXT_HELP_NICK));
 }
 
 
@@ -362,7 +437,7 @@ static void push_address_step(Guide *guide) {
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_from_address), guide);
 	watch_required(button, guide->host, NULL);
 	adw_navigation_view_push(guide->pages, create_step(TEXT_ADDRESS_TITLE, NULL,
-		"network-server-symbolic", list, button));
+		"network-server-symbolic", list, button, TEXT_HELP_ADDRESS));
 }
 
 
@@ -391,10 +466,9 @@ static GtkWidget *create_network_row(const char *name, const char *about, gboole
 }
 
 
-void show_server_guide(Window *window, Session *bouncer) {
-	Guide *guide = create_guide(window, bouncer ? TEXT_ADD_NETWORK : TEXT_ADD_SERVER_TITLE);
-	guide->fixed_bouncer = bouncer;
-	collect_bouncers(guide);
+void show_server_guide(Window *window) {
+	Guide *guide = create_guide(window, TEXT_ADD_SERVER_TITLE);
+	guide->bouncer = find_bouncer(window->chat);
 	GtkWidget *list = create_boxed_list();
 	for (guint index = 0; index < G_N_ELEMENTS(KNOWN_NETWORKS); index++)
 		gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(KNOWN_NETWORKS[index].name,
@@ -402,7 +476,7 @@ void show_server_guide(Window *window, Session *bouncer) {
 	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, TRUE));
 	g_signal_connect(list, "row-activated", G_CALLBACK(pick_network), guide);
 	adw_navigation_view_push(guide->pages, create_step(TEXT_PICK_NETWORK_TITLE, NULL,
-		"crimson-chats-symbolic", list, NULL));
+		"crimson-chats-symbolic", list, NULL, guide->bouncer ? TEXT_HELP_PICK_ON_BOUNCER : TEXT_HELP_PICK));
 	adw_dialog_present(guide->dialog, GTK_WIDGET(window->window));
 }
 
@@ -418,10 +492,11 @@ static void finish_bouncer(Guide *guide) {
 	record->nick = g_strdup(read_entry(guide->username));
 	record->sasl_username = g_strdup(read_entry(guide->username));
 	record->sasl_password = g_strdup(read_entry(guide->password));
-	Session *session = add_account(guide->window->chat, record);
+	push_connecting_step(guide, record->name);
+	guide->connecting = add_account(guide->window->chat, record);
 	save_chat_accounts(guide->window->chat);
-	choose_account(guide->window, session);
-	adw_dialog_close(guide->dialog);
+	guide->watched = g_object_ref(G_OBJECT(guide->connecting->item));
+	guide->watch_handler = g_signal_connect(guide->connecting->item, "changed", G_CALLBACK(follow_login), guide);
 }
 
 
@@ -431,7 +506,7 @@ static AdwNavigationPage *create_login_step(Guide *guide, const char *username) 
 	guide->password = add_entry(list, TEXT_PASSWORD, NULL, TRUE);
 	GtkWidget *button = create_button(TEXT_CONNECT, G_CALLBACK(finish_bouncer), guide);
 	watch_required(button, guide->username, guide->password);
-	return create_step(TEXT_LOGIN_TITLE, NULL, "dialog-password-symbolic", list, button);
+	return create_step(TEXT_LOGIN_TITLE, NULL, "dialog-password-symbolic", list, button, TEXT_HELP_LOGIN);
 }
 
 
@@ -447,7 +522,7 @@ static AdwNavigationPage *create_bouncer_address_step(Guide *guide, const Bounce
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_to_login), guide);
 	watch_required(button, guide->host, NULL);
 	return create_step(TEXT_BOUNCER_ADDRESS_TITLE, NULL, "network-server-symbolic", list,
-		button);
+		button, TEXT_HELP_BOUNCER_ADDRESS);
 }
 
 
@@ -457,11 +532,17 @@ static void continue_to_address(Guide *guide) {
 
 
 void show_bouncer_guide(Window *window, const BouncerHint *hint) {
+	Session *bouncer = find_bouncer(window->chat);
+	if (bouncer) {
+		g_autofree char *text = g_strdup_printf(TEXT_ONE_BOUNCER, describe_account_name(bouncer));
+		show_toast(window, text);
+		return;
+	}
 	Guide *guide = create_guide(window, TEXT_ADD_BOUNCER_TITLE);
 	guide->network_name = g_strdup(hint ? hint->name : NULL);
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_to_address), guide);
 	AdwNavigationPage *intro = create_step(TEXT_BOUNCER_INTRO_TITLE, TEXT_BOUNCER_INTRO_BODY, "crimson-chats-symbolic",
-		NULL, button);
+		NULL, button, TEXT_HELP_BOUNCER);
 	if (!hint) {
 		adw_navigation_view_push(guide->pages, intro);
 	} else {

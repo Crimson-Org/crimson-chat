@@ -223,6 +223,7 @@ void add_upstream(BouncerUser *user, const NetworkRecord *record) {
 void remove_upstream(Upstream *upstream) {
 	BouncerUser *user = upstream->user;
 	Bouncer *bouncer = user->bouncer;
+	upstream->is_removed = TRUE;
 	announce_network(upstream, NULL);
 	for (GList *item = bouncer->downstreams; item;) {
 		Downstream *downstream = item->data;
