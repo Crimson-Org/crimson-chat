@@ -10,8 +10,8 @@
 #include "window.h"
 
 #define FADE_DURATION_MS 120
-#define CARD_AVATAR_SIZE 72
-#define CARD_WIDTH_CHARS 36
+#define ACTIVITY_SECONDS 120
+#define SECONDS_PER_MINUTE 60
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
@@ -37,6 +37,9 @@ struct Conversation {
 	/* Whether the user opened the member list, which the split view would otherwise change when it resizes */
 	gboolean wants_members;
 	guint member_source;
+	/* When the person in a private chat was last active, asked of the server every couple of minutes */
+	char *activity;
+	guint activity_source;
 	MessageActions actions;
 };
 
@@ -555,55 +558,9 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 }
 
 
-static void show_members_from_card(GtkButton *button, Conversation *conversation) {
-	gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_ancestor(GTK_WIDGET(button), GTK_TYPE_POPOVER)));
+static void show_members_panel(gpointer data) {
+	Conversation *conversation = data;
 	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(conversation->members_button), TRUE);
-}
-
-
-/* A room's card: its picture, name, whole topic and size, with its members and leaving at hand */
-static void show_room_card(Conversation *conversation, GtkWidget *anchor) {
-	CrimsonRoom *room = conversation->room;
-	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-	gtk_widget_add_css_class(box, "room-card");
-	GtkWidget *avatar = adw_avatar_new(CARD_AVATAR_SIZE, NULL, TRUE);
-	fill_room_avatar(ADW_AVATAR(avatar), room, CARD_AVATAR_SIZE);
-	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), avatar);
-	g_autofree char *title = describe_room_title(room);
-	GtkWidget *name = gtk_label_new(title);
-	gtk_widget_add_css_class(name, "title-2");
-	gtk_box_append(GTK_BOX(box), name);
-	g_autofree char *size = describe_room_subtitle(room);
-	GtkWidget *members = gtk_label_new(size);
-	gtk_widget_add_css_class(members, "dim-label");
-	gtk_box_append(GTK_BOX(box), members);
-	g_autofree char *topic = room->topic ? strip_irc_formatting(room->topic) : NULL;
-	if (topic && *topic) {
-		GtkWidget *text = gtk_label_new(topic);
-		gtk_label_set_wrap(GTK_LABEL(text), TRUE);
-		gtk_label_set_max_width_chars(GTK_LABEL(text), CARD_WIDTH_CHARS);
-		gtk_label_set_justify(GTK_LABEL(text), GTK_JUSTIFY_CENTER);
-		gtk_label_set_selectable(GTK_LABEL(text), TRUE);
-		gtk_widget_add_css_class(text, "room-card-topic");
-		gtk_box_append(GTK_BOX(box), text);
-	}
-	GtkWidget *show = gtk_button_new_with_label(TEXT_SHOW_MEMBERS);
-	gtk_widget_add_css_class(show, "pill");
-	g_signal_connect(show, "clicked", G_CALLBACK(show_members_from_card), conversation);
-	gtk_widget_set_margin_top(show, 6);
-	gtk_box_append(GTK_BOX(box), show);
-	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
-	gtk_widget_add_css_class(leave, "pill");
-	gtk_widget_add_css_class(leave, "room-card-leave");
-	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-room");
-	gtk_box_append(GTK_BOX(box), leave);
-	GtkWidget *popover = gtk_popover_new();
-	gtk_popover_set_child(GTK_POPOVER(popover), box);
-	gtk_widget_set_parent(popover, anchor);
-	g_signal_connect_swapped(leave, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
-	g_signal_connect(popover, "closed", G_CALLBACK(forget_member_menu), NULL);
-	gtk_popover_popup(GTK_POPOVER(popover));
 }
 
 
@@ -613,7 +570,7 @@ static void click_header(GtkGestureClick *gesture, int presses, double x, double
 	if (!room)
 		return;
 	if (room->kind == ROOM_CHANNEL)
-		show_room_card(conversation, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)));
+		show_room_details(conversation->window, room, G_CALLBACK(show_members_panel), conversation);
 	else if (room->kind == ROOM_PRIVATE)
 		show_profile(conversation->window, room, room->name);
 }
@@ -761,6 +718,53 @@ CrimsonRoom *get_conversation_room(Conversation *conversation) {
 }
 
 
+static void fill_header(Conversation *conversation);
+
+
+static void show_activity(Profile *profile, gpointer data) {
+	Conversation *conversation = data;
+	CrimsonRoom *room = conversation->room;
+	if (!profile || !room || room->kind != ROOM_PRIVATE || g_ascii_strcasecmp(profile->nick, room->name) != 0)
+		return;
+	g_free(conversation->activity);
+	if (!profile->is_found)
+		conversation->activity = g_strdup(TEXT_OFFLINE);
+	else if (profile->away)
+		conversation->activity = g_strdup(TEXT_AWAY);
+	else if (profile->idle_seconds < SECONDS_PER_MINUTE)
+		conversation->activity = g_strdup(TEXT_ACTIVE_NOW);
+	else {
+		g_autofree char *ago = describe_idle(profile->idle_seconds);
+		conversation->activity = g_strdup_printf(TEXT_LAST_ACTIVE, ago);
+	}
+	fill_header(conversation);
+}
+
+
+/* Asks the server how long the person has been idle, unless a profile is already being asked for */
+static gboolean poll_activity(gpointer data) {
+	Conversation *conversation = data;
+	CrimsonRoom *room = conversation->room;
+	if (room && room->kind == ROOM_PRIVATE && room->network->state == NETWORK_CONNECTED
+		&& !get_network_work(room->network)->profile)
+		request_profile(room->network, room->name, show_activity, conversation);
+	return G_SOURCE_CONTINUE;
+}
+
+
+static void follow_activity(Conversation *conversation, CrimsonRoom *previous) {
+	g_clear_handle_id(&conversation->activity_source, g_source_remove);
+	g_clear_pointer(&conversation->activity, g_free);
+	if (previous)
+		cancel_profile(previous->network, conversation);
+	CrimsonRoom *room = conversation->room;
+	if (!room || room->kind != ROOM_PRIVATE)
+		return;
+	poll_activity(conversation);
+	conversation->activity_source = g_timeout_add_seconds(ACTIVITY_SECONDS, poll_activity, conversation);
+}
+
+
 static void fill_header(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	g_autofree char *title = describe_room_title(room);
@@ -768,9 +772,13 @@ static void fill_header(Conversation *conversation) {
 	/* A room's topic says what it is about, so it takes the place of the member count unless someone types */
 	gboolean shows_topic = room->kind == ROOM_CHANNEL && topic && *topic
 		&& !(is_room_typing(room) && get_settings()->shows_typing);
-	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : describe_room_subtitle(room);
+	gboolean is_typing = is_room_typing(room) && get_settings()->shows_typing;
+	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : room->kind == ROOM_PRIVATE && !is_typing
+		&& conversation->activity ? g_strdup(conversation->activity) : describe_room_subtitle(room);
 	gtk_label_set_text(GTK_LABEL(conversation->title), title);
 	gtk_label_set_text(GTK_LABEL(conversation->subtitle), subtitle);
+	/* Without anything to say under it, the name sits in the middle of the header */
+	gtk_widget_set_visible(conversation->subtitle, subtitle && *subtitle);
 	gtk_widget_set_tooltip_text(conversation->subtitle, shows_topic ? topic : NULL);
 	if (is_room_typing(room))
 		gtk_widget_add_css_class(conversation->subtitle, "typing");
@@ -812,12 +820,14 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
 	freeze_open_chat(conversation);
+	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
 	gtk_no_selection_set_model(conversation->messages, room ? G_LIST_MODEL(room->messages) : NULL);
 	fade_to(conversation, room ? "room" : "empty");
+	follow_activity(conversation, previous);
 	if (!room)
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);

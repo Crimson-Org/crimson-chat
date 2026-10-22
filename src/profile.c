@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "formatting.h"
 #include "images.h"
 #include "profile.h"
 #include "room-look.h"
@@ -31,7 +32,7 @@ static void free_profile_view(ProfileView *view) {
 }
 
 
-static char *describe_idle(gint64 seconds) {
+char *describe_idle(gint64 seconds) {
 	if (seconds < SECONDS_PER_MINUTE)
 		return g_strdup(TEXT_IDLE_NOW);
 	if (seconds < SECONDS_PER_HOUR)
@@ -383,4 +384,99 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	adw_dialog_set_title(own->dialog, title);
 	adw_dialog_set_child(own->dialog, toolbar);
 	adw_dialog_present(own->dialog, GTK_WIDGET(window->window));
+}
+
+
+typedef struct {
+	GCallback show_members;
+	gpointer data;
+	AdwDialog *dialog;
+} RoomDetails;
+
+
+static void show_room_members(GtkButton *button, RoomDetails *details) {
+	adw_dialog_close(details->dialog);
+	((void (*)(gpointer))details->show_members)(details->data);
+}
+
+
+static void leave_from_details(GtkButton *button, RoomDetails *details) {
+	adw_dialog_close(details->dialog);
+}
+
+
+void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members, gpointer data) {
+	RoomDetails *details = g_new0(RoomDetails, 1);
+	details->show_members = show_members;
+	details->data = data;
+	details->dialog = adw_dialog_new();
+	adw_dialog_set_content_width(details->dialog, PROFILE_WIDTH);
+	adw_dialog_set_content_height(details->dialog, PROFILE_HEIGHT);
+	g_object_set_data_full(G_OBJECT(details->dialog), "details", details, g_free);
+	IrcState *state = get_network_state(room->network);
+	IrcChannel *channel = state ? find_irc_channel(state, room->name) : NULL;
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+	gtk_widget_add_css_class(box, "profile");
+	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, NULL, TRUE);
+	fill_room_avatar(ADW_AVATAR(avatar), room, PROFILE_AVATAR_SIZE);
+	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), avatar);
+	g_autofree char *title = describe_room_title(room);
+	GtkWidget *name = gtk_label_new(title);
+	gtk_widget_add_css_class(name, "title-1");
+	gtk_box_append(GTK_BOX(box), name);
+	g_autofree char *size = describe_room_subtitle(room);
+	GtkWidget *count = gtk_label_new(size);
+	gtk_widget_add_css_class(count, "dim-label");
+	gtk_box_append(GTK_BOX(box), count);
+	/* Each sentence of the topic starts its own line, and its links open in the browser */
+	if (room->topic && *room->topic) {
+		g_autoptr(GRegex) endings = g_regex_new("([.!?]) +", 0, 0, NULL);
+		g_autofree char *lines = g_regex_replace(endings, room->topic, -1, 0, "\\1\n", 0, NULL);
+		g_autofree char *markup = format_irc_markup(lines);
+		GtkWidget *text = gtk_label_new(NULL);
+		gtk_label_set_markup(GTK_LABEL(text), markup);
+		gtk_label_set_wrap(GTK_LABEL(text), TRUE);
+		gtk_label_set_justify(GTK_LABEL(text), GTK_JUSTIFY_CENTER);
+		gtk_widget_set_margin_top(text, 6);
+		gtk_box_append(GTK_BOX(box), text);
+	}
+	GtkWidget *members = gtk_button_new_with_label(TEXT_SHOW_MEMBERS);
+	gtk_widget_add_css_class(members, "pill");
+	gtk_widget_add_css_class(members, "suggested-action");
+	gtk_widget_set_halign(members, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_top(members, 8);
+	g_signal_connect(members, "clicked", G_CALLBACK(show_room_members), details);
+	gtk_box_append(GTK_BOX(box), members);
+	GtkWidget *rows = gtk_list_box_new();
+	gtk_list_box_set_selection_mode(GTK_LIST_BOX(rows), GTK_SELECTION_NONE);
+	gtk_widget_add_css_class(rows, "boxed-list");
+	gtk_widget_set_margin_top(rows, 12);
+	ProfileView rows_view = {.rows = rows};
+	if (channel && channel->topic_setter) {
+		g_autofree char *setter = get_source_nick(channel->topic_setter);
+		g_autofree char *day = channel->topic_time ? format_day_heading(channel->topic_time * G_USEC_PER_SEC) : NULL;
+		g_autofree char *by = day ? g_strdup_printf(TEXT_TOPIC_SET_ON, setter, day) : g_strdup(setter);
+		add_row(&rows_view, TEXT_TOPIC_SET_BY, by);
+	}
+	add_row(&rows_view, TEXT_PROFILE_SERVER, room->network->name);
+	gtk_box_append(GTK_BOX(box), rows);
+	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
+	gtk_widget_add_css_class(leave, "pill");
+	gtk_widget_add_css_class(leave, "room-card-leave");
+	gtk_widget_set_halign(leave, GTK_ALIGN_CENTER);
+	gtk_widget_set_margin_top(leave, 12);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-room");
+	g_signal_connect(leave, "clicked", G_CALLBACK(leave_from_details), details);
+	gtk_box_append(GTK_BOX(box), leave);
+	GtkWidget *scroller = gtk_scrolled_window_new();
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+	GtkWidget *toolbar = adw_toolbar_view_new();
+	GtkWidget *header = adw_header_bar_new();
+	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
+	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
+	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
+	adw_dialog_set_child(details->dialog, toolbar);
+	adw_dialog_present(details->dialog, GTK_WIDGET(window->window));
 }

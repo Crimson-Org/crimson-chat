@@ -266,3 +266,7 @@
 #define TEXT_LOGIN_WANTED "Log in to keep your nickname"
 #define TEXT_LOG_IN "Log In"
 #define TEXT_SHOW_MEMBERS "Members"
+#define TEXT_ACTIVE_NOW "Active now"
+#define TEXT_LAST_ACTIVE "Last active %s"
+#define TEXT_TOPIC_SET_BY "Topic Set By"
+#define TEXT_TOPIC_SET_ON "%s, %s"
