@@ -265,3 +265,4 @@
 #define TEXT_ACCOUNT_NAME "Account Name"
 #define TEXT_LOGIN_WANTED "Log in to keep your nickname"
 #define TEXT_LOG_IN "Log In"
+#define TEXT_SHOW_MEMBERS "Members"

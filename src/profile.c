@@ -7,6 +7,8 @@
 #include "wizards.h"
 
 #define PROFILE_WIDTH 400
+/* A person's profile opens at its full height, so it does not grow when the details arrive */
+#define PROFILE_HEIGHT 620
 #define PROFILE_AVATAR_SIZE 96
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_HOUR 3600
@@ -115,6 +117,7 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	view->nick = g_strdup(nick);
 	view->dialog = adw_dialog_new();
 	adw_dialog_set_content_width(view->dialog, PROFILE_WIDTH);
+	adw_dialog_set_content_height(view->dialog, PROFILE_HEIGHT);
 	g_object_set_data_full(G_OBJECT(view->dialog), "view", view, (GDestroyNotify)free_profile_view);
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 	gtk_widget_add_css_class(box, "profile");
@@ -151,7 +154,10 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	GtkWidget *header = adw_header_bar_new();
 	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
+	GtkWidget *scroller = gtk_scrolled_window_new();
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
+	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
 	adw_dialog_set_child(view->dialog, toolbar);
 	adw_dialog_present(view->dialog, GTK_WIDGET(window->window));
 	if (network->state == NETWORK_CONNECTED)

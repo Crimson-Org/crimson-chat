@@ -9,7 +9,9 @@
 #include "room-look.h"
 #include "window.h"
 
-#define SLIDE_DURATION_MS 220
+#define FADE_DURATION_MS 120
+#define CARD_AVATAR_SIZE 72
+#define CARD_WIDTH_CHARS 36
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
@@ -553,6 +555,70 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 }
 
 
+static void show_members_from_card(GtkButton *button, Conversation *conversation) {
+	gtk_popover_popdown(GTK_POPOVER(gtk_widget_get_ancestor(GTK_WIDGET(button), GTK_TYPE_POPOVER)));
+	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(conversation->members_button), TRUE);
+}
+
+
+/* A room's card: its picture, name, whole topic and size, with its members and leaving at hand */
+static void show_room_card(Conversation *conversation, GtkWidget *anchor) {
+	CrimsonRoom *room = conversation->room;
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+	gtk_widget_add_css_class(box, "room-card");
+	GtkWidget *avatar = adw_avatar_new(CARD_AVATAR_SIZE, NULL, TRUE);
+	fill_room_avatar(ADW_AVATAR(avatar), room, CARD_AVATAR_SIZE);
+	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), avatar);
+	g_autofree char *title = describe_room_title(room);
+	GtkWidget *name = gtk_label_new(title);
+	gtk_widget_add_css_class(name, "title-2");
+	gtk_box_append(GTK_BOX(box), name);
+	g_autofree char *size = describe_room_subtitle(room);
+	GtkWidget *members = gtk_label_new(size);
+	gtk_widget_add_css_class(members, "dim-label");
+	gtk_box_append(GTK_BOX(box), members);
+	g_autofree char *topic = room->topic ? strip_irc_formatting(room->topic) : NULL;
+	if (topic && *topic) {
+		GtkWidget *text = gtk_label_new(topic);
+		gtk_label_set_wrap(GTK_LABEL(text), TRUE);
+		gtk_label_set_max_width_chars(GTK_LABEL(text), CARD_WIDTH_CHARS);
+		gtk_label_set_justify(GTK_LABEL(text), GTK_JUSTIFY_CENTER);
+		gtk_label_set_selectable(GTK_LABEL(text), TRUE);
+		gtk_widget_add_css_class(text, "room-card-topic");
+		gtk_box_append(GTK_BOX(box), text);
+	}
+	GtkWidget *show = gtk_button_new_with_label(TEXT_SHOW_MEMBERS);
+	gtk_widget_add_css_class(show, "pill");
+	g_signal_connect(show, "clicked", G_CALLBACK(show_members_from_card), conversation);
+	gtk_widget_set_margin_top(show, 6);
+	gtk_box_append(GTK_BOX(box), show);
+	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
+	gtk_widget_add_css_class(leave, "pill");
+	gtk_widget_add_css_class(leave, "room-card-leave");
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-room");
+	gtk_box_append(GTK_BOX(box), leave);
+	GtkWidget *popover = gtk_popover_new();
+	gtk_popover_set_child(GTK_POPOVER(popover), box);
+	gtk_widget_set_parent(popover, anchor);
+	g_signal_connect_swapped(leave, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
+	g_signal_connect(popover, "closed", G_CALLBACK(forget_member_menu), NULL);
+	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
+/* Clicking the header shows a room's card, or the person a private chat is with */
+static void click_header(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	if (!room)
+		return;
+	if (room->kind == ROOM_CHANNEL)
+		show_room_card(conversation, gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)));
+	else if (room->kind == ROOM_PRIVATE)
+		show_profile(conversation->window, room, room->name);
+}
+
+
 static void toggle_members(GtkToggleButton *button, Conversation *conversation) {
 	conversation->wants_members = gtk_toggle_button_get_active(button);
 	adw_overlay_split_view_set_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split),
@@ -590,6 +656,10 @@ static GtkWidget *create_header(Conversation *conversation) {
 	gtk_box_append(GTK_BOX(title), conversation->avatar);
 	gtk_box_append(GTK_BOX(title), texts);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), title);
+	gtk_widget_set_cursor_from_name(title, "pointer");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect(click, "released", G_CALLBACK(click_header), conversation);
+	gtk_widget_add_controller(title, GTK_EVENT_CONTROLLER(click));
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
 	conversation->members_button = gtk_toggle_button_new();
 	gtk_button_set_icon_name(GTK_BUTTON(conversation->members_button), "system-users-symbolic");
@@ -649,9 +719,10 @@ static gboolean freeze_open_chat(Conversation *conversation) {
 }
 
 
-static void slide_to(Conversation *conversation, const char *name, GtkStackTransitionType transition) {
+/* The wide window fades quickly from one chat to the next, while the narrow window's own page slide moves it */
+static void fade_to(Conversation *conversation, const char *name) {
 	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), conversation->is_narrow
-		? GTK_STACK_TRANSITION_TYPE_NONE : transition);
+		? GTK_STACK_TRANSITION_TYPE_NONE : GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), name);
 }
 
@@ -674,7 +745,7 @@ Conversation *create_conversation(Window *window) {
 	conversation->still = gtk_picture_new();
 	gtk_picture_set_content_fit(GTK_PICTURE(conversation->still), GTK_CONTENT_FIT_FILL);
 	gtk_stack_add_named(GTK_STACK(conversation->stack), conversation->still, "still");
-	gtk_stack_set_transition_duration(GTK_STACK(conversation->stack), SLIDE_DURATION_MS);
+	gtk_stack_set_transition_duration(GTK_STACK(conversation->stack), FADE_DURATION_MS);
 	g_signal_connect(conversation->stack, "notify::transition-running", G_CALLBACK(forget_still), conversation);
 	return conversation;
 }
@@ -740,15 +811,13 @@ static gboolean settle_at_bottom(gpointer data) {
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
-	gboolean was_open = freeze_open_chat(conversation);
+	freeze_open_chat(conversation);
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
 	gtk_no_selection_set_model(conversation->messages, room ? G_LIST_MODEL(room->messages) : NULL);
-	/* A chat slides in from the right, and going back slides it out to the right */
-	slide_to(conversation, room ? "room" : "empty", room || !was_open ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
-		: GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
+	fade_to(conversation, room ? "room" : "empty");
 	if (!room)
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);
