@@ -116,10 +116,12 @@ static NetworkState read_network_state(CrimsonNetwork *network) {
 }
 
 
+/* The server room shows its network's state, so it is drawn again along with the rail and the header */
 static void refresh_network_state(CrimsonNetwork *network) {
 	network->state = read_network_state(network);
 	announce_network_change(network);
 	announce_account_change(network->session->item);
+	announce_room_change(network->server_room);
 }
 
 

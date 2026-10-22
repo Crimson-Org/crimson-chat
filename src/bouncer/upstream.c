@@ -158,6 +158,7 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	if (status == IRC_CLIENT_REGISTERED) {
 		join_saved_channels(upstream);
 		for_each_bound_downstream(upstream, tell_new_nick, NULL);
+		for_each_bound_downstream(upstream, drop_missing_caps, NULL);
 	} else if (status == IRC_CLIENT_DISCONNECTED) {
 		g_queue_clear_full(&upstream->pending_echoes, (GDestroyNotify)free_pending_echo);
 		for_each_bound_downstream(upstream, tell_disconnected, (gpointer)reason);

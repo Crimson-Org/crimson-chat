@@ -102,6 +102,7 @@ void serve_web(Bouncer *bouncer, GIOStream *connection);
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses);
 void close_downstream(Downstream *downstream);
 gboolean has_downstream_cap(Downstream *downstream, const char *name);
+void drop_missing_caps(Downstream *downstream, gpointer data);
 /* Sends a message shaped to the client's capabilities, or nothing when the client cannot take it */
 void send_to_downstream(Downstream *downstream, const IrcMessage *message);
 /* RPL_ISUPPORT for the bound network, again once the network has registered */

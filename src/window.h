@@ -21,7 +21,8 @@ struct Window {
 	Conversation *conversation;
 	/* The server or bouncer the room list shows, or NULL for every chat */
 	Session *account;
-	gboolean is_narrow, is_quitting;
+	/* The rail only shows in a wide window with more than one server or bouncer */
+	gboolean is_narrow, has_rail, is_quitting;
 	guint refresh_source;
 	Tray *tray;
 	WindowGeometry geometry;
@@ -32,6 +33,10 @@ Window *get_main_window(void);
 void open_room(Window *window, CrimsonRoom *room);
 CrimsonRoom *get_open_room(Window *window);
 void choose_account(Window *window, Session *account);
+/* The chosen account, or the only one when there is no rail to choose from */
+Session *get_menu_account(Window *window);
+/* Everything about a server or bouncer, with its networks' server messages, settings and removal */
+GMenuModel *create_account_menu(Session *account);
 void show_toast(Window *window, const char *text);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);

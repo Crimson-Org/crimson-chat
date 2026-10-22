@@ -29,6 +29,12 @@ static const struct {
 	{"REDACT", "draft/message-redaction"}, {"RENAME", "draft/channel-rename"}, {"MARKREAD", "draft/read-marker"},
 };
 
+/* Capabilities the network itself has to support, since the bouncer only passes their commands on */
+static const char *const NETWORK_CAPS[] = {
+	"account-notify", "away-notify", "extended-join", "userhost-in-names", "chghost", "setname", "invite-notify",
+	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor", NULL,
+};
+
 static const char *const NETWORK_ATTRIBUTES[] = {
 	"name", "host", "port", "tls", "nickname", "username", "realname", "pass", "sasl-username", "sasl-password", NULL,
 };
@@ -258,6 +264,26 @@ static void send_network_list(Downstream *downstream) {
 }
 
 
+/* A client bound to a network loses the capabilities that network lacks, so it never sends their commands */
+void drop_missing_caps(Downstream *downstream, gpointer data) {
+	if (!downstream->upstream || !has_downstream_cap(downstream, "cap-notify"))
+		return;
+	IrcClient *client = downstream->upstream->client;
+	if (get_irc_client_status(client) != IRC_CLIENT_REGISTERED)
+		return;
+	IrcState *state = get_irc_client_state(client);
+	g_autoptr(GString) missing = g_string_new(NULL);
+	for (int index = 0; NETWORK_CAPS[index]; index++) {
+		if (has_irc_cap(state, NETWORK_CAPS[index]))
+			continue;
+		g_string_append_printf(missing, "%s%s", missing->len ? " " : "", NETWORK_CAPS[index]);
+		g_hash_table_remove(downstream->caps, NETWORK_CAPS[index]);
+	}
+	if (missing->len)
+		send_from_bouncer(downstream, "CAP", downstream->nick, "DEL", missing->str, NULL);
+}
+
+
 static void finish_registration(Downstream *downstream) {
 	if (downstream->bound_network) {
 		downstream->upstream = find_upstream(downstream->user, downstream->bound_network);
@@ -274,6 +300,7 @@ static void finish_registration(Downstream *downstream) {
 	g_clear_handle_id(&downstream->registration_source, g_source_remove);
 	g_message("%s logged in from %s%s%s", downstream->user->name, downstream->address,
 		downstream->upstream ? " to " : "", downstream->upstream ? downstream->upstream->record.host : "");
+	drop_missing_caps(downstream, NULL);
 	send_welcome(downstream);
 	if (downstream->upstream)
 		replay_upstream(downstream);

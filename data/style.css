@@ -176,6 +176,12 @@ headerbar.top-bar menubutton > button {
 	color: alpha(#f2f2f4, 0.6);
 }
 
+.room-list-status {
+	padding: 6px 12px;
+	color: alpha(currentColor, 0.6);
+	background-color: var(--rail-bg);
+}
+
 /* The conversation */
 .chat-background {
 	background-color: var(--chat-wall);

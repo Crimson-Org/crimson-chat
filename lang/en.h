@@ -36,11 +36,9 @@
 #define TEXT_CONNECTED "Connected"
 #define TEXT_CONNECTING "Connecting…"
 #define TEXT_DISCONNECTED "Disconnected"
-#define TEXT_NETWORK_SUMMARY "%s · %u rooms"
-#define TEXT_BOUNCER_SUMMARY "%s · %u networks"
-#define TEXT_BOUNCER_SUMMARY_ONE "%s · %u network"
 #define TEXT_NO_NETWORKS_TITLE "No Networks Yet"
 #define TEXT_ADD_NETWORK "Add a Network"
+#define TEXT_SERVER_MESSAGES "Server Messages"
 #define TEXT_REMOVE_SERVER "Remove Server"
 /* The account's name, then what went wrong */
 #define TEXT_ACCOUNT_PROBLEM "%s: %s"

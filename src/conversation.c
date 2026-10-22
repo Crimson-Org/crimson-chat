@@ -18,7 +18,7 @@ struct Conversation {
 	Window *window;
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller, *jump_button;
 	GtkWidget *member_view, *empty_note, *room_menu;
-	GMenuModel *chat_menu, *server_menu;
+	GMenuModel *chat_menu;
 	GtkStringList *members;
 	GtkNoSelection *messages;
 	Composer *composer;
@@ -402,15 +402,9 @@ static void follow_member_panel(AdwOverlaySplitView *split, GParamSpec *spec, Co
 }
 
 
-/* Channels and private chats can be left, while a server room holds its network's settings */
-static GMenuModel *create_room_menu(gboolean is_server) {
+static GMenuModel *create_room_menu(void) {
 	GMenu *menu = g_menu_new();
-	if (is_server) {
-		g_menu_append(menu, TEXT_NETWORK_SETTINGS, "win.network-settings");
-		g_menu_append(menu, TEXT_REMOVE_NETWORK, "win.remove-network");
-	} else {
-		g_menu_append(menu, TEXT_LEAVE, "win.leave-room");
-	}
+	g_menu_append(menu, TEXT_LEAVE, "win.leave-room");
 	return G_MENU_MODEL(menu);
 }
 
@@ -438,8 +432,8 @@ static GtkWidget *create_header(Conversation *conversation) {
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
 	conversation->room_menu = gtk_menu_button_new();
 	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(conversation->room_menu), "view-more-symbolic");
-	conversation->chat_menu = create_room_menu(FALSE);
-	conversation->server_menu = create_room_menu(TRUE);
+	conversation->chat_menu = create_room_menu();
+	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(conversation->room_menu), conversation->chat_menu);
 	gtk_widget_set_tooltip_text(conversation->room_menu, TEXT_ROOM_MENU);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(header), conversation->room_menu);
 	conversation->members_button = gtk_toggle_button_new();
@@ -527,8 +521,7 @@ static void fill_header(Conversation *conversation) {
 	gtk_widget_set_tooltip_text(conversation->title, topic);
 	fill_room_avatar(ADW_AVATAR(conversation->avatar), room, HEADER_AVATAR_SIZE);
 	gtk_widget_set_visible(conversation->members_button, room->kind == ROOM_CHANNEL);
-	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(conversation->room_menu), room->kind == ROOM_SERVER
-		? conversation->server_menu : conversation->chat_menu);
+	gtk_widget_set_visible(conversation->room_menu, room->kind != ROOM_SERVER);
 }
 
 

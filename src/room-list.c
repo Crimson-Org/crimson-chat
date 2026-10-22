@@ -14,8 +14,7 @@
 
 struct RoomList {
 	Window *window;
-	GtkWidget *box, *header, *title_stack, *search, *title, *subtitle, *menu_button, *account_button;
-	GMenuModel *server_menu, *bouncer_menu;
+	GtkWidget *box, *header, *title_stack, *search, *title, *subtitle, *menu_button, *account_button, *status;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
@@ -29,10 +28,11 @@ struct RoomList {
 static gboolean keep_room(gpointer item, gpointer data) {
 	CrimsonRoom *room = item;
 	RoomList *list = data;
-	if (list->account ? room->network->session != list->account : room->kind == ROOM_SERVER)
+	/* Server rooms stay out of the list, and open from the account menu */
+	if (room->kind == ROOM_SERVER || (list->account && room->network->session != list->account))
 		return FALSE;
 	const char *search = gtk_editable_get_text(GTK_EDITABLE(list->search));
-	if (!*search)
+	if (!search || !*search)
 		return TRUE;
 	g_autofree char *name = g_utf8_casefold(room->name, -1);
 	g_autofree char *wanted = g_utf8_casefold(search, -1);
@@ -215,22 +215,14 @@ static void change_search(GtkSearchEntry *entry, RoomList *list) {
 }
 
 
-/* The menu of a chosen server or bouncer, where a bouncer also adds networks and invites people */
-static GMenuModel *create_account_menu(gboolean is_bouncer) {
-	GMenu *menu = g_menu_new();
-	g_menu_append(menu, TEXT_JOIN_ROOM, "win.join-room");
-	g_menu_append(menu, TEXT_MESSAGE_SOMEONE, "win.message-someone");
-	GMenu *account = g_menu_new();
-	if (is_bouncer) {
-		g_menu_append(account, TEXT_ADD_NETWORK, "win.add-network");
-		g_menu_append(account, TEXT_INVITE_PEOPLE, "win.invite-people");
-	}
-	g_menu_append(account, is_bouncer ? TEXT_BOUNCER_SETTINGS : TEXT_SERVER_SETTINGS, "win.account-settings");
-	g_menu_append(account, TEXT_RECONNECT, "win.reconnect");
-	g_menu_append(account, is_bouncer ? TEXT_REMOVE_BOUNCER : TEXT_REMOVE_SERVER, "win.remove-account");
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(account));
-	g_object_unref(account);
-	return G_MENU_MODEL(menu);
+/* The account menu is built as it opens, so it lists the networks the account has right now */
+static void create_account_popover(GtkMenuButton *button, gpointer data) {
+	RoomList *list = data;
+	Session *account = get_menu_account(list->window);
+	if (!account)
+		return;
+	g_autoptr(GMenuModel) model = create_account_menu(account);
+	gtk_menu_button_set_menu_model(button, model);
 }
 
 
@@ -262,8 +254,8 @@ static GtkWidget *create_header(RoomList *list) {
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->title_stack);
 	list->account_button = gtk_menu_button_new();
 	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(list->account_button), "view-more-symbolic");
-	list->server_menu = create_account_menu(FALSE);
-	list->bouncer_menu = create_account_menu(TRUE);
+	gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(list->account_button),
+		create_account_popover, list, NULL);
 	gtk_widget_set_tooltip_text(list->account_button, TEXT_NETWORK_MENU);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->account_button);
 	return list->header;
@@ -308,6 +300,26 @@ static GtkWidget *create_no_networks_page(void) {
 }
 
 
+static GtkWidget *create_no_rooms_page(void) {
+	GtkWidget *page = adw_status_page_new();
+	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), "crimson-chats-symbolic");
+	adw_status_page_set_title(ADW_STATUS_PAGE(page), TEXT_NO_CHATS_TITLE);
+	gtk_widget_add_css_class(page, "compact");
+	GtkWidget *button = gtk_button_new_with_label(TEXT_JOIN_ROOM);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), "win.join-room");
+	gtk_widget_add_css_class(button, "pill");
+	gtk_widget_add_css_class(button, "suggested-action");
+	gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
+	adw_status_page_set_child(ADW_STATUS_PAGE(page), button);
+	return page;
+}
+
+
+static void follow_listed_rooms(GListModel *model, guint position, guint removed, guint added, RoomList *list) {
+	refresh_room_list_header(list);
+}
+
+
 static GtkWidget *create_list_view(RoomList *list) {
 	GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
 	g_signal_connect(factory, "setup", G_CALLBACK(set_up_row), list);
@@ -340,6 +352,7 @@ static void build_models(RoomList *list) {
 	gtk_single_selection_set_can_unselect(list->selection, TRUE);
 	gtk_single_selection_set_selected(list->selection, GTK_INVALID_LIST_POSITION);
 	g_signal_connect(list->selection, "notify::selected-item", G_CALLBACK(pick_room), list);
+	g_signal_connect(list->selection, "items-changed", G_CALLBACK(follow_listed_rooms), list);
 }
 
 
@@ -350,11 +363,16 @@ RoomList *create_room_list(Window *window) {
 	list->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(list->box, "room-column");
 	gtk_box_append(GTK_BOX(list->box), create_header(list));
+	/* Without a rail the header has no room for the state, so a line says when the account is not connected */
+	list->status = create_label("room-list-status", FALSE);
+	gtk_label_set_xalign(GTK_LABEL(list->status), 0.5f);
+	gtk_box_append(GTK_BOX(list->box), list->status);
 	list->stack = gtk_stack_new();
 	gtk_stack_set_transition_type(GTK_STACK(list->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_networks_page(), "no-networks");
+	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");
 	gtk_box_append(GTK_BOX(list->box), list->stack);
 	set_room_list_narrow(list, FALSE);
 	return list;
@@ -375,36 +393,45 @@ static const char *describe_state(NetworkState state) {
 }
 
 
-/* A chosen account names itself with its state, and how many networks or rooms it holds */
+/* A chosen account names its state, and the reason when it could not connect */
 static char *describe_account(Session *account) {
 	NetworkState state = read_account_state(account);
 	const char *error = read_account_error(account);
 	if (state == NETWORK_DISCONNECTED && error)
 		return g_strdup_printf("%s · %s", TEXT_DISCONNECTED, error);
-	if (account->record->is_bouncer)
-		return g_strdup_printf(account->networks->len == 1 ? TEXT_BOUNCER_SUMMARY_ONE : TEXT_BOUNCER_SUMMARY,
-			describe_state(state), account->networks->len);
-	CrimsonNetwork *network = account->networks->len ? g_ptr_array_index(account->networks, 0) : NULL;
-	guint rooms = network ? g_list_model_get_n_items(G_LIST_MODEL(network->rooms)) - 1 : 0;
-	return g_strdup_printf(TEXT_NETWORK_SUMMARY, describe_state(state), rooms);
+	return g_strdup(describe_state(state));
+}
+
+
+static const char *choose_page(RoomList *list, Session *account) {
+	Chat *chat = list->window->chat;
+	if (!chat->has_started)
+		return "list";
+	if (!chat->sessions->len)
+		return "empty";
+	if (account && account->record->is_bouncer && !account->networks->len)
+		return "no-networks";
+	const char *search = gtk_editable_get_text(GTK_EDITABLE(list->search));
+	gboolean is_searching = search && *search;
+	if (!is_searching && !g_list_model_get_n_items(G_LIST_MODEL(list->selection)))
+		return "no-rooms";
+	return "list";
 }
 
 
 void refresh_room_list_header(RoomList *list) {
-	Chat *chat = list->window->chat;
-	gboolean has_accounts = chat->sessions->len > 0;
-	const char *page = chat->has_started && !has_accounts ? "empty"
-		: list->account && list->account->record->is_bouncer && !list->account->networks->len ? "no-networks" : "list";
-	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), page);
+	Session *account = get_menu_account(list->window);
+	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), choose_page(list, account));
 	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), list->account ? "network" : "search");
-	gtk_widget_set_visible(list->account_button, list->account != NULL);
-	if (!list->account)
+	gtk_widget_set_visible(list->account_button, account != NULL);
+	gboolean is_connected = !account || read_account_state(account) == NETWORK_CONNECTED;
+	gtk_widget_set_visible(list->status, !list->account && !is_connected);
+	if (!account)
 		return;
-	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(list->account_button), list->account->record->is_bouncer
-		? list->bouncer_menu : list->server_menu);
-	gtk_label_set_text(GTK_LABEL(list->title), describe_account_name(list->account));
-	g_autofree char *subtitle = describe_account(list->account);
-	gtk_label_set_text(GTK_LABEL(list->subtitle), subtitle);
+	g_autofree char *state = describe_account(account);
+	gtk_label_set_text(GTK_LABEL(list->status), state);
+	gtk_label_set_text(GTK_LABEL(list->title), describe_account_name(account));
+	gtk_label_set_text(GTK_LABEL(list->subtitle), state);
 }
 
 

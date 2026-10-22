@@ -48,6 +48,69 @@ void style_unread_badge(GtkWidget *badge, guint count, gboolean has_mention) {
 }
 
 
+static void append_network_item(GMenu *menu, const char *label, const char *action, CrimsonNetwork *network) {
+	g_autoptr(GMenuItem) item = g_menu_item_new(label, NULL);
+	g_menu_item_set_action_and_target_value(item, action, g_variant_new_string(network->key));
+	g_menu_append_item(menu, item);
+}
+
+
+GMenuModel *create_account_menu(Session *account) {
+	gboolean is_bouncer = account->record->is_bouncer;
+	GMenu *menu = g_menu_new();
+	GMenu *chats = g_menu_new();
+	g_menu_append(chats, TEXT_JOIN_ROOM, "win.join-room");
+	g_menu_append(chats, TEXT_MESSAGE_SOMEONE, "win.message-someone");
+	if (is_bouncer) {
+		g_menu_append(chats, TEXT_ADD_NETWORK, "win.add-network");
+		g_menu_append(chats, TEXT_INVITE_PEOPLE, "win.invite-people");
+	}
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(chats));
+	g_object_unref(chats);
+	/* Each network a bouncer keeps gets its own section under its name */
+	for (guint index = 0; is_bouncer && index < account->networks->len; index++) {
+		CrimsonNetwork *network = g_ptr_array_index(account->networks, index);
+		GMenu *section = g_menu_new();
+		append_network_item(section, TEXT_SERVER_MESSAGES, "win.server-messages", network);
+		append_network_item(section, TEXT_NETWORK_SETTINGS, "win.network-settings", network);
+		append_network_item(section, TEXT_REMOVE_NETWORK, "win.remove-network", network);
+		g_menu_append_section(menu, network->name, G_MENU_MODEL(section));
+		g_object_unref(section);
+	}
+	GMenu *own = g_menu_new();
+	if (!is_bouncer && account->networks->len)
+		append_network_item(own, TEXT_SERVER_MESSAGES, "win.server-messages",
+			g_ptr_array_index(account->networks, 0));
+	g_menu_append(own, is_bouncer ? TEXT_BOUNCER_SETTINGS : TEXT_SERVER_SETTINGS, "win.account-settings");
+	g_menu_append(own, TEXT_RECONNECT, "win.reconnect");
+	g_menu_append(own, is_bouncer ? TEXT_REMOVE_BOUNCER : TEXT_REMOVE_SERVER, "win.remove-account");
+	g_menu_append_section(menu, is_bouncer ? describe_account_name(account) : NULL, G_MENU_MODEL(own));
+	g_object_unref(own);
+	return G_MENU_MODEL(menu);
+}
+
+
+static void forget_rail_menu(GtkPopover *popover, gpointer data) {
+	g_idle_add_once((GSourceOnceFunc)gtk_widget_unparent, popover);
+}
+
+
+/* Right-clicking a server or bouncer picks it and opens everything about it */
+static void open_rail_menu(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	Session *account = g_object_get_data(G_OBJECT(row), ACCOUNT_KEY);
+	choose_account(window, account);
+	g_autoptr(GMenuModel) model = create_account_menu(account);
+	GtkWidget *popover = gtk_popover_menu_new_from_model(model);
+	gtk_widget_set_parent(popover, row);
+	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
+	gtk_widget_set_halign(popover, GTK_ALIGN_START);
+	g_signal_connect(popover, "closed", G_CALLBACK(forget_rail_menu), NULL);
+	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
 static const char *describe_state(NetworkState state) {
 	return state == NETWORK_CONNECTED ? TEXT_CONNECTED : state == NETWORK_CONNECTING ? TEXT_CONNECTING
 		: TEXT_DISCONNECTED;
@@ -111,8 +174,14 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	g_object_set_data(G_OBJECT(row), "badge", badge);
 	g_object_set_data(G_OBJECT(row), "kind", kind);
 	g_object_set_data(G_OBJECT(row), ACCOUNT_KEY, account->session);
+	GtkGesture *click = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
+	g_signal_connect(click, "pressed", G_CALLBACK(open_rail_menu), data);
+	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(click));
 	fill_rail_row(row, account->session);
 	g_signal_connect_object(account, "changed", G_CALLBACK(refresh_rail_row), row, 0);
+	/* The chat list header and its connection line follow the account too, even with the rail hidden */
+	g_signal_connect_swapped(account, "changed", G_CALLBACK(refresh_window_later), data);
 	return row;
 }
 
@@ -159,7 +228,7 @@ static void select_rail_row(Window *window, Session *account) {
 
 
 void choose_account(Window *window, Session *account) {
-	if (window->is_narrow)
+	if (!window->has_rail)
 		account = NULL;
 	window->account = account;
 	select_rail_row(window, account);
@@ -173,6 +242,35 @@ static void pick_rail_row(GtkListBox *list, GtkListBoxRow *row, Window *window) 
 	Session *account = row ? g_object_get_data(G_OBJECT(row), ACCOUNT_KEY) : NULL;
 	if (account && account != window->account)
 		choose_account(window, account);
+}
+
+
+Session *get_menu_account(Window *window) {
+	if (window->account)
+		return window->account;
+	return window->chat->sessions->len == 1 ? g_ptr_array_index(window->chat->sessions, 0) : NULL;
+}
+
+
+/* With one server or bouncer there is nothing to choose between, so the chat list stands alone */
+static void update_rail(Window *window) {
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->accounts));
+	gboolean has_rail = !window->is_narrow && count > 1;
+	if (has_rail == window->has_rail && gtk_widget_get_visible(window->rail) == has_rail) {
+		refresh_room_list_header(window->room_list);
+		return;
+	}
+	window->has_rail = has_rail;
+	gtk_widget_set_visible(window->rail, has_rail);
+	set_room_list_narrow(window->room_list, !has_rail);
+	if (!has_rail)
+		choose_account(window, NULL);
+	refresh_room_list_header(window->room_list);
+}
+
+
+static void follow_accounts(GListModel *accounts, guint position, guint removed, guint added, Window *window) {
+	update_rail(window);
 }
 
 
@@ -277,6 +375,7 @@ static GtkWidget *create_rail(Window *window) {
 	gtk_list_box_bind_model(GTK_LIST_BOX(window->rail_list), G_LIST_MODEL(window->chat->accounts), create_rail_row,
 		window, NULL);
 	g_signal_connect(window->rail_list, "row-selected", G_CALLBACK(pick_rail_row), window);
+	g_signal_connect(window->chat->accounts, "items-changed", G_CALLBACK(follow_accounts), window);
 	GtkWidget *scroller = gtk_scrolled_window_new();
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), window->rail_list);
@@ -291,11 +390,8 @@ static GtkWidget *create_rail(Window *window) {
 
 static void follow_collapse(AdwNavigationSplitView *split, GParamSpec *spec, Window *window) {
 	window->is_narrow = adw_navigation_split_view_get_collapsed(split);
-	gtk_widget_set_visible(window->rail, !window->is_narrow);
-	set_room_list_narrow(window->room_list, window->is_narrow);
 	set_conversation_narrow(window->conversation, window->is_narrow);
-	if (window->is_narrow)
-		choose_account(window, NULL);
+	update_rail(window);
 }
 
 
@@ -323,8 +419,9 @@ static CrimsonNetwork *get_action_network(Window *window) {
 	CrimsonRoom *room = get_open_room(window);
 	if (room)
 		return room->network;
-	if (window->account && window->account->networks->len)
-		return g_ptr_array_index(window->account->networks, 0);
+	Session *account = get_menu_account(window);
+	if (account && account->networks->len)
+		return g_ptr_array_index(account->networks, 0);
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	CrimsonNetwork *first = count ? g_list_model_get_item(G_LIST_MODEL(window->chat->networks), 0) : NULL;
 	if (first)
@@ -355,7 +452,7 @@ static void message_someone_action(GSimpleAction *action, GVariant *parameter, g
 
 static void account_settings_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
-	Session *account = window->account;
+	Session *account = get_menu_account(window);
 	if (account && account->record->is_bouncer)
 		show_bouncer_dialog(window, account);
 	else if (account && account->networks->len)
@@ -364,40 +461,57 @@ static void account_settings_action(GSimpleAction *action, GVariant *parameter, 
 
 
 static void reconnect_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	if (window->account)
-		connect_session(window->account);
+	Session *account = get_menu_account(data);
+	if (account)
+		connect_session(account);
 }
 
 
 static void remove_account_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	if (window->account)
-		confirm_account_removal(window, window->account);
+	Session *account = get_menu_account(data);
+	if (account)
+		confirm_account_removal(data, account);
 }
 
 
 static void add_network_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	if (window->account && window->account->record->is_bouncer)
-		show_server_guide(window, window->account);
+	Session *account = get_menu_account(data);
+	if (account && account->record->is_bouncer)
+		show_server_guide(data, account);
 }
 
 
-/* A bouncer network's own settings and removal live in its server room's menu */
+static CrimsonNetwork *find_keyed_network(Window *window, GVariant *parameter) {
+	const char *key = g_variant_get_string(parameter, NULL);
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
+		if (g_strcmp0(network->key, key) == 0)
+			return network;
+	}
+	return NULL;
+}
+
+
+/* The server room holds what the network itself says, kept out of the chat list */
+static void server_messages_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network)
+		open_room(data, network->server_room);
+}
+
+
 static void network_settings_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	CrimsonRoom *room = get_open_room(window);
-	if (room)
-		show_network_settings(window, room->network);
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network)
+		show_network_settings(data, network);
 }
 
 
 static void remove_network_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	CrimsonRoom *room = get_open_room(window);
-	if (room)
-		confirm_network_removal(window, room->network);
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network)
+		confirm_network_removal(data, network);
 }
 
 
@@ -430,8 +544,9 @@ static void step_room_action(GSimpleAction *action, GVariant *parameter, gpointe
 
 static void invite_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
-	if (window->account)
-		show_invite_dialog(window, window->account);
+	Session *account = get_menu_account(window);
+	if (account)
+		show_invite_dialog(window, account);
 }
 
 
@@ -448,8 +563,9 @@ static void add_window_actions(Window *window) {
 		{"reconnect", reconnect_action, NULL, NULL, NULL, {0}},
 		{"remove-account", remove_account_action, NULL, NULL, NULL, {0}},
 		{"add-network", add_network_action, NULL, NULL, NULL, {0}},
-		{"network-settings", network_settings_action, NULL, NULL, NULL, {0}},
-		{"remove-network", remove_network_action, NULL, NULL, NULL, {0}},
+		{"server-messages", server_messages_action, "s", NULL, NULL, {0}},
+		{"network-settings", network_settings_action, "s", NULL, NULL, {0}},
+		{"remove-network", remove_network_action, "s", NULL, NULL, {0}},
 		{"leave-room", leave_room_action, NULL, NULL, NULL, {0}},
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
