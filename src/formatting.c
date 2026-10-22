@@ -1,0 +1,321 @@
+#include <string.h>
+
+#include "../lang/en.h"
+#include "formatting.h"
+#include "settings.h"
+
+#define BOLD '\x02'
+#define COLOR '\x03'
+#define HEX_COLOR '\x04'
+#define MONOSPACE '\x11'
+#define REVERSE '\x16'
+#define ITALIC '\x1d'
+#define STRIKETHROUGH '\x1e'
+#define UNDERLINE '\x1f'
+#define RESET '\x0f'
+#define NAME_COLORS 8
+#define WEEK_DAYS 6
+#define LINK_PATTERN "(?:https?|ftp)://[^\\s<>\"]+|www\\.[^\\s<>\"]+"
+#define TRAILING_PUNCTUATION ".,;:!?'\""
+
+/* The sixteen classic colours followed by the 83 extended ones, as servers and clients agree on them */
+static const char *const PALETTE[] = {
+	"#ffffff", "#000000", "#00007f", "#009300", "#ff0000", "#7f0000", "#9c009c", "#fc7f00", "#ffff00", "#00fc00",
+	"#009393", "#00ffff", "#0000fc", "#ff00ff", "#7f7f7f", "#d2d2d2", "#470000", "#472100", "#474700", "#324700",
+	"#004700", "#00472c", "#004747", "#002747", "#000047", "#2e0047", "#470047", "#47002a", "#740000", "#743a00",
+	"#747400", "#517400", "#007400", "#007449", "#007474", "#004074", "#000074", "#4b0074", "#740074", "#740045",
+	"#b50000", "#b56300", "#b5b500", "#7db500", "#00b500", "#00b571", "#00b5b5", "#0063b5", "#0000b5", "#7500b5",
+	"#b500b5", "#b5006b", "#ff0000", "#ff8c00", "#ffff00", "#b2ff00", "#00ff00", "#00ffa0", "#00ffff", "#008cff",
+	"#0000ff", "#a500ff", "#ff00ff", "#ff0098", "#ff5959", "#ffb459", "#ffff71", "#cfff60", "#6fff6f", "#65ffc9",
+	"#6dffff", "#59b4ff", "#5959ff", "#c459ff", "#ff66ff", "#ff59bc", "#ff9c9c", "#ffd39c", "#ffff9c", "#e2ff9c",
+	"#9cff9c", "#9cffdb", "#9cffff", "#9cd3ff", "#9c9cff", "#dc9cff", "#ff9cff", "#ff94d3", "#000000", "#131313",
+	"#282828", "#363636", "#4d4d4d", "#656565", "#818181", "#9f9f9f", "#bcbcbc", "#e2e2e2", "#ffffff",
+};
+
+/* The look of a stretch of text between formatting codes */
+typedef struct {
+	gboolean is_bold, is_italic, is_underlined, is_struck, is_monospace;
+	char foreground[8], background[8];
+} Look;
+
+
+static GRegex *get_link_pattern(void) {
+	static GRegex *pattern = NULL;
+	if (!pattern)
+		pattern = g_regex_new(LINK_PATTERN, G_REGEX_OPTIMIZE, 0, NULL);
+	return pattern;
+}
+
+
+/* Leaves off a full stop or bracket that ends a sentence rather than the address */
+static gsize trim_link(const char *link, gsize length) {
+	while (length > 0 && strchr(TRAILING_PUNCTUATION, link[length - 1]))
+		length--;
+	if (length > 0 && link[length - 1] == ')') {
+		int depth = 0;
+		for (gsize index = 0; index < length; index++)
+			depth += link[index] == '(' ? 1 : link[index] == ')' ? -1 : 0;
+		if (depth < 0)
+			length--;
+	}
+	return length;
+}
+
+
+static void append_escaped(GString *markup, const char *text, gssize length) {
+	g_autofree char *escaped = g_markup_escape_text(text, length);
+	g_string_append(markup, escaped);
+}
+
+
+static void append_linked(GString *markup, const char *text) {
+	GMatchInfo *match = NULL;
+	const char *cursor = text;
+	g_regex_match(get_link_pattern(), text, 0, &match);
+	while (g_match_info_matches(match)) {
+		int start = 0, end = 0;
+		g_match_info_fetch_pos(match, 0, &start, &end);
+		gsize length = trim_link(text + start, (gsize)(end - start));
+		append_escaped(markup, cursor, text + start - cursor);
+		g_autofree char *link = g_strndup(text + start, length);
+		g_autofree char *target = g_str_has_prefix(link, "www.") ? g_strconcat("https://", link, NULL)
+			: g_strdup(link);
+		g_autofree char *escaped_target = g_markup_escape_text(target, -1);
+		g_string_append_printf(markup, "<a href=\"%s\">", escaped_target);
+		append_escaped(markup, link, -1);
+		g_string_append(markup, "</a>");
+		cursor = text + start + length;
+		g_match_info_next(match, NULL);
+	}
+	g_match_info_free(match);
+	append_escaped(markup, cursor, -1);
+}
+
+
+static gboolean is_plain_look(const Look *look) {
+	return !look->is_bold && !look->is_italic && !look->is_underlined && !look->is_struck && !look->is_monospace
+		&& !*look->foreground && !*look->background;
+}
+
+
+static void append_run(GString *markup, const char *text, const Look *look) {
+	if (!*text)
+		return;
+	if (is_plain_look(look)) {
+		append_linked(markup, text);
+		return;
+	}
+	g_string_append(markup, "<span");
+	if (look->is_bold)
+		g_string_append(markup, " weight=\"bold\"");
+	if (look->is_italic)
+		g_string_append(markup, " style=\"italic\"");
+	if (look->is_underlined)
+		g_string_append(markup, " underline=\"single\"");
+	if (look->is_struck)
+		g_string_append(markup, " strikethrough=\"true\"");
+	if (look->is_monospace)
+		g_string_append(markup, " font_family=\"monospace\"");
+	if (*look->foreground)
+		g_string_append_printf(markup, " foreground=\"%s\"", look->foreground);
+	if (*look->background)
+		g_string_append_printf(markup, " background=\"%s\"", look->background);
+	g_string_append_c(markup, '>');
+	append_linked(markup, text);
+	g_string_append(markup, "</span>");
+}
+
+
+/* Reads up to two digits of a palette colour, returning how many characters it used */
+static int read_palette_color(const char *text, char *color) {
+	int digits = 0, value = 0;
+	while (digits < 2 && g_ascii_isdigit(text[digits]))
+		value = value * 10 + (text[digits++] - '0');
+	if (!digits)
+		return 0;
+	if (value < (int)G_N_ELEMENTS(PALETTE))
+		g_strlcpy(color, PALETTE[value], 8);
+	else
+		*color = '\0';
+	return digits;
+}
+
+
+static int read_hex_color(const char *text, char *color) {
+	for (int index = 0; index < 6; index++) {
+		if (!g_ascii_isxdigit(text[index]))
+			return 0;
+	}
+	g_snprintf(color, 8, "#%.6s", text);
+	return 6;
+}
+
+
+/* Moves past a colour code and its numbers, returning where the text continues */
+static const char *read_color_code(const char *code, Look *look) {
+	gboolean is_hex = *code == HEX_COLOR;
+	int (*read)(const char *, char *) = is_hex ? read_hex_color : read_palette_color;
+	const char *cursor = code + 1;
+	int used = read(cursor, look->foreground);
+	if (!used) {
+		*look->foreground = '\0';
+		*look->background = '\0';
+		return cursor;
+	}
+	cursor += used;
+	if (*cursor == ',') {
+		int background = read(cursor + 1, look->background);
+		if (background)
+			cursor += 1 + background;
+	}
+	return cursor;
+}
+
+
+/* Applies one formatting code, returning where the text after it begins */
+static const char *apply_code(const char *code, Look *look) {
+	switch (*code) {
+	case BOLD: look->is_bold = !look->is_bold; break;
+	case ITALIC: look->is_italic = !look->is_italic; break;
+	case UNDERLINE: look->is_underlined = !look->is_underlined; break;
+	case STRIKETHROUGH: look->is_struck = !look->is_struck; break;
+	case MONOSPACE: look->is_monospace = !look->is_monospace; break;
+	case REVERSE: break;
+	case RESET: *look = (Look){0}; break;
+	case COLOR:
+	case HEX_COLOR: return read_color_code(code, look);
+	default: return NULL;
+	}
+	return code + 1;
+}
+
+
+char *format_irc_markup(const char *text) {
+	GString *markup = g_string_new(NULL);
+	GString *run = g_string_new(NULL);
+	Look look = {0};
+	for (const char *cursor = text; *cursor;) {
+		Look next = look;
+		const char *after = apply_code(cursor, &next);
+		if (!after) {
+			g_string_append_c(run, *cursor++);
+			continue;
+		}
+		append_run(markup, run->str, &look);
+		g_string_truncate(run, 0);
+		look = next;
+		cursor = after;
+	}
+	append_run(markup, run->str, &look);
+	g_string_free(run, TRUE);
+	return g_string_free(markup, FALSE);
+}
+
+
+char *strip_irc_formatting(const char *text) {
+	GString *plain = g_string_new(NULL);
+	for (const char *cursor = text ? text : ""; *cursor;) {
+		Look ignored = {0};
+		const char *after = apply_code(cursor, &ignored);
+		if (after) {
+			cursor = after;
+			continue;
+		}
+		g_string_append_c(plain, *cursor == '\n' ? ' ' : *cursor);
+		cursor++;
+	}
+	return g_string_free(plain, FALSE);
+}
+
+
+static gboolean is_image_link(const char *link) {
+	static const char *const EXTENSIONS[] = {".png", ".jpg", ".jpeg", ".gif", ".webp", NULL};
+	g_autofree char *lower = g_ascii_strdown(link, -1);
+	char *query = strpbrk(lower, "?#");
+	if (query)
+		*query = '\0';
+	for (int index = 0; EXTENSIONS[index]; index++) {
+		if (g_str_has_suffix(lower, EXTENSIONS[index]))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+
+GPtrArray *find_image_links(const char *text) {
+	GPtrArray *links = g_ptr_array_new_with_free_func(g_free);
+	g_autofree char *plain = strip_irc_formatting(text);
+	GMatchInfo *match = NULL;
+	g_regex_match(get_link_pattern(), plain, 0, &match);
+	while (g_match_info_matches(match)) {
+		int start = 0, end = 0;
+		g_match_info_fetch_pos(match, 0, &start, &end);
+		g_autofree char *link = g_strndup(plain + start, trim_link(plain + start, (gsize)(end - start)));
+		if (g_str_has_prefix(link, "https://") && is_image_link(link))
+			g_ptr_array_add(links, g_steal_pointer(&link));
+		g_match_info_next(match, NULL);
+	}
+	g_match_info_free(match);
+	return links;
+}
+
+
+int pick_name_color(const char *name) {
+	g_autofree char *folded = g_utf8_casefold(name ? name : "", -1);
+	return (int)(g_str_hash(folded) % NAME_COLORS);
+}
+
+
+static GDateTime *to_local_time(gint64 time) {
+	g_autoptr(GDateTime) universal = g_date_time_new_from_unix_utc_usec(time);
+	return g_date_time_to_local(universal);
+}
+
+
+char *format_clock_time(gint64 time) {
+	g_autoptr(GDateTime) local = to_local_time(time);
+	return g_date_time_format(local, get_settings()->uses_24_hours ? "%H:%M" : "%l:%M %p");
+}
+
+
+gboolean is_same_day(gint64 first, gint64 second) {
+	g_autoptr(GDateTime) one = to_local_time(first);
+	g_autoptr(GDateTime) other = to_local_time(second);
+	return g_date_time_get_year(one) == g_date_time_get_year(other)
+		&& g_date_time_get_day_of_year(one) == g_date_time_get_day_of_year(other);
+}
+
+
+static int count_days_ago(gint64 time) {
+	g_autoptr(GDateTime) local = to_local_time(time);
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	g_autoptr(GDateTime) day = g_date_time_new_local(g_date_time_get_year(local), g_date_time_get_month(local),
+		g_date_time_get_day_of_month(local), 0, 0, 0);
+	g_autoptr(GDateTime) today = g_date_time_new_local(g_date_time_get_year(now), g_date_time_get_month(now),
+		g_date_time_get_day_of_month(now), 0, 0, 0);
+	return (int)(g_date_time_difference(today, day) / G_TIME_SPAN_DAY);
+}
+
+
+char *format_list_time(gint64 time) {
+	if (!time)
+		return g_strdup("");
+	int days = count_days_ago(time);
+	if (days <= 0)
+		return format_clock_time(time);
+	g_autoptr(GDateTime) local = to_local_time(time);
+	return g_date_time_format(local, days <= WEEK_DAYS ? "%a" : "%Y-%m-%d");
+}
+
+
+char *format_day_heading(gint64 time) {
+	int days = count_days_ago(time);
+	if (days == 0)
+		return g_strdup(TEXT_TODAY);
+	if (days == 1)
+		return g_strdup(TEXT_YESTERDAY);
+	g_autoptr(GDateTime) local = to_local_time(time);
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	gboolean is_this_year = g_date_time_get_year(local) == g_date_time_get_year(now);
+	return g_date_time_format(local, is_this_year ? "%A %e %B" : "%A %e %B %Y");
+}

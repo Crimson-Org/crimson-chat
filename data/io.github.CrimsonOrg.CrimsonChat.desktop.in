@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Crimson Chat
+Comment=Chat on IRC networks, directly or through your own bouncer
+Exec=@EXEC@ %U
+Icon=io.github.CrimsonOrg.CrimsonChat
+Terminal=false
+Categories=Network;Chat;IRCClient;GTK;
+MimeType=x-scheme-handler/crimson-chat;
+Keywords=irc;chat;bouncer;ircv3;
+StartupNotify=true

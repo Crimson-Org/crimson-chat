@@ -1,0 +1,312 @@
+#include <string.h>
+
+#include "bouncer.h"
+
+#define TIMESTAMP_PREFIX "timestamp="
+#define MESSAGE_ID_PREFIX "msgid="
+
+
+static gboolean is_reaction(const IrcMessage *message) {
+	return has_irc_tag(message, "+draft/react") || has_irc_tag(message, "+draft/unreact");
+}
+
+
+/* Which kind of history line a message makes, or zero for one that is not kept */
+static HistoryKind classify_message(const IrcMessage *message) {
+	const char *command = message->command;
+	if (!message->source || !strchr(message->source, '!'))
+		return 0;
+	if (g_str_equal(command, "PRIVMSG") || g_str_equal(command, "NOTICE"))
+		return HISTORY_MESSAGE;
+	if (g_str_equal(command, "TAGMSG"))
+		return is_reaction(message) ? HISTORY_TAG_MESSAGE : 0;
+	if (g_str_equal(command, "REDACT"))
+		return HISTORY_REDACTION;
+	static const char *const EVENTS[] = {"JOIN", "PART", "KICK", "TOPIC", "MODE", "QUIT", "NICK", NULL};
+	return g_strv_contains(EVENTS, command) ? HISTORY_EVENT : 0;
+}
+
+
+/* The conversation a message belongs to, which for a private message is the other person */
+static char *find_conversation(IrcState *state, const IrcMessage *message) {
+	const char *target = get_irc_parameter(message, 0);
+	if (!target || is_irc_channel_name(state, target))
+		return g_strdup(target);
+	g_autofree char *sender = get_source_nick(message->source);
+	return is_own_nick(state, sender) ? g_strdup(target) : g_steal_pointer(&sender);
+}
+
+
+void store_upstream_message(Upstream *upstream, IrcMessage *message, GPtrArray *affected) {
+	HistoryKind kind = classify_message(message);
+	if (!kind)
+		return;
+	if (kind != HISTORY_EVENT && !get_irc_tag(message, "msgid")) {
+		g_autofree char *message_id = create_irc_identifier();
+		set_irc_tag(message, "msgid", message_id);
+	}
+	IrcState *state = get_irc_client_state(upstream->client);
+	g_autofree char *line = format_irc_line(message);
+	const char *time = get_irc_tag(message, "time");
+	const char *message_id = get_irc_tag(message, "msgid");
+	Database *database = upstream->user->bouncer->database;
+	gboolean is_spread = g_str_equal(message->command, "QUIT") || g_str_equal(message->command, "NICK");
+	if (is_spread) {
+		for (guint index = 0; affected && index < affected->len; index++) {
+			const char *channel = g_ptr_array_index(affected, index);
+			g_autofree char *folded = fold_state_name(state, channel);
+			store_history(database, upstream->record.id, channel, folded, time, message_id, kind, line);
+		}
+		return;
+	}
+	g_autofree char *target = find_conversation(state, message);
+	if (!target)
+		return;
+	g_autofree char *folded = fold_state_name(state, target);
+	store_history(database, upstream->record.id, target, folded, time, message_id, kind, line);
+}
+
+
+/* The time in the exact form history is stored in, so text order matches time order */
+static char *normalize_time(const char *text) {
+	g_autoptr(GDateTime) time = parse_irc_time(text);
+	return time ? format_irc_time(time) : NULL;
+}
+
+
+/* Reads timestamp= or msgid=, where a timestamp sits before every message of its moment or after them all */
+static gboolean read_position(Downstream *downstream, const char *text, gboolean is_late, HistoryPosition *position) {
+	*position = (HistoryPosition){0};
+	if (!text)
+		return FALSE;
+	if (g_str_has_prefix(text, TIMESTAMP_PREFIX)) {
+		position->time = normalize_time(text + strlen(TIMESTAMP_PREFIX));
+		position->id = is_late ? G_MAXINT64 : 0;
+		return position->time != NULL;
+	}
+	if (g_str_has_prefix(text, MESSAGE_ID_PREFIX))
+		return find_history_message(downstream->bouncer->database, downstream->upstream->record.id,
+			text + strlen(MESSAGE_ID_PREFIX), position);
+	return FALSE;
+}
+
+
+static int list_wanted_kinds(Downstream *downstream) {
+	int kinds = HISTORY_MESSAGE;
+	if (has_downstream_cap(downstream, "message-tags"))
+		kinds |= HISTORY_TAG_MESSAGE;
+	if (has_downstream_cap(downstream, "draft/message-redaction"))
+		kinds |= HISTORY_REDACTION;
+	if (has_downstream_cap(downstream, "draft/event-playback"))
+		kinds |= HISTORY_EVENT;
+	return kinds;
+}
+
+
+static void send_bouncer_line(Downstream *downstream, IrcMessage *message, const char *batch) {
+	g_free(message->source);
+	message->source = g_strdup(BOUNCER_NAME);
+	if (batch)
+		set_irc_tag(message, "batch", batch);
+	send_to_downstream(downstream, message);
+}
+
+
+/* Sends history lines in a batch, marked as the end of history when fewer came than asked for */
+static void send_history(Downstream *downstream, const char *type, const char *target, GPtrArray *lines,
+	gboolean is_end) {
+	gboolean uses_batch = has_downstream_cap(downstream, "batch");
+	g_autofree char *reference = create_irc_identifier();
+	g_autofree char *opening = g_strconcat("+", reference, NULL);
+	g_autofree char *closing = g_strconcat("-", reference, NULL);
+	if (uses_batch) {
+		g_autoptr(IrcMessage) start = create_irc_message("BATCH", opening, type, target, NULL);
+		if (is_end)
+			set_irc_tag(start, "draft/chathistory-end", NULL);
+		send_bouncer_line(downstream, start, NULL);
+	}
+	for (guint index = 0; index < lines->len; index++) {
+		g_autoptr(IrcMessage) message = parse_irc_line(g_ptr_array_index(lines, index));
+		if (!message)
+			continue;
+		if (uses_batch)
+			set_irc_tag(message, "batch", reference);
+		send_to_downstream(downstream, message);
+	}
+	if (uses_batch) {
+		g_autoptr(IrcMessage) end = create_irc_message("BATCH", closing, NULL);
+		send_bouncer_line(downstream, end, NULL);
+	}
+}
+
+
+static void fail_history(Downstream *downstream, const char *code, const char *subcommand, const char *detail) {
+	g_autoptr(IrcMessage) message = create_irc_message("FAIL", "CHATHISTORY", code, subcommand ? subcommand : "*",
+		detail, NULL);
+	send_bouncer_line(downstream, message, NULL);
+}
+
+
+static void answer_targets(Downstream *downstream, const IrcMessage *message, int limit) {
+	g_autofree char *from = NULL, *to = NULL;
+	const char *first = get_irc_parameter(message, 1), *second = get_irc_parameter(message, 2);
+	if (first && g_str_has_prefix(first, TIMESTAMP_PREFIX))
+		from = normalize_time(first + strlen(TIMESTAMP_PREFIX));
+	if (second && g_str_has_prefix(second, TIMESTAMP_PREFIX))
+		to = normalize_time(second + strlen(TIMESTAMP_PREFIX));
+	if (!from || !to) {
+		fail_history(downstream, "INVALID_PARAMS", "TARGETS", "Invalid timestamp");
+		return;
+	}
+	g_autoptr(GPtrArray) targets = query_history_targets(downstream->bouncer->database,
+		downstream->upstream->record.id, from, to, limit);
+	g_autoptr(GPtrArray) lines = g_ptr_array_new_with_free_func(g_free);
+	for (guint index = 0; index < targets->len; index++) {
+		HistoryTarget *target = g_ptr_array_index(targets, index);
+		g_autoptr(IrcMessage) line = create_irc_message("CHATHISTORY", "TARGETS", target->target, target->time,
+			NULL);
+		line->source = g_strdup(BOUNCER_NAME);
+		g_ptr_array_add(lines, format_irc_line(line));
+	}
+	send_history(downstream, "draft/chathistory-targets", NULL, lines, FALSE);
+}
+
+
+static void clear_position(HistoryPosition *position) {
+	g_clear_pointer(&position->time, g_free);
+}
+
+
+/* Messages on both sides of a point, half before it and the rest from it onwards */
+static GPtrArray *query_around(Downstream *downstream, const char *folded, const HistoryPosition *point, int limit,
+	int kinds) {
+	Database *database = downstream->bouncer->database;
+	gint64 network_id = downstream->upstream->record.id;
+	GPtrArray *lines = query_history(database, network_id, folded, NULL, point, TRUE, limit / 2, kinds);
+	HistoryPosition from = {point->time, point->id == G_MAXINT64 || point->id == 0 ? -1 : point->id - 1};
+	g_autoptr(GPtrArray) later = query_history(database, network_id, folded, &from, NULL, FALSE,
+		limit - (int)lines->len, kinds);
+	for (guint index = 0; index < later->len; index++)
+		g_ptr_array_add(lines, g_strdup(g_ptr_array_index(later, index)));
+	return lines;
+}
+
+
+static GPtrArray *run_history_query(Downstream *downstream, const char *subcommand, const char *folded,
+	const IrcMessage *message, int limit, gboolean *is_valid) {
+	Database *database = downstream->bouncer->database;
+	gint64 network_id = downstream->upstream->record.id;
+	int kinds = list_wanted_kinds(downstream);
+	const char *first = get_irc_parameter(message, 2), *second = get_irc_parameter(message, 3);
+	HistoryPosition early = {0}, late = {0};
+	*is_valid = TRUE;
+	GPtrArray *lines = NULL;
+	if (g_ascii_strcasecmp(subcommand, "LATEST") == 0) {
+		gboolean is_bounded = g_strcmp0(first, "*") != 0;
+		*is_valid = !is_bounded || read_position(downstream, first, TRUE, &late);
+		lines = *is_valid ? query_history(database, network_id, folded, is_bounded ? &late : NULL, NULL, TRUE, limit,
+			kinds) : NULL;
+	} else if (g_ascii_strcasecmp(subcommand, "BEFORE") == 0) {
+		*is_valid = read_position(downstream, first, FALSE, &early);
+		lines = *is_valid ? query_history(database, network_id, folded, NULL, &early, TRUE, limit, kinds) : NULL;
+	} else if (g_ascii_strcasecmp(subcommand, "AFTER") == 0) {
+		*is_valid = read_position(downstream, first, TRUE, &late);
+		lines = *is_valid ? query_history(database, network_id, folded, &late, NULL, FALSE, limit, kinds) : NULL;
+	} else if (g_ascii_strcasecmp(subcommand, "AROUND") == 0) {
+		*is_valid = read_position(downstream, first, FALSE, &early);
+		lines = *is_valid ? query_around(downstream, folded, &early, limit, kinds) : NULL;
+	} else if (g_ascii_strcasecmp(subcommand, "BETWEEN") == 0) {
+		*is_valid = read_position(downstream, first, TRUE, &late) && read_position(downstream, second, FALSE, &early);
+		gboolean is_backwards = *is_valid && g_strcmp0(late.time, early.time) > 0;
+		if (is_backwards) {
+			clear_position(&late);
+			clear_position(&early);
+			read_position(downstream, first, FALSE, &early);
+			read_position(downstream, second, TRUE, &late);
+		}
+		lines = *is_valid ? query_history(database, network_id, folded, &late, &early, is_backwards, limit, kinds)
+			: NULL;
+	} else {
+		*is_valid = FALSE;
+	}
+	clear_position(&early);
+	clear_position(&late);
+	return lines;
+}
+
+
+void answer_history_request(Downstream *downstream, const IrcMessage *message) {
+	const char *subcommand = get_irc_parameter(message, 0);
+	guint count = count_irc_parameters(message);
+	const char *limit_text = count > 1 ? get_irc_parameter(message, count - 1) : NULL;
+	int limit = limit_text ? (int)g_ascii_strtoll(limit_text, NULL, 10) : 0;
+	if (!subcommand || limit <= 0 || count < 3) {
+		fail_history(downstream, "INVALID_PARAMS", subcommand, "Insufficient parameters");
+		return;
+	}
+	limit = MIN(limit, HISTORY_PAGE_LIMIT);
+	if (g_ascii_strcasecmp(subcommand, "TARGETS") == 0) {
+		answer_targets(downstream, message, limit);
+		return;
+	}
+	const char *target = get_irc_parameter(message, 1);
+	IrcState *state = get_irc_client_state(downstream->upstream->client);
+	g_autofree char *folded = fold_state_name(state, target);
+	gboolean is_valid = FALSE;
+	g_autoptr(GPtrArray) lines = run_history_query(downstream, subcommand, folded, message, limit, &is_valid);
+	if (!is_valid || !lines) {
+		fail_history(downstream, "INVALID_PARAMS", subcommand, "Invalid message reference");
+		return;
+	}
+	send_history(downstream, "chathistory", target, lines, (int)lines->len < limit);
+}
+
+
+void send_read_marker(Downstream *downstream, const char *target, const char *time) {
+	if (!has_downstream_cap(downstream, "draft/read-marker"))
+		return;
+	g_autofree char *value = time ? g_strconcat(TIMESTAMP_PREFIX, time, NULL) : g_strdup("*");
+	g_autoptr(IrcMessage) message = create_irc_message("MARKREAD", target, value, NULL);
+	send_bouncer_line(downstream, message, NULL);
+}
+
+
+static void share_read_marker(Downstream *origin, const char *target, const char *time) {
+	for (GList *item = origin->bouncer->downstreams; item; item = item->next) {
+		Downstream *downstream = item->data;
+		if (downstream->upstream == origin->upstream && downstream->is_registered)
+			send_read_marker(downstream, target, time);
+	}
+}
+
+
+void answer_read_marker(Downstream *downstream, const IrcMessage *message) {
+	const char *target = get_irc_parameter(message, 0);
+	const char *value = get_irc_parameter(message, 1);
+	if (!target) {
+		g_autoptr(IrcMessage) failure = create_irc_message("FAIL", "MARKREAD", "NEED_MORE_PARAMS",
+			"Missing parameters", NULL);
+		send_bouncer_line(downstream, failure, NULL);
+		return;
+	}
+	IrcState *state = get_irc_client_state(downstream->upstream->client);
+	g_autofree char *folded = fold_state_name(state, target);
+	Database *database = downstream->bouncer->database;
+	gint64 network_id = downstream->upstream->record.id;
+	g_autofree char *stored = load_read_marker(database, network_id, folded);
+	g_autofree char *wanted = value && g_str_has_prefix(value, TIMESTAMP_PREFIX)
+		? normalize_time(value + strlen(TIMESTAMP_PREFIX)) : NULL;
+	if (value && !wanted) {
+		g_autoptr(IrcMessage) failure = create_irc_message("FAIL", "MARKREAD", "INVALID_PARAMS", value,
+			"Invalid parameters", NULL);
+		send_bouncer_line(downstream, failure, NULL);
+		return;
+	}
+	/* A read marker only ever moves forward, and an older one gets the stored value back */
+	if (!wanted || (stored && g_strcmp0(wanted, stored) <= 0)) {
+		send_read_marker(downstream, target, stored);
+		return;
+	}
+	save_read_marker(database, network_id, folded, wanted);
+	share_read_marker(downstream, target, wanted);
+}

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+	<gresource prefix="/io/github/CrimsonOrg/CrimsonChat">
+		<file>style.css</file>
+		<file alias="common.css">../subprojects/crimson-core/data/common.css</file>
+		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonChat.svg</file>
+		<file>icons/symbolic/apps/io.github.CrimsonOrg.CrimsonChat-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-channel-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-chats-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-clock-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-send-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-sent-symbolic.svg</file>
+	</gresource>
+</gresources>

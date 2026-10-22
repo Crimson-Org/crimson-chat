@@ -1,0 +1,420 @@
+/* Crimson Chat, a messenger look in the Crimson palette */
+
+:root {
+	--accent-bg-color: #c8102e;
+	--accent-fg-color: #ffffff;
+	--accent-color: color-mix(in srgb, #e5354f 80%, var(--window-fg-color));
+	/* Everything below follows the light or dark style through libadwaita's own colours */
+	--bubble-own: color-mix(in srgb, #c8102e 24%, var(--view-bg-color));
+	--bubble-other: color-mix(in srgb, var(--window-fg-color) 7%, var(--view-bg-color));
+	--chat-wall: color-mix(in srgb, #c8102e 5%, var(--window-bg-color));
+	--pill-bg: color-mix(in srgb, var(--window-fg-color) 32%, transparent);
+	--rail-bg: color-mix(in srgb, var(--window-fg-color) 6%, var(--window-bg-color));
+}
+
+window,
+tooltip {
+	font-size: 16px;
+}
+
+/* Secondary text stays at the 16 px minimum, which libadwaita's small styles would go below */
+.subtitle,
+.caption,
+.caption-heading,
+.dim-label {
+	font-size: 16px;
+}
+
+/* One near black bar runs along the top of every pane */
+headerbar.top-bar {
+	background-color: #0b0a0b;
+	color: #f2f2f4;
+	box-shadow: none;
+	min-height: 56px;
+}
+
+headerbar.top-bar button,
+headerbar.top-bar menubutton > button {
+	color: #f2f2f4;
+}
+
+/* The rail of networks down the left edge */
+.rail {
+	background-color: var(--rail-bg);
+	min-width: 76px;
+	border-right: 1px solid alpha(currentColor, 0.08);
+}
+
+.rail-list {
+	background: none;
+}
+
+.rail-list > row {
+	padding: 6px 0;
+	background: none;
+	box-shadow: none;
+}
+
+.rail-list > row:selected avatar,
+.rail-all.chosen {
+	box-shadow: 0 0 0 3px var(--accent-bg-color);
+}
+
+.rail-list > row avatar {
+	transition: box-shadow 200ms ease-out, opacity 300ms ease-out;
+}
+
+.rail-all {
+	min-width: 48px;
+	min-height: 48px;
+	border-radius: 9999px;
+	padding: 0;
+	margin: 10px 0 4px 0;
+	background-color: alpha(currentColor, 0.08);
+	transition: box-shadow 200ms ease-out;
+}
+
+.rail-button {
+	min-width: 44px;
+	min-height: 44px;
+}
+
+.rail-badge {
+	margin: -4px -6px;
+	box-shadow: 0 0 0 2px var(--rail-bg);
+}
+
+/* Unread counters, crimson when they hold a mention */
+.unread-badge {
+	min-width: 24px;
+	min-height: 24px;
+	padding: 0 6px;
+	border-radius: 9999px;
+	background-color: alpha(currentColor, 0.28);
+	color: #ffffff;
+	font-weight: 700;
+	font-size: 16px;
+}
+
+.unread-badge.mention {
+	background-color: var(--accent-bg-color);
+}
+
+/* The chat list */
+.room-column {
+	background-color: var(--window-bg-color);
+}
+
+.room-list {
+	background: none;
+}
+
+.room-list > row {
+	padding: 0;
+	margin: 1px 6px;
+	border-radius: 12px;
+	transition: background-color 150ms ease-out;
+}
+
+.room-list > row:selected {
+	background-color: var(--accent-bg-color);
+	color: #ffffff;
+}
+
+.room-list > row:selected .room-time,
+.room-list > row:selected .room-preview,
+.room-list > row:selected .room-kind {
+	color: alpha(#ffffff, 0.8);
+}
+
+.room-row {
+	padding: 9px 10px;
+}
+
+.room-name {
+	font-weight: 700;
+}
+
+.room-time,
+.room-preview,
+.room-kind {
+	color: alpha(currentColor, 0.55);
+}
+
+.room-preview.typing,
+.conversation-subtitle.typing {
+	color: var(--accent-color);
+}
+
+.room-list > row:selected .room-preview.typing {
+	color: #ffffff;
+}
+
+.room-search {
+	min-height: 38px;
+	border-radius: 9999px;
+	background-color: rgba(255, 255, 255, 0.08);
+	color: #f2f2f4;
+}
+
+.network-title {
+	font-weight: 700;
+	color: #f2f2f4;
+}
+
+.network-subtitle {
+	color: alpha(#f2f2f4, 0.6);
+}
+
+/* The conversation */
+.chat-background {
+	background-color: var(--chat-wall);
+	background-image: radial-gradient(ellipse at 20% 0%, alpha(#c8102e, 0.10), transparent 60%),
+		radial-gradient(ellipse at 90% 100%, alpha(#8e0a1d, 0.10), transparent 55%);
+}
+
+.messages {
+	background: none;
+	padding: 12px 0 18px 0;
+}
+
+.messages > row {
+	padding: 0;
+	background: none;
+}
+
+.message-row {
+	padding: 1px 16px;
+}
+
+.message-row.group-start {
+	padding-top: 8px;
+}
+
+.conversation-title {
+	font-weight: 700;
+	color: #f2f2f4;
+}
+
+.conversation-subtitle {
+	color: alpha(#f2f2f4, 0.6);
+}
+
+.bubble {
+	background-color: var(--bubble-other);
+	border-radius: 6px 18px 18px 6px;
+	padding: 7px 12px 5px 12px;
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.bubble.fresh {
+	animation: pop-in 180ms ease-out;
+}
+
+.bubble.first {
+	border-top-left-radius: 18px;
+}
+
+.bubble.own {
+	background-color: var(--bubble-own);
+	border-radius: 18px 6px 6px 18px;
+}
+
+.bubble.own.first {
+	border-top-right-radius: 18px;
+}
+
+.bubble.mention {
+	box-shadow: inset 3px 0 var(--accent-color), 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.bubble.notice .body {
+	font-style: italic;
+}
+
+.bubble .redacted {
+	color: alpha(currentColor, 0.5);
+}
+
+.sender {
+	font-weight: 700;
+}
+
+.message-footer {
+	color: alpha(currentColor, 0.5);
+}
+
+.message-footer image {
+	-gtk-icon-size: 14px;
+}
+
+.bot-tag {
+	padding: 0 6px;
+	border-radius: 6px;
+	background-color: alpha(currentColor, 0.12);
+}
+
+.reply-quote {
+	border-left: 3px solid currentColor;
+	border-radius: 4px;
+	padding: 2px 8px;
+	margin-bottom: 2px;
+	background-color: alpha(currentColor, 0.08);
+}
+
+.reply-name {
+	font-weight: 700;
+}
+
+.reply-snippet {
+	color: color-mix(in srgb, var(--window-fg-color) 70%, transparent);
+}
+
+.image-preview {
+	border-radius: 12px;
+	overflow: hidden;
+	margin: 4px 0;
+	animation: pop-in 250ms ease-out;
+}
+
+.reactions {
+	padding: 0;
+}
+
+.reactions > flowboxchild {
+	padding: 0;
+	margin: 0 4px 0 0;
+}
+
+.reaction-pill {
+	min-height: 28px;
+	padding: 0 10px;
+	border-radius: 9999px;
+	background-color: var(--bubble-other);
+	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+.reaction-pill.mine {
+	background-color: var(--accent-bg-color);
+	color: #ffffff;
+}
+
+.quick-reaction {
+	min-width: 40px;
+	min-height: 40px;
+	font-size: 20px;
+}
+
+/* Days, events and the empty conversation float as soft pills */
+.day-pill,
+.event-pill,
+.empty-pill {
+	background-color: var(--pill-bg);
+	color: #ffffff;
+	border-radius: 9999px;
+	padding: 3px 12px;
+	margin: 8px 24px;
+}
+
+.day-pill {
+	font-weight: 700;
+	margin-top: 14px;
+}
+
+.empty-pill {
+	font-weight: 700;
+	padding: 6px 16px;
+}
+
+.status-line {
+	font-family: monospace;
+	color: alpha(currentColor, 0.75);
+	padding: 1px 0;
+}
+
+.jump-button {
+	margin: 18px;
+	min-width: 44px;
+	min-height: 44px;
+}
+
+/* The composer along the bottom */
+.composer {
+	padding: 8px 12px;
+}
+
+.reply-bar {
+	padding: 4px 4px 8px 4px;
+}
+
+.composer-row > overlay {
+	background-color: alpha(currentColor, 0.07);
+	border-radius: 22px;
+	padding: 0 16px;
+}
+
+.composer-field {
+	background: none;
+	padding: 8px 0;
+}
+
+.composer-placeholder {
+	color: alpha(currentColor, 0.45);
+	margin-top: 8px;
+}
+
+.send-button {
+	min-width: 44px;
+	min-height: 44px;
+	transition: opacity 200ms ease-out;
+}
+
+.send-button:disabled {
+	opacity: 0.35;
+}
+
+/* Guides */
+.guide-step {
+	margin: 12px 24px 36px 24px;
+}
+
+.guide-icon {
+	color: var(--accent-color);
+	margin-top: 12px;
+}
+
+.guide-description {
+	color: alpha(currentColor, 0.7);
+}
+
+/* The member list */
+.member-panel {
+	background-color: var(--window-bg-color);
+}
+
+.member-list {
+	background: none;
+}
+
+.member-list > row {
+	border-radius: 10px;
+	margin: 1px 6px;
+}
+
+.member-row {
+	padding: 6px 8px;
+}
+
+.member-role {
+	color: var(--accent-color);
+}
+
+/* Name colours, readable on both the light and the dark bubbles */
+.name-color-0 { color: #e5484d; }
+.name-color-1 { color: #f76b15; }
+.name-color-2 { color: #c2a300; }
+.name-color-3 { color: #30a46c; }
+.name-color-4 { color: #12a594; }
+.name-color-5 { color: #0090ff; }
+.name-color-6 { color: #8e4ec6; }
+.name-color-7 { color: #d6409f; }

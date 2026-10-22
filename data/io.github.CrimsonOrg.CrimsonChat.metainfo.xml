@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>io.github.CrimsonOrg.CrimsonChat</id>
+	<name>Crimson Chat</name>
+	<summary>Chat on IRC networks, directly or through your own bouncer</summary>
+	<metadata_license>CC0-1.0</metadata_license>
+	<project_license>LicenseRef-proprietary</project_license>
+	<description>
+		<p>An IRC client with replies, reactions, typing notices, read markers and chat history, and a bouncer that keeps your networks connected while you are away.</p>
+	</description>
+	<developer id="io.github.CrimsonOrg">
+		<name>Crimson</name>
+	</developer>
+	<releases>
+		<release version="0.1.0" date="2026-10-22"/>
+	</releases>
+	<launchable type="desktop-id">io.github.CrimsonOrg.CrimsonChat.desktop</launchable>
+	<provides>
+		<binary>crimson-chat</binary>
+		<binary>crimson-chat-bouncer</binary>
+	</provides>
+	<content_rating type="oars-1.1"/>
+</component>

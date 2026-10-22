@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+	<defs>
+		<linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#1f080c"/>
+			<stop offset="1" stop-color="#070203"/>
+		</linearGradient>
+		<radialGradient id="heart" cx="0.5" cy="0.42" r="0.5">
+			<stop offset="0" stop-color="#c8102e" stop-opacity="0.32"/>
+			<stop offset="1" stop-color="#c8102e" stop-opacity="0"/>
+		</radialGradient>
+		<linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#ff4d5e" stop-opacity="0.16"/>
+			<stop offset="0.5" stop-color="#ff4d5e" stop-opacity="0"/>
+		</linearGradient>
+		<linearGradient id="blood" x1="0" y1="0" x2="0" y2="1">
+			<stop offset="0" stop-color="#ff4057"/>
+			<stop offset="0.55" stop-color="#d4112b"/>
+			<stop offset="1" stop-color="#8e0a1d"/>
+		</linearGradient>
+		<filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+			<feGaussianBlur stdDeviation="2.5"/>
+		</filter>
+		<filter id="bloom" x="-80%" y="-80%" width="260%" height="260%">
+			<feGaussianBlur stdDeviation="7"/>
+		</filter>
+	</defs>
+	<path d="M30 16H98Q114 16 114 32V78Q114 94 98 94H58L34 114Q30 117 30 112V94Q14 94 14 78V32Q14 16 30 16Z" fill="url(#panel)"/>
+	<path d="M30 16H98Q114 16 114 32V78Q114 94 98 94H58L34 114Q30 117 30 112V94Q14 94 14 78V32Q14 16 30 16Z" fill="url(#heart)"/>
+	<path d="M30 16H98Q114 16 114 32V78Q114 94 98 94H58L34 114Q30 117 30 112V94Q14 94 14 78V32Q14 16 30 16Z" fill="url(#sheen)" stroke="#c8102e" stroke-opacity="0.75" stroke-width="2" stroke-linejoin="round"/>
+	<g transform="translate(0 -5)">
+		<path d="M66.16 38Q69.18 38 71.32 38.15Q73.46 38.31 75.25 38.62Q77.04 38.92 78.94 39.45L78.17 46.38Q76.17 46.26 74.46 46.2Q72.75 46.14 70.81 46.09Q68.87 46.04 66.16 46.04Q63.04 46.04 61.27 47.29Q59.5 48.54 58.78 51.57Q58.05 54.61 58.05 60Q58.05 65.39 58.78 68.43Q59.5 71.46 61.27 72.71Q63.04 73.96 66.16 73.96Q70.44 73.96 73.33 73.83Q76.23 73.71 79.07 73.37L79.84 80.28Q76.91 81.2 73.83 81.6Q70.75 82 66.16 82Q59.59 82 55.63 79.87Q51.67 77.75 49.92 72.94Q48.16 68.14 48.16 60Q48.16 51.86 49.92 47.06Q51.67 42.25 55.63 40.13Q59.59 38 66.16 38Z" fill="#c8102e" fill-opacity="0.8" filter="url(#bloom)"/>
+		<path d="M66.16 38Q69.18 38 71.32 38.15Q73.46 38.31 75.25 38.62Q77.04 38.92 78.94 39.45L78.17 46.38Q76.17 46.26 74.46 46.2Q72.75 46.14 70.81 46.09Q68.87 46.04 66.16 46.04Q63.04 46.04 61.27 47.29Q59.5 48.54 58.78 51.57Q58.05 54.61 58.05 60Q58.05 65.39 58.78 68.43Q59.5 71.46 61.27 72.71Q63.04 73.96 66.16 73.96Q70.44 73.96 73.33 73.83Q76.23 73.71 79.07 73.37L79.84 80.28Q76.91 81.2 73.83 81.6Q70.75 82 66.16 82Q59.59 82 55.63 79.87Q51.67 77.75 49.92 72.94Q48.16 68.14 48.16 60Q48.16 51.86 49.92 47.06Q51.67 42.25 55.63 40.13Q59.59 38 66.16 38Z" fill="#e3132f" fill-opacity="0.8" filter="url(#glow)"/>
+		<path d="M66.16 38Q69.18 38 71.32 38.15Q73.46 38.31 75.25 38.62Q77.04 38.92 78.94 39.45L78.17 46.38Q76.17 46.26 74.46 46.2Q72.75 46.14 70.81 46.09Q68.87 46.04 66.16 46.04Q63.04 46.04 61.27 47.29Q59.5 48.54 58.78 51.57Q58.05 54.61 58.05 60Q58.05 65.39 58.78 68.43Q59.5 71.46 61.27 72.71Q63.04 73.96 66.16 73.96Q70.44 73.96 73.33 73.83Q76.23 73.71 79.07 73.37L79.84 80.28Q76.91 81.2 73.83 81.6Q70.75 82 66.16 82Q59.59 82 55.63 79.87Q51.67 77.75 49.92 72.94Q48.16 68.14 48.16 60Q48.16 51.86 49.92 47.06Q51.67 42.25 55.63 40.13Q59.59 38 66.16 38Z" fill="url(#blood)" stroke="#ff5a6c" stroke-opacity="0.35" stroke-width="0.6"/>
+	</g>
+</svg>
