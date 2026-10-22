@@ -12,7 +12,7 @@ typedef struct {
 	Window *window;
 	AdwDialog *dialog;
 	GtkWidget *save_button;
-	GtkWidget *name, *host, *port, *tls, *account, *password, *server_password;
+	GtkWidget *name, *host, *port, *tls, *server_password;
 	Session *editing;
 	CrimsonNetwork *bouncer_network;
 } ServerForm;
@@ -123,10 +123,6 @@ static GHashTable *collect_attributes(ServerForm *form) {
 		put_attribute(attributes, "name", read_row(form->name));
 	if (read_row(form->server_password))
 		put_attribute(attributes, "pass", read_row(form->server_password));
-	if (read_row(form->account))
-		put_attribute(attributes, "sasl-username", read_row(form->account));
-	if (read_row(form->password))
-		put_attribute(attributes, "sasl-password", read_row(form->password));
 	return attributes;
 }
 
@@ -144,8 +140,9 @@ static AccountRecord *collect_account(ServerForm *form) {
 	record->realname = g_strdup(form->editing->record->realname);
 	record->channels = g_strdupv(form->editing->record->channels);
 	record->password = g_strdup(read_row(form->server_password));
-	record->sasl_username = g_strdup(read_row(form->account));
-	record->sasl_password = g_strdup(read_row(form->password));
+	/* The login lives in the account dialog, so the server settings keep it as it is */
+	record->sasl_username = g_strdup(form->editing->record->sasl_username);
+	record->sasl_password = g_strdup(form->editing->record->sasl_password);
 	record->trusted_certificate = g_strdup(form->editing->record->trusted_certificate);
 	return record;
 }
@@ -186,10 +183,6 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 	g_signal_connect(form->tls, "notify::active", G_CALLBACK(switch_tls), form);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(server), form->tls);
 	form->server_password = add_password_row(server, TEXT_SERVER_PASSWORD, record ? record->password : NULL);
-	GtkWidget *login = add_group(page, TEXT_SASL_ACCOUNT, NULL);
-	form->account = add_entry_row(login, TEXT_ACCOUNT_NAME, record ? record->sasl_username
-		: lookup_attribute(network, "sasl-username"));
-	form->password = add_password_row(login, TEXT_PASSWORD, record ? record->sasl_password : NULL);
 	g_signal_connect(form->host, "changed", G_CALLBACK(check_server_form), form);
 }
 

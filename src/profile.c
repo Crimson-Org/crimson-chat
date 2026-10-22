@@ -166,9 +166,9 @@ typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
 	AdwDialog *dialog;
-	GtkWidget *avatar, *nick, *display_name, *realname, *picture;
+	GtkWidget *avatar, *nick, *display_name, *realname, *picture, *account, *password;
 	/* What the fields held when the dialog opened, so only changes are sent */
-	char *old_nick, *old_display_name, *old_realname, *old_picture;
+	char *old_nick, *old_display_name, *old_realname, *old_picture, *old_account, *old_password;
 } OwnProfile;
 
 
@@ -177,6 +177,8 @@ static void free_own_profile(OwnProfile *own) {
 	g_free(own->old_display_name);
 	g_free(own->old_realname);
 	g_free(own->old_picture);
+	g_free(own->old_account);
+	g_free(own->old_password);
 	g_free(own);
 }
 
@@ -223,8 +225,25 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 		set_metadata(network, "avatar", read_field(own->picture));
 	if (own->display_name || own->picture)
 		save_network_profile(network->key, read_field(own->display_name), read_field(own->picture));
-	if (is_direct)
+	/* A new login only counts on the next connection, so changing it reconnects */
+	gboolean has_new_login = has_changed(own->account, own->old_account) || has_changed(own->password, own->old_password);
+	if (has_new_login && !is_direct) {
+		g_autoptr(GHashTable) attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+		g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(read_field(own->account)));
+		if (*read_field(own->password))
+			g_hash_table_insert(attributes, g_strdup("sasl-password"), g_strdup(read_field(own->password)));
+		change_bouncer_network(network, attributes);
+	} else if (has_new_login) {
+		AccountRecord *changed = copy_account_record(record);
+		g_free(changed->sasl_username);
+		changed->sasl_username = *read_field(own->account) ? g_strdup(read_field(own->account)) : NULL;
+		g_free(changed->sasl_password);
+		changed->sasl_password = *read_field(own->password) ? g_strdup(read_field(own->password)) : NULL;
+		change_account(network->session, changed);
+		free_account_record(changed);
+	} else if (is_direct) {
 		save_chat_accounts(network->session->chat);
+	}
 	adw_dialog_close(own->dialog);
 }
 
@@ -324,6 +343,25 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	if (own->picture)
 		g_signal_connect(own->picture, "changed", G_CALLBACK(preview_picture), own);
 	gtk_box_append(GTK_BOX(box), list);
+	/* The login to the server's account services, which a bouncer keeps without sending the password back */
+	GtkWidget *login_title = gtk_label_new(TEXT_SASL_LOGIN);
+	gtk_label_set_xalign(GTK_LABEL(login_title), 0);
+	gtk_widget_add_css_class(login_title, "heading");
+	gtk_widget_set_margin_top(login_title, 6);
+	gtk_box_append(GTK_BOX(box), login_title);
+	GtkWidget *login = gtk_list_box_new();
+	gtk_list_box_set_selection_mode(GTK_LIST_BOX(login), GTK_SELECTION_NONE);
+	gtk_widget_add_css_class(login, "boxed-list");
+	AccountRecord *record = network->session->record;
+	own->old_account = g_strdup(network->bouncer_id ? g_hash_table_lookup(network->attributes, "sasl-username")
+		: record->sasl_username);
+	own->old_password = g_strdup(network->bouncer_id ? NULL : record->sasl_password);
+	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account, TRUE);
+	own->password = adw_password_entry_row_new();
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), TEXT_PASSWORD);
+	gtk_editable_set_text(GTK_EDITABLE(own->password), own->old_password ? own->old_password : "");
+	gtk_list_box_append(GTK_LIST_BOX(login), own->password);
+	gtk_box_append(GTK_BOX(box), login);
 	GtkWidget *save = gtk_button_new_with_label(TEXT_SAVE);
 	gtk_widget_add_css_class(save, "pill");
 	gtk_widget_add_css_class(save, "suggested-action");
@@ -336,7 +374,7 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_PROFILE));
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
-	g_autofree char *title = g_strdup_printf(TEXT_PROFILE_ON, network->name);
+	g_autofree char *title = g_strdup_printf(TEXT_ACCOUNT_ON, network->name);
 	adw_dialog_set_title(own->dialog, title);
 	adw_dialog_set_child(own->dialog, toolbar);
 	adw_dialog_present(own->dialog, GTK_WIDGET(window->window));
