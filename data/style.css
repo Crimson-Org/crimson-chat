@@ -167,19 +167,27 @@ headerbar.top-bar menubutton > button {
 	color: #f2f2f4;
 }
 
-.network-title {
+.account-bar > button {
+	margin: 6px 8px;
+	padding: 6px 10px;
+	border-radius: 12px;
+	background: none;
+}
+
+.account-bar > button:hover {
+	background-color: alpha(currentColor, 0.07);
+}
+
+.account-name {
 	font-weight: 700;
-	color: #f2f2f4;
 }
 
-.network-subtitle {
-	color: alpha(#f2f2f4, 0.6);
-}
-
-.room-list-status {
-	padding: 6px 12px;
+.account-state {
 	color: alpha(currentColor, 0.6);
-	background-color: var(--rail-bg);
+}
+
+.account-state.is-offline {
+	color: var(--accent-color);
 }
 
 /* The conversation */

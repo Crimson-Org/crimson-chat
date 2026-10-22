@@ -8,13 +8,16 @@
 #include "window.h"
 
 #define ROOM_AVATAR_SIZE 50
+#define ACCOUNT_AVATAR_SIZE 36
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
 
 struct RoomList {
 	Window *window;
-	GtkWidget *box, *header, *title_stack, *search, *title, *subtitle, *menu_button, *account_button, *status;
+	GtkWidget *box, *header, *search, *menu_button;
+	/* The bar naming the account the list shows, whether it is a bouncer or a server, and its state */
+	GtkWidget *account_bar, *account_avatar, *account_name, *account_state;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
@@ -240,25 +243,29 @@ static GtkWidget *create_header(RoomList *list) {
 	gtk_widget_set_hexpand(list->search, TRUE);
 	gtk_widget_add_css_class(list->search, "room-search");
 	g_signal_connect(list->search, "search-changed", G_CALLBACK(change_search), list);
-	GtkWidget *titles = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-	gtk_widget_set_valign(titles, GTK_ALIGN_CENTER);
-	list->title = create_label("network-title", FALSE);
-	list->subtitle = create_label("network-subtitle", FALSE);
-	gtk_box_append(GTK_BOX(titles), list->title);
-	gtk_box_append(GTK_BOX(titles), list->subtitle);
-	list->title_stack = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(list->title_stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
-	gtk_stack_add_named(GTK_STACK(list->title_stack), list->search, "search");
-	gtk_stack_add_named(GTK_STACK(list->title_stack), titles, "network");
-	gtk_widget_set_hexpand(list->title_stack, TRUE);
-	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->title_stack);
-	list->account_button = gtk_menu_button_new();
-	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(list->account_button), "view-more-symbolic");
-	gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(list->account_button),
-		create_account_popover, list, NULL);
-	gtk_widget_set_tooltip_text(list->account_button, TEXT_NETWORK_MENU);
-	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->account_button);
+	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->search);
 	return list->header;
+}
+
+
+static GtkWidget *create_account_bar(RoomList *list) {
+	list->account_bar = gtk_menu_button_new();
+	gtk_widget_add_css_class(list->account_bar, "account-bar");
+	gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(list->account_bar), create_account_popover, list, NULL);
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	list->account_avatar = adw_avatar_new(ACCOUNT_AVATAR_SIZE, NULL, TRUE);
+	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_set_valign(texts, GTK_ALIGN_CENTER);
+	gtk_widget_set_hexpand(texts, TRUE);
+	list->account_name = create_label("account-name", FALSE);
+	list->account_state = create_label("account-state", FALSE);
+	gtk_box_append(GTK_BOX(texts), list->account_name);
+	gtk_box_append(GTK_BOX(texts), list->account_state);
+	gtk_box_append(GTK_BOX(box), list->account_avatar);
+	gtk_box_append(GTK_BOX(box), texts);
+	gtk_box_append(GTK_BOX(box), gtk_image_new_from_icon_name("pan-down-symbolic"));
+	gtk_menu_button_set_child(GTK_MENU_BUTTON(list->account_bar), box);
+	return list->account_bar;
 }
 
 
@@ -363,10 +370,7 @@ RoomList *create_room_list(Window *window) {
 	list->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(list->box, "room-column");
 	gtk_box_append(GTK_BOX(list->box), create_header(list));
-	/* Without a rail the header has no room for the state, so a line says when the account is not connected */
-	list->status = create_label("room-list-status", FALSE);
-	gtk_label_set_xalign(GTK_LABEL(list->status), 0.5f);
-	gtk_box_append(GTK_BOX(list->box), list->status);
+	gtk_box_append(GTK_BOX(list->box), create_account_bar(list));
 	list->stack = gtk_stack_new();
 	gtk_stack_set_transition_type(GTK_STACK(list->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
@@ -393,13 +397,14 @@ static const char *describe_state(NetworkState state) {
 }
 
 
-/* A chosen account names its state, and the reason when it could not connect */
+/* An account says whether it is a bouncer or a server, its state, and the reason when it could not connect */
 static char *describe_account(Session *account) {
 	NetworkState state = read_account_state(account);
 	const char *error = read_account_error(account);
+	const char *kind = account->record->is_bouncer ? TEXT_BOUNCER : TEXT_SERVER;
 	if (state == NETWORK_DISCONNECTED && error)
-		return g_strdup_printf("%s · %s", TEXT_DISCONNECTED, error);
-	return g_strdup(describe_state(state));
+		return g_strdup_printf("%s · %s · %s", kind, TEXT_DISCONNECTED, error);
+	return g_strdup_printf("%s · %s", kind, describe_state(state));
 }
 
 
@@ -422,16 +427,18 @@ static const char *choose_page(RoomList *list, Session *account) {
 void refresh_room_list_header(RoomList *list) {
 	Session *account = get_menu_account(list->window);
 	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), choose_page(list, account));
-	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), list->account ? "network" : "search");
-	gtk_widget_set_visible(list->account_button, account != NULL);
-	gboolean is_connected = !account || read_account_state(account) == NETWORK_CONNECTED;
-	gtk_widget_set_visible(list->status, !list->account && !is_connected);
+	gtk_widget_set_visible(list->account_bar, account != NULL);
 	if (!account)
 		return;
+	const char *name = describe_account_name(account);
 	g_autofree char *state = describe_account(account);
-	gtk_label_set_text(GTK_LABEL(list->status), state);
-	gtk_label_set_text(GTK_LABEL(list->title), describe_account_name(account));
-	gtk_label_set_text(GTK_LABEL(list->subtitle), state);
+	adw_avatar_set_text(ADW_AVATAR(list->account_avatar), name);
+	gtk_label_set_text(GTK_LABEL(list->account_name), name);
+	gtk_label_set_text(GTK_LABEL(list->account_state), state);
+	if (read_account_state(account) == NETWORK_CONNECTED)
+		gtk_widget_remove_css_class(list->account_state, "is-offline");
+	else
+		gtk_widget_add_css_class(list->account_state, "is-offline");
 }
 
 

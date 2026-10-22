@@ -55,27 +55,29 @@ static void append_network_item(GMenu *menu, const char *label, const char *acti
 }
 
 
+/* Only what belongs to the account: chats and the app itself live in the main menu */
 GMenuModel *create_account_menu(Session *account) {
 	gboolean is_bouncer = account->record->is_bouncer;
 	GMenu *menu = g_menu_new();
-	GMenu *chats = g_menu_new();
-	g_menu_append(chats, TEXT_JOIN_ROOM, "win.join-room");
-	g_menu_append(chats, TEXT_MESSAGE_SOMEONE, "win.message-someone");
 	if (is_bouncer) {
-		g_menu_append(chats, TEXT_ADD_NETWORK, "win.add-network");
-		g_menu_append(chats, TEXT_INVITE_PEOPLE, "win.invite-people");
-	}
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(chats));
-	g_object_unref(chats);
-	/* Each network a bouncer keeps gets its own section under its name */
-	for (guint index = 0; is_bouncer && index < account->networks->len; index++) {
-		CrimsonNetwork *network = g_ptr_array_index(account->networks, index);
-		GMenu *section = g_menu_new();
-		append_network_item(section, TEXT_SERVER_MESSAGES, "win.server-messages", network);
-		append_network_item(section, TEXT_NETWORK_SETTINGS, "win.network-settings", network);
-		append_network_item(section, TEXT_REMOVE_NETWORK, "win.remove-network", network);
-		g_menu_append_section(menu, network->name, G_MENU_MODEL(section));
-		g_object_unref(section);
+		GMenu *adding = g_menu_new();
+		g_menu_append(adding, TEXT_ADD_NETWORK, "win.add-network");
+		g_menu_append(adding, TEXT_INVITE_PEOPLE, "win.invite-people");
+		g_menu_append_section(menu, NULL, G_MENU_MODEL(adding));
+		g_object_unref(adding);
+		/* Each network the bouncer keeps opens its own small menu */
+		GMenu *networks = g_menu_new();
+		for (guint index = 0; index < account->networks->len; index++) {
+			CrimsonNetwork *network = g_ptr_array_index(account->networks, index);
+			GMenu *items = g_menu_new();
+			append_network_item(items, TEXT_SERVER_MESSAGES, "win.server-messages", network);
+			append_network_item(items, TEXT_SETTINGS, "win.network-settings", network);
+			append_network_item(items, TEXT_REMOVE, "win.remove-network", network);
+			g_menu_append_submenu(networks, network->name, G_MENU_MODEL(items));
+			g_object_unref(items);
+		}
+		g_menu_append_section(menu, NULL, G_MENU_MODEL(networks));
+		g_object_unref(networks);
 	}
 	GMenu *own = g_menu_new();
 	if (!is_bouncer && account->networks->len)
@@ -84,7 +86,7 @@ GMenuModel *create_account_menu(Session *account) {
 	g_menu_append(own, is_bouncer ? TEXT_BOUNCER_SETTINGS : TEXT_SERVER_SETTINGS, "win.account-settings");
 	g_menu_append(own, TEXT_RECONNECT, "win.reconnect");
 	g_menu_append(own, is_bouncer ? TEXT_REMOVE_BOUNCER : TEXT_REMOVE_SERVER, "win.remove-account");
-	g_menu_append_section(menu, is_bouncer ? describe_account_name(account) : NULL, G_MENU_MODEL(own));
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(own));
 	g_object_unref(own);
 	return G_MENU_MODEL(menu);
 }
