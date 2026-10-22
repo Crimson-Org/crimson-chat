@@ -56,6 +56,7 @@ gboolean can_network(CrimsonNetwork *network, const char *cap) {
 Chat *create_chat(const ChatEvents *events, gpointer data) {
 	Chat *chat = g_new0(Chat, 1);
 	chat->networks = g_list_store_new(CRIMSON_TYPE_NETWORK);
+	chat->accounts = g_list_store_new(CRIMSON_TYPE_ACCOUNT);
 	chat->sessions = g_ptr_array_new();
 	chat->events = *events;
 	chat->data = data;
@@ -118,6 +119,7 @@ static NetworkState read_network_state(CrimsonNetwork *network) {
 static void refresh_network_state(CrimsonNetwork *network) {
 	network->state = read_network_state(network);
 	announce_network_change(network);
+	announce_account_change(network->session->item);
 }
 
 
@@ -130,7 +132,12 @@ static void adopt_network_name(CrimsonNetwork *network) {
 		g_free(network->icon_url);
 		network->icon_url = g_strdup(icon);
 	}
-	if (network->bouncer_id || !name || network->session->record->name)
+	/* A name the user gave wins, and only a bare address gives way to the name the network announces */
+	const char *given = network->bouncer_id ? g_hash_table_lookup(network->attributes, "name")
+		: network->session->record->name;
+	const char *host = network->bouncer_id ? g_hash_table_lookup(network->attributes, "host")
+		: network->session->record->host;
+	if (!name || (given && g_strcmp0(given, host) != 0))
 		return;
 	g_free(network->name);
 	network->name = g_strdup(name);
@@ -176,8 +183,24 @@ static void start_registered_network(CrimsonNetwork *network) {
 }
 
 
+/* A failed login or a first connection that fails says so once, until the account connects again */
+static void report_failure(Session *session, IrcClient *client, IrcClientStatus status, const char *reason) {
+	IrcFailure failure = get_irc_client_failure(client);
+	if (status == IRC_CLIENT_REGISTERED)
+		session->has_reported_failure = FALSE;
+	if (status != IRC_CLIENT_DISCONNECTED || failure == IRC_FAILURE_NONE || failure == IRC_FAILURE_CERTIFICATE
+		|| session->has_reported_failure || !reason)
+		return;
+	session->has_reported_failure = TRUE;
+	g_autofree char *text = g_strdup_printf(TEXT_ACCOUNT_PROBLEM, describe_account_name(session), reason);
+	session->chat->events.show_problem(text, session->chat->data);
+}
+
+
 static void handle_network_status(IrcClient *client, IrcClientStatus status, const char *reason, gpointer data) {
 	CrimsonNetwork *network = data;
+	if (!network->bouncer_id)
+		report_failure(network->session, client, status, reason);
 	g_free(network->error);
 	network->error = g_strdup(reason);
 	if (status == IRC_CLIENT_DISCONNECTED) {
@@ -212,6 +235,8 @@ static CrimsonNetwork *add_network(Session *session, const char *key, const char
 	load_room_cache(network);
 	g_ptr_array_add(session->networks, network);
 	g_list_store_append(session->chat->networks, network);
+	if (session->item)
+		announce_account_change(session->item);
 	return network;
 }
 
@@ -248,6 +273,7 @@ static void drop_network(Session *session, CrimsonNetwork *network) {
 		g_list_store_remove(session->chat->networks, position);
 	g_ptr_array_remove(session->networks, network);
 	g_object_unref(network);
+	announce_account_change(session->item);
 }
 
 
@@ -314,6 +340,10 @@ static void handle_control_received(IrcClient *client, const IrcMessage *message
 
 static void handle_control_status(IrcClient *client, IrcClientStatus status, const char *reason, gpointer data) {
 	Session *session = data;
+	g_free(session->control_error);
+	session->control_error = g_strdup(reason);
+	report_failure(session, client, status, reason);
+	announce_account_change(session->item);
 	if (status == IRC_CLIENT_REGISTERED && !has_irc_cap(get_irc_client_state(client), "soju.im/bouncer-networks"))
 		session->chat->events.show_problem(TEXT_NOT_A_BOUNCER, session->chat->data);
 	if (status == IRC_CLIENT_REGISTERED && !has_irc_cap(get_irc_client_state(client), "soju.im/bouncer-networks-notify"))
@@ -325,7 +355,7 @@ static void handle_control_status(IrcClient *client, IrcClientStatus status, con
 }
 
 
-static void connect_session(Session *session) {
+void connect_session(Session *session) {
 	if (!session->record->is_bouncer) {
 		CrimsonNetwork *network = session->networks->len ? g_ptr_array_index(session->networks, 0) : NULL;
 		if (!network)
@@ -364,13 +394,50 @@ Session *add_account(Chat *chat, AccountRecord *record) {
 	session->chat = chat;
 	session->record = record;
 	session->networks = g_ptr_array_new();
+	session->item = create_account_item(session);
 	g_ptr_array_add(chat->sessions, session);
+	g_list_store_append(chat->accounts, session->item);
 	if (record->is_bouncer)
 		restore_cached_networks(session);
 	else
 		add_network(session, record->id, record->name ? record->name : record->host);
 	connect_session(session);
 	return session;
+}
+
+
+const char *describe_account_name(Session *session) {
+	return session->record->name && *session->record->name ? session->record->name : session->record->host;
+}
+
+
+/* A bouncer is as connected as the link to it, and a direct account as its one network */
+NetworkState read_account_state(Session *session) {
+	if (!session->record->is_bouncer)
+		return session->networks->len ? ((CrimsonNetwork *)g_ptr_array_index(session->networks, 0))->state
+			: NETWORK_DISCONNECTED;
+	IrcClientStatus status = session->control ? get_irc_client_status(session->control) : IRC_CLIENT_DISCONNECTED;
+	return status == IRC_CLIENT_REGISTERED ? NETWORK_CONNECTED : status == IRC_CLIENT_CONNECTING ? NETWORK_CONNECTING
+		: NETWORK_DISCONNECTED;
+}
+
+
+const char *read_account_error(Session *session) {
+	if (session->record->is_bouncer)
+		return session->control_error;
+	return session->networks->len ? ((CrimsonNetwork *)g_ptr_array_index(session->networks, 0))->error : NULL;
+}
+
+
+guint count_account_unread(Session *session, gboolean *has_mention) {
+	guint total = 0;
+	*has_mention = FALSE;
+	for (guint index = 0; index < session->networks->len; index++) {
+		gboolean network_mention = FALSE;
+		total += count_network_unread(g_ptr_array_index(session->networks, index), &network_mention);
+		*has_mention |= network_mention;
+	}
+	return total;
 }
 
 
@@ -411,6 +478,7 @@ void change_account(Session *session, const AccountRecord *record) {
 		network->name = g_strdup(record->name ? record->name : record->host);
 		announce_network_change(network);
 	}
+	announce_account_change(session->item);
 	connect_session(session);
 }
 
@@ -424,6 +492,11 @@ void remove_account(Session *session) {
 		free_irc_client(session->control);
 	}
 	g_ptr_array_remove(chat->sessions, session);
+	guint position = 0;
+	if (g_list_store_find(chat->accounts, session->item, &position))
+		g_list_store_remove(chat->accounts, position);
+	g_object_unref(session->item);
+	g_free(session->control_error);
 	free_account_record(session->record);
 	g_ptr_array_unref(session->networks);
 	g_free(session);

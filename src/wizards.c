@@ -36,6 +36,8 @@ typedef struct {
 	GtkWidget *host, *port, *tls, *nick, *account_row, *account, *password, *username;
 	/* The bouncer choices of the last server step, after the choice of this computer alone */
 	GPtrArray *bouncers, *choices;
+	/* The bouncer a network is being added to, which skips the choice of where to connect from */
+	Session *fixed_bouncer;
 	GtkWidget *finish_button;
 } Guide;
 
@@ -186,6 +188,8 @@ static void collect_bouncers(Guide *guide) {
 
 
 static Session *get_chosen_bouncer(Guide *guide) {
+	if (guide->fixed_bouncer)
+		return guide->fixed_bouncer;
 	for (guint index = 0; index < guide->choices->len; index++) {
 		if (gtk_check_button_get_active(g_ptr_array_index(guide->choices, index)))
 			return index < guide->bouncers->len ? g_ptr_array_index(guide->bouncers, index) : NULL;
@@ -220,6 +224,7 @@ static void finish_server(Guide *guide) {
 		put_attribute(attributes, "sasl-username", account);
 		put_attribute(attributes, "sasl-password", password);
 		add_bouncer_network(bouncer, attributes);
+		choose_account(guide->window, bouncer);
 	} else {
 		AccountRecord *record = g_new0(AccountRecord, 1);
 		record->id = create_account_id();
@@ -230,8 +235,9 @@ static void finish_server(Guide *guide) {
 		record->nick = g_strdup(read_entry(guide->nick));
 		record->sasl_username = g_strdup(account);
 		record->sasl_password = g_strdup(password);
-		add_account(guide->window->chat, record);
+		Session *session = add_account(guide->window->chat, record);
 		save_chat_accounts(guide->window->chat);
+		choose_account(guide->window, session);
 	}
 	adw_dialog_close(guide->dialog);
 }
@@ -266,7 +272,7 @@ static void push_connection_step(Guide *guide) {
 
 
 static void continue_from_nick(Guide *guide) {
-	if (guide->bouncers->len)
+	if (guide->bouncers->len && !guide->fixed_bouncer)
 		push_connection_step(guide);
 	else
 		finish_server(guide);
@@ -317,7 +323,8 @@ static void push_nick_step(Guide *guide) {
 	adw_expander_row_add_row(ADW_EXPANDER_ROW(guide->account_row), guide->account);
 	adw_expander_row_add_row(ADW_EXPANDER_ROW(guide->account_row), guide->password);
 	gtk_list_box_append(GTK_LIST_BOX(list), guide->account_row);
-	GtkWidget *button = create_button(guide->bouncers->len ? TEXT_CONTINUE : TEXT_CONNECT,
+	gboolean has_choice = guide->bouncers->len && !guide->fixed_bouncer;
+	GtkWidget *button = create_button(has_choice ? TEXT_CONTINUE : TEXT_CONNECT,
 		G_CALLBACK(continue_from_nick), guide);
 	watch_required(button, guide->nick, NULL);
 	adw_navigation_view_push(guide->pages, create_step(TEXT_NICK_TITLE, NULL, "avatar-default-symbolic", list,
@@ -384,8 +391,9 @@ static GtkWidget *create_network_row(const char *name, const char *about, gboole
 }
 
 
-void show_server_guide(Window *window) {
-	Guide *guide = create_guide(window, TEXT_ADD_SERVER_TITLE);
+void show_server_guide(Window *window, Session *bouncer) {
+	Guide *guide = create_guide(window, bouncer ? TEXT_ADD_NETWORK : TEXT_ADD_SERVER_TITLE);
+	guide->fixed_bouncer = bouncer;
 	collect_bouncers(guide);
 	GtkWidget *list = create_boxed_list();
 	for (guint index = 0; index < G_N_ELEMENTS(KNOWN_NETWORKS); index++)
@@ -410,8 +418,9 @@ static void finish_bouncer(Guide *guide) {
 	record->nick = g_strdup(read_entry(guide->username));
 	record->sasl_username = g_strdup(read_entry(guide->username));
 	record->sasl_password = g_strdup(read_entry(guide->password));
-	add_account(guide->window->chat, record);
+	Session *session = add_account(guide->window->chat, record);
 	save_chat_accounts(guide->window->chat);
+	choose_account(guide->window, session);
 	adw_dialog_close(guide->dialog);
 }
 
@@ -497,8 +506,7 @@ static void create_invite(AdwAlertDialog *alert, const char *response, gpointer 
 }
 
 
-void show_invite_dialog(Window *window, CrimsonNetwork *network) {
-	Session *session = network->session;
+void show_invite_dialog(Window *window, Session *session) {
 	if (!session->record->is_bouncer) {
 		show_toast(window, TEXT_INVITES_NEED_BOUNCER);
 		return;

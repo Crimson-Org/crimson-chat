@@ -21,6 +21,8 @@ typedef struct {
 /* Every account and the networks they reach, in the order the rail shows them */
 struct Chat {
 	GListStore *networks;
+	/* The servers and bouncers the user added, as CrimsonAccount items in the order the rail shows them */
+	GListStore *accounts;
 	GPtrArray *sessions;
 	ChatEvents events;
 	gpointer data;
@@ -34,7 +36,10 @@ struct Session {
 	Chat *chat;
 	AccountRecord *record;
 	IrcClient *control;
+	char *control_error;
 	GPtrArray *networks;
+	CrimsonAccount *item;
+	gboolean has_reported_failure;
 };
 
 /* Work in progress on a network, kept per connection */
@@ -57,6 +62,11 @@ void stop_chat(Chat *chat);
 Session *add_account(Chat *chat, AccountRecord *record);
 void change_account(Session *session, const AccountRecord *record);
 void remove_account(Session *session);
+void connect_session(Session *session);
+const char *describe_account_name(Session *session);
+NetworkState read_account_state(Session *session);
+const char *read_account_error(Session *session);
+guint count_account_unread(Session *session, gboolean *has_mention);
 void trust_certificate(Session *session, const char *hash);
 void save_chat_accounts(Chat *chat);
 /* Saves the room list soon, so many changes in a row write the file once */

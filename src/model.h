@@ -97,6 +97,19 @@ struct _CrimsonNetwork {
 	GHashTable *attributes;
 };
 
+#define CRIMSON_TYPE_ACCOUNT (crimson_account_get_type())
+G_DECLARE_FINAL_TYPE(CrimsonAccount, crimson_account, CRIMSON, ACCOUNT, GObject)
+
+/* A server or bouncer the user added, as the rail lists it, which signals changed when its name, state or
+ * networks change */
+struct _CrimsonAccount {
+	GObject parent;
+	Session *session;
+};
+
+CrimsonAccount *create_account_item(Session *session);
+void announce_account_change(CrimsonAccount *account);
+
 CrimsonMessage *create_message(MessageKind kind, const char *sender, const char *text, gint64 time);
 void announce_message_change(CrimsonMessage *message);
 /* Adds or removes one nick's reaction, returning whether anything changed */

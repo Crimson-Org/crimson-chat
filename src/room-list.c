@@ -14,13 +14,14 @@
 
 struct RoomList {
 	Window *window;
-	GtkWidget *box, *header, *title_stack, *search, *title, *subtitle, *menu_button, *network_button;
+	GtkWidget *box, *header, *title_stack, *search, *title, *subtitle, *menu_button, *account_button;
+	GMenuModel *server_menu, *bouncer_menu;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
 	GtkSingleSelection *selection;
 	GtkFlattenListModel *rooms;
-	CrimsonNetwork *network;
+	Session *account;
 	gboolean is_choosing;
 };
 
@@ -28,7 +29,7 @@ struct RoomList {
 static gboolean keep_room(gpointer item, gpointer data) {
 	CrimsonRoom *room = item;
 	RoomList *list = data;
-	if (list->network ? room->network != list->network : room->kind == ROOM_SERVER)
+	if (list->account ? room->network->session != list->account : room->kind == ROOM_SERVER)
 		return FALSE;
 	const char *search = gtk_editable_get_text(GTK_EDITABLE(list->search));
 	if (!*search)
@@ -50,6 +51,14 @@ static int order_rooms(gconstpointer first, gconstpointer second, gpointer data)
 }
 
 
+/* Rooms from several networks side by side carry their network's name, since a channel name alone is ambiguous */
+static gboolean mixes_networks(RoomList *list) {
+	if (list->account)
+		return list->account->networks->len > 1;
+	return g_list_model_get_n_items(G_LIST_MODEL(list->window->chat->networks)) > 1;
+}
+
+
 static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	AdwAvatar *avatar = g_object_get_data(G_OBJECT(row), "avatar");
 	GtkWidget *name = g_object_get_data(G_OBJECT(row), "name");
@@ -62,6 +71,10 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	gtk_label_set_text(GTK_LABEL(name), title);
 	gtk_image_set_from_icon_name(GTK_IMAGE(kind), "network-server-symbolic");
 	gtk_widget_set_visible(kind, room->kind == ROOM_SERVER);
+	GtkWidget *network = g_object_get_data(G_OBJECT(row), "network");
+	RoomList *list = g_object_get_data(G_OBJECT(row), "list");
+	gtk_label_set_text(GTK_LABEL(network), room->network->name);
+	gtk_widget_set_visible(network, room->kind != ROOM_SERVER && mixes_networks(list));
 	g_autofree char *moment = format_list_time(room->last_time);
 	gtk_label_set_text(GTK_LABEL(time), moment);
 	g_autofree char *line = describe_room_preview(room);
@@ -103,10 +116,12 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
 	GtkWidget *kind = gtk_image_new();
 	gtk_widget_add_css_class(kind, "room-kind");
-	GtkWidget *name = create_label("room-name", TRUE);
+	GtkWidget *name = create_label("room-name", FALSE);
+	GtkWidget *network = create_label("room-network", TRUE);
 	GtkWidget *time = create_label("room-time", FALSE);
 	gtk_box_append(GTK_BOX(top), kind);
 	gtk_box_append(GTK_BOX(top), name);
+	gtk_box_append(GTK_BOX(top), network);
 	gtk_box_append(GTK_BOX(top), time);
 	GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 	GtkWidget *preview = create_label("room-preview", TRUE);
@@ -124,6 +139,8 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	g_object_set_data(G_OBJECT(row), "preview", preview);
 	g_object_set_data(G_OBJECT(row), "badge", badge);
 	g_object_set_data(G_OBJECT(row), "kind", kind);
+	g_object_set_data(G_OBJECT(row), "network", network);
+	g_object_set_data(G_OBJECT(row), "list", data);
 	gtk_list_item_set_child(item, row);
 }
 
@@ -198,17 +215,21 @@ static void change_search(GtkSearchEntry *entry, RoomList *list) {
 }
 
 
-static GMenuModel *create_network_menu(void) {
+/* The menu of a chosen server or bouncer, where a bouncer also adds networks and invites people */
+static GMenuModel *create_account_menu(gboolean is_bouncer) {
 	GMenu *menu = g_menu_new();
 	g_menu_append(menu, TEXT_JOIN_ROOM, "win.join-room");
 	g_menu_append(menu, TEXT_MESSAGE_SOMEONE, "win.message-someone");
-	GMenu *network = g_menu_new();
-	g_menu_append(network, TEXT_INVITE_PEOPLE, "win.invite-people");
-	g_menu_append(network, TEXT_NETWORK_SETTINGS, "win.edit-network");
-	g_menu_append(network, TEXT_RECONNECT, "win.reconnect");
-	g_menu_append(network, TEXT_REMOVE_NETWORK, "win.remove-network");
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(network));
-	g_object_unref(network);
+	GMenu *account = g_menu_new();
+	if (is_bouncer) {
+		g_menu_append(account, TEXT_ADD_NETWORK, "win.add-network");
+		g_menu_append(account, TEXT_INVITE_PEOPLE, "win.invite-people");
+	}
+	g_menu_append(account, is_bouncer ? TEXT_BOUNCER_SETTINGS : TEXT_SERVER_SETTINGS, "win.account-settings");
+	g_menu_append(account, TEXT_RECONNECT, "win.reconnect");
+	g_menu_append(account, is_bouncer ? TEXT_REMOVE_BOUNCER : TEXT_REMOVE_SERVER, "win.remove-account");
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(account));
+	g_object_unref(account);
 	return G_MENU_MODEL(menu);
 }
 
@@ -239,12 +260,12 @@ static GtkWidget *create_header(RoomList *list) {
 	gtk_stack_add_named(GTK_STACK(list->title_stack), titles, "network");
 	gtk_widget_set_hexpand(list->title_stack, TRUE);
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->title_stack);
-	list->network_button = gtk_menu_button_new();
-	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(list->network_button), "view-more-symbolic");
-	g_autoptr(GMenuModel) network_menu = create_network_menu();
-	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(list->network_button), network_menu);
-	gtk_widget_set_tooltip_text(list->network_button, TEXT_NETWORK_MENU);
-	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->network_button);
+	list->account_button = gtk_menu_button_new();
+	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(list->account_button), "view-more-symbolic");
+	list->server_menu = create_account_menu(FALSE);
+	list->bouncer_menu = create_account_menu(TRUE);
+	gtk_widget_set_tooltip_text(list->account_button, TEXT_NETWORK_MENU);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->account_button);
 	return list->header;
 }
 
@@ -267,6 +288,22 @@ static GtkWidget *create_empty_page(void) {
 	gtk_box_append(GTK_BOX(buttons), server);
 	gtk_box_append(GTK_BOX(buttons), bouncer);
 	adw_status_page_set_child(ADW_STATUS_PAGE(page), buttons);
+	return page;
+}
+
+
+/* A bouncer without networks yet offers to add one, instead of an empty list that looks like nothing happened */
+static GtkWidget *create_no_networks_page(void) {
+	GtkWidget *page = adw_status_page_new();
+	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), "network-server-symbolic");
+	adw_status_page_set_title(ADW_STATUS_PAGE(page), TEXT_NO_NETWORKS_TITLE);
+	gtk_widget_add_css_class(page, "compact");
+	GtkWidget *button = gtk_button_new_with_label(TEXT_ADD_NETWORK);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), "win.add-network");
+	gtk_widget_add_css_class(button, "pill");
+	gtk_widget_add_css_class(button, "suggested-action");
+	gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
+	adw_status_page_set_child(ADW_STATUS_PAGE(page), button);
 	return page;
 }
 
@@ -317,6 +354,7 @@ RoomList *create_room_list(Window *window) {
 	gtk_stack_set_transition_type(GTK_STACK(list->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_empty_page(), "empty");
+	gtk_stack_add_named(GTK_STACK(list->stack), create_no_networks_page(), "no-networks");
 	gtk_box_append(GTK_BOX(list->box), list->stack);
 	set_room_list_narrow(list, FALSE);
 	return list;
@@ -328,8 +366,8 @@ GtkWidget *get_room_list_widget(RoomList *list) {
 }
 
 
-static const char *describe_network_state(CrimsonNetwork *network) {
-	switch (network->state) {
+static const char *describe_state(NetworkState state) {
+	switch (state) {
 	case NETWORK_CONNECTED: return TEXT_CONNECTED;
 	case NETWORK_CONNECTING: return TEXT_CONNECTING;
 	default: return TEXT_DISCONNECTED;
@@ -337,25 +375,41 @@ static const char *describe_network_state(CrimsonNetwork *network) {
 }
 
 
+/* A chosen account names itself with its state, and how many networks or rooms it holds */
+static char *describe_account(Session *account) {
+	NetworkState state = read_account_state(account);
+	const char *error = read_account_error(account);
+	if (state == NETWORK_DISCONNECTED && error)
+		return g_strdup_printf("%s · %s", TEXT_DISCONNECTED, error);
+	if (account->record->is_bouncer)
+		return g_strdup_printf(account->networks->len == 1 ? TEXT_BOUNCER_SUMMARY_ONE : TEXT_BOUNCER_SUMMARY,
+			describe_state(state), account->networks->len);
+	CrimsonNetwork *network = account->networks->len ? g_ptr_array_index(account->networks, 0) : NULL;
+	guint rooms = network ? g_list_model_get_n_items(G_LIST_MODEL(network->rooms)) - 1 : 0;
+	return g_strdup_printf(TEXT_NETWORK_SUMMARY, describe_state(state), rooms);
+}
+
+
 void refresh_room_list_header(RoomList *list) {
-	gboolean has_networks = g_list_model_get_n_items(G_LIST_MODEL(list->window->chat->networks)) > 0;
-	gboolean is_empty = list->window->chat->has_started && !has_networks;
-	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), is_empty ? "empty" : "list");
-	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), list->network ? "network" : "search");
-	gtk_widget_set_visible(list->network_button, list->network != NULL);
-	if (!list->network)
+	Chat *chat = list->window->chat;
+	gboolean has_accounts = chat->sessions->len > 0;
+	const char *page = chat->has_started && !has_accounts ? "empty"
+		: list->account && list->account->record->is_bouncer && !list->account->networks->len ? "no-networks" : "list";
+	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), page);
+	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), list->account ? "network" : "search");
+	gtk_widget_set_visible(list->account_button, list->account != NULL);
+	if (!list->account)
 		return;
-	gtk_label_set_text(GTK_LABEL(list->title), list->network->name);
-	guint rooms = g_list_model_get_n_items(G_LIST_MODEL(list->network->rooms)) - 1;
-	g_autofree char *subtitle = list->network->state == NETWORK_DISCONNECTED && list->network->error
-		? g_strdup_printf("%s · %s", TEXT_DISCONNECTED, list->network->error)
-		: g_strdup_printf(TEXT_NETWORK_SUMMARY, describe_network_state(list->network), rooms);
+	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(list->account_button), list->account->record->is_bouncer
+		? list->bouncer_menu : list->server_menu);
+	gtk_label_set_text(GTK_LABEL(list->title), describe_account_name(list->account));
+	g_autofree char *subtitle = describe_account(list->account);
 	gtk_label_set_text(GTK_LABEL(list->subtitle), subtitle);
 }
 
 
-void show_room_list_network(RoomList *list, CrimsonNetwork *network) {
-	list->network = network;
+void show_room_list_account(RoomList *list, Session *account) {
+	list->account = account;
 	gtk_filter_changed(GTK_FILTER(list->filter), GTK_FILTER_CHANGE_DIFFERENT);
 	select_listed_room(list, get_open_room(list->window));
 	refresh_room_list_header(list);

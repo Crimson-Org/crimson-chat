@@ -19,8 +19,8 @@ struct Window {
 	GtkWidget *rail, *rail_list, *all_button;
 	RoomList *room_list;
 	Conversation *conversation;
-	/* The network the room list shows, or NULL for every chat */
-	CrimsonNetwork *network;
+	/* The server or bouncer the room list shows, or NULL for every chat */
+	Session *account;
 	gboolean is_narrow, is_quitting;
 	guint refresh_source;
 	Tray *tray;
@@ -31,7 +31,7 @@ Window *create_window(GtkApplication *application, Chat *chat);
 Window *get_main_window(void);
 void open_room(Window *window, CrimsonRoom *room);
 CrimsonRoom *get_open_room(Window *window);
-void choose_network(Window *window, CrimsonNetwork *network);
+void choose_account(Window *window, Session *account);
 void show_toast(Window *window, const char *text);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);
@@ -47,7 +47,7 @@ void style_unread_badge(GtkWidget *badge, guint count, gboolean has_mention);
 /* Room list */
 RoomList *create_room_list(Window *window);
 GtkWidget *get_room_list_widget(RoomList *list);
-void show_room_list_network(RoomList *list, CrimsonNetwork *network);
+void show_room_list_account(RoomList *list, Session *account);
 void select_listed_room(RoomList *list, CrimsonRoom *room);
 void resort_room_list(RoomList *list);
 void set_room_list_narrow(RoomList *list, gboolean is_narrow);

@@ -79,6 +79,14 @@ headerbar.top-bar menubutton > button {
 	min-height: 44px;
 }
 
+.rail-kind {
+	-gtk-icon-size: 14px;
+	padding: 4px;
+	margin: -4px;
+	border-radius: 9999px;
+	background-color: var(--rail-bg);
+}
+
 .rail-badge {
 	margin: -4px -6px;
 	box-shadow: 0 0 0 2px var(--rail-bg);
@@ -122,6 +130,7 @@ headerbar.top-bar menubutton > button {
 }
 
 .room-list > row:selected .room-time,
+.room-list > row:selected .room-network,
 .room-list > row:selected .room-preview,
 .room-list > row:selected .room-kind {
 	color: alpha(#ffffff, 0.8);
@@ -137,6 +146,7 @@ headerbar.top-bar menubutton > button {
 
 .room-time,
 .room-preview,
+.room-network,
 .room-kind {
 	color: alpha(currentColor, 0.55);
 }
@@ -272,7 +282,6 @@ headerbar.top-bar menubutton > button {
 
 .image-preview {
 	border-radius: 12px;
-	overflow: hidden;
 	margin: 4px 0;
 	animation: pop-in 250ms ease-out;
 }

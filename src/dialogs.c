@@ -245,20 +245,31 @@ static void save_bouncer_form(GtkButton *button, BouncerForm *form) {
 }
 
 
-static void finish_bouncer_removal(AdwAlertDialog *alert, const char *response, BouncerForm *form) {
+static void finish_bouncer_removal(AdwAlertDialog *alert, const char *response, gpointer data) {
+	Session *session = data;
+	AdwDialog *settings = g_object_get_data(G_OBJECT(alert), "settings");
 	if (g_strcmp0(response, "remove") != 0)
 		return;
-	adw_dialog_close(form->dialog);
-	remove_account(form->editing);
+	if (settings)
+		adw_dialog_close(settings);
+	forget_account_in_window(get_main_window(), session);
+	remove_account(session);
 }
 
 
-static void ask_bouncer_removal(GtkButton *button, BouncerForm *form) {
+/* Asks before removing a bouncer login, over its settings when they are open and over the window otherwise */
+static void ask_bouncer_removal(Window *window, Session *session, AdwDialog *settings) {
 	AdwDialog *alert = adw_alert_dialog_new(TEXT_REMOVE_BOUNCER_TITLE, TEXT_REMOVE_BOUNCER_BODY);
 	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_REMOVE, NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
-	g_signal_connect(alert, "response", G_CALLBACK(finish_bouncer_removal), form);
-	adw_dialog_present(alert, GTK_WIDGET(form->dialog));
+	g_object_set_data(G_OBJECT(alert), "settings", settings);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_bouncer_removal), session);
+	adw_dialog_present(alert, settings ? GTK_WIDGET(settings) : GTK_WIDGET(window->window));
+}
+
+
+static void click_bouncer_removal(GtkButton *button, BouncerForm *form) {
+	ask_bouncer_removal(form->window, form->editing, form->dialog);
 }
 
 
@@ -279,7 +290,7 @@ void show_bouncer_dialog(Window *window, Session *editing) {
 	gtk_widget_add_css_class(remove, "destructive-action");
 	gtk_widget_add_css_class(remove, "pill");
 	gtk_widget_set_halign(remove, GTK_ALIGN_CENTER);
-	g_signal_connect(remove, "clicked", G_CALLBACK(ask_bouncer_removal), form);
+	g_signal_connect(remove, "clicked", G_CALLBACK(click_bouncer_removal), form);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(danger), remove);
 	form->dialog = create_form_dialog(TEXT_BOUNCER_SETTINGS, TEXT_SAVE, page, &form->save_button);
 	g_object_set_data_full(G_OBJECT(form->dialog), "form", form, g_free);
@@ -408,11 +419,32 @@ static void finish_removal(AdwAlertDialog *alert, const char *response, gpointer
 	CrimsonRoom *open = get_open_room(window);
 	if (open && open->network == network)
 		show_conversation_room(window->conversation, NULL);
-	choose_network(window, NULL);
-	if (network->bouncer_id)
+	if (network->bouncer_id) {
 		delete_bouncer_network(network);
-	else
-		remove_account(network->session);
+		return;
+	}
+	forget_account_in_window(window, network->session);
+	remove_account(network->session);
+}
+
+
+/* The window lets go of an account before it goes, since the rail and the open room point into it */
+void forget_account_in_window(Window *window, Session *session) {
+	CrimsonRoom *open = get_open_room(window);
+	if (open && open->network->session == session)
+		show_conversation_room(window->conversation, NULL);
+	if (window->account == session)
+		choose_account(window, NULL);
+}
+
+
+void confirm_account_removal(Window *window, Session *session) {
+	if (!session->record->is_bouncer) {
+		if (session->networks->len)
+			confirm_network_removal(window, g_ptr_array_index(session->networks, 0));
+		return;
+	}
+	ask_bouncer_removal(window, session, NULL);
 }
 
 

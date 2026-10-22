@@ -6,14 +6,37 @@ enum {
 };
 
 static guint message_signals[SIGNAL_COUNT], room_signals[SIGNAL_COUNT], network_signals[SIGNAL_COUNT];
+static guint account_signals[SIGNAL_COUNT];
 
 G_DEFINE_FINAL_TYPE(CrimsonMessage, crimson_message, G_TYPE_OBJECT)
 G_DEFINE_FINAL_TYPE(CrimsonRoom, crimson_room, G_TYPE_OBJECT)
 G_DEFINE_FINAL_TYPE(CrimsonNetwork, crimson_network, G_TYPE_OBJECT)
+G_DEFINE_FINAL_TYPE(CrimsonAccount, crimson_account, G_TYPE_OBJECT)
 
 
 static guint add_changed_signal(GType type) {
 	return g_signal_new("changed", type, G_SIGNAL_RUN_LAST, 0, NULL, NULL, NULL, G_TYPE_NONE, 0);
+}
+
+
+static void crimson_account_class_init(CrimsonAccountClass *class) {
+	account_signals[SIGNAL_CHANGED] = add_changed_signal(CRIMSON_TYPE_ACCOUNT);
+}
+
+
+static void crimson_account_init(CrimsonAccount *account) {
+}
+
+
+CrimsonAccount *create_account_item(Session *session) {
+	CrimsonAccount *account = g_object_new(CRIMSON_TYPE_ACCOUNT, NULL);
+	account->session = session;
+	return account;
+}
+
+
+void announce_account_change(CrimsonAccount *account) {
+	g_signal_emit(account, account_signals[SIGNAL_CHANGED], 0);
 }
 
 

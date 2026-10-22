@@ -290,6 +290,7 @@ static GtkWidget *create_preview(const char *url, GdkTexture *texture) {
 	gtk_picture_set_content_fit(GTK_PICTURE(picture), GTK_CONTENT_FIT_COVER);
 	gtk_widget_set_size_request(picture, (int)(width * scale), (int)(height * scale));
 	gtk_widget_add_css_class(picture, "image-preview");
+	gtk_widget_set_overflow(picture, GTK_OVERFLOW_HIDDEN);
 	gtk_widget_set_cursor_from_name(picture, "pointer");
 	GtkGesture *click = gtk_gesture_click_new();
 	g_signal_connect_data(click, "released", G_CALLBACK(open_preview), g_strdup(url), free_link, 0);

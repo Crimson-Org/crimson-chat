@@ -128,7 +128,7 @@ static void open_settings(GSimpleAction *action, GVariant *parameter, gpointer a
 static void add_server(GSimpleAction *action, GVariant *parameter, gpointer application) {
 	Window *window = get_main_window();
 	if (window)
-		show_server_guide(window);
+		show_server_guide(window, NULL);
 }
 
 
