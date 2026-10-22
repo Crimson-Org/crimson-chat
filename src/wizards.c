@@ -4,7 +4,7 @@
 #include "wizards.h"
 
 #define GUIDE_WIDTH 460
-#define GUIDE_HEIGHT 620
+#define GUIDE_HEIGHT 680
 #define CONTENT_WIDTH 400
 #define ICON_SIZE 72
 #define NETWORK_AVATAR_SIZE 40
