@@ -617,7 +617,6 @@ Conversation *create_conversation(Window *window) {
 	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, open_person,
 		conversation};
 	conversation->stack = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");
 	return conversation;
@@ -694,12 +693,13 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);
 	fill_header(conversation);
+	/* History is asked for first, so a room still loading does not show itself as empty for a moment */
+	if (!room->has_history)
+		request_latest_history(room);
 	show_empty_note(conversation);
 	adw_overlay_split_view_set_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split),
 		room->kind == ROOM_CHANNEL && conversation->wants_members);
 	refresh_members_later(conversation);
-	if (!room->has_history)
-		request_latest_history(room);
 	pin_to_bottom(conversation);
 	run_after_frame(conversation->list_view, settle_at_bottom, conversation);
 }

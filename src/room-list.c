@@ -331,7 +331,6 @@ RoomList *create_room_list(Window *window) {
 	gtk_widget_add_css_class(list->box, "room-column");
 	gtk_box_append(GTK_BOX(list->box), create_header(list));
 	list->stack = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(list->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");
 	gtk_box_append(GTK_BOX(list->box), list->stack);

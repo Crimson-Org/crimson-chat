@@ -139,7 +139,6 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	g_signal_connect(message, "clicked", G_CALLBACK(send_message), view);
 	gtk_box_append(GTK_BOX(box), message);
 	view->stack = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(view->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_set_vhomogeneous(GTK_STACK(view->stack), FALSE);
 	gtk_stack_add_named(GTK_STACK(view->stack), adw_spinner_new(), "loading");
 	view->rows = gtk_list_box_new();

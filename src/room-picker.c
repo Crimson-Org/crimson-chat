@@ -251,7 +251,6 @@ AdwNavigationPage *create_room_picker_page(Window *window, CrimsonNetwork *netwo
 	picker->rooms = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)free_room_copy);
 	picker->chosen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	picker->stack = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(picker->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(picker->stack), create_loading_page(), "loading");
 	gtk_stack_add_named(GTK_STACK(picker->stack), create_rooms_page(picker), "rooms");
 	GtkWidget *toolbar = adw_toolbar_view_new();

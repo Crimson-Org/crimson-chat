@@ -751,7 +751,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	adw_navigation_split_view_set_content(window->split, content);
 	g_signal_connect(window->split, "notify::collapsed", G_CALLBACK(follow_collapse), window);
 	window->pages = gtk_stack_new();
-	gtk_stack_set_transition_type(GTK_STACK(window->pages), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	gtk_stack_add_named(GTK_STACK(window->pages), GTK_WIDGET(window->split), "chats");
 	gtk_stack_add_named(GTK_STACK(window->pages), create_welcome(window), "welcome");
 	g_signal_connect(chat->networks, "items-changed", G_CALLBACK(follow_networks), window);
