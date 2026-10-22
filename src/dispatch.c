@@ -612,15 +612,18 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 			return;
 	}
 	add_status(network->server_room, message, text);
-	/* A missing message of the day and a taken nick during registration are routine, not problems */
-	if (number >= 400 && number < 600 && number != 422 && number != 433)
+	/* A missing message of the day and a taken nick during registration are routine, and an unknown command
+	 * answers something the app sent on its own, not something the user did */
+	if (number >= 400 && number < 600 && number != 421 && number != 422 && number != 433)
 		network->session->chat->events.show_problem(get_last_parameter(message), network->session->chat->data);
 }
 
 
 static void deliver_standard_reply(CrimsonNetwork *network, const IrcMessage *message) {
 	add_status(network->server_room, message, get_last_parameter(message));
-	if (g_str_equal(message->command, "FAIL"))
+	/* Profile details the app sets on every connection are quietly left out where the server lacks them */
+	gboolean is_quiet = g_strcmp0(get_irc_parameter(message, 0), "METADATA") == 0;
+	if (g_str_equal(message->command, "FAIL") && !is_quiet)
 		network->session->chat->events.show_problem(get_last_parameter(message), network->session->chat->data);
 }
 

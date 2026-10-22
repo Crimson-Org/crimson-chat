@@ -185,21 +185,21 @@ static void refresh_welcome(Window *window) {
 }
 
 
-/* The connection behind the chosen server that is down: its bouncer when it goes through one, or itself */
-static const char *find_lost_connection(Window *window, gboolean *was_connected) {
+/* The connection behind the chosen server that is down: its bouncer when it goes through one, or itself; it can
+ * be retried from here unless the bouncer is the one reconnecting to the server */
+static const char *find_lost_connection(Window *window, gboolean *was_connected, gboolean *can_retry) {
 	CrimsonNetwork *network = window->network;
 	if (!network)
 		return NULL;
 	Session *session = network->session;
-	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED) {
-		*was_connected = session->has_connected;
+	*was_connected = session->has_connected;
+	*can_retry = TRUE;
+	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED)
 		return describe_account_name(session);
-	}
-	if (network->state != NETWORK_CONNECTED) {
-		*was_connected = session->has_connected;
-		return network->name;
-	}
-	return NULL;
+	if (network->state == NETWORK_CONNECTED)
+		return NULL;
+	*can_retry = !network->bouncer_id;
+	return network->name;
 }
 
 
@@ -213,8 +213,8 @@ static gboolean reveal_banner(gpointer data) {
 
 /* A lost connection shows until it is back, and coming back says so once */
 static void refresh_banner(Window *window) {
-	gboolean was_connected = FALSE;
-	const char *lost = window->chat->has_started ? find_lost_connection(window, &was_connected) : NULL;
+	gboolean was_connected = FALSE, can_retry = FALSE;
+	const char *lost = window->chat->has_started ? find_lost_connection(window, &was_connected, &can_retry) : NULL;
 	if (!lost) {
 		g_clear_handle_id(&window->banner_source, g_source_remove);
 		if (adw_banner_get_revealed(window->banner) && window->lost_name) {
@@ -228,6 +228,7 @@ static void refresh_banner(Window *window) {
 	g_autofree char *title = g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS,
 		lost);
 	adw_banner_set_title(window->banner, title);
+	adw_banner_set_button_label(window->banner, can_retry ? TEXT_RETRY : NULL);
 	g_free(window->lost_name);
 	window->lost_name = was_connected ? g_strdup(lost) : NULL;
 	if (!adw_banner_get_revealed(window->banner) && !window->banner_source)
@@ -723,7 +724,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	apply_window_geometry(GTK_WINDOW(window->window), &window->geometry);
 	gtk_widget_set_size_request(GTK_WIDGET(window->window), 360, 480);
 	window->banner = ADW_BANNER(adw_banner_new(""));
-	adw_banner_set_button_label(window->banner, TEXT_RETRY);
 	g_signal_connect(window->banner, "button-clicked", G_CALLBACK(retry_now), window);
 	window->room_list = create_room_list(window);
 	/* The banner sits in the chat list under its search field, next to the server it is about */

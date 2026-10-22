@@ -662,6 +662,33 @@ static void handle_invite_command(Downstream *downstream, const IrcMessage *mess
 }
 
 
+/* Commands that only work where the network has the capability behind them */
+static const struct {
+	const char *command, *cap;
+} NETWORK_COMMANDS[] = {
+	{"METADATA", "draft/metadata-2"}, {"REDACT", "draft/message-redaction"}, {"SETNAME", "setname"},
+	{"RENAME", "draft/channel-rename"},
+};
+
+
+/* A client can send such a command before it learns the network lacks it, as while the bouncer reconnects, so the
+ * bouncer answers for the network instead of passing on a command it would only call unknown */
+static void forward_supported(Downstream *downstream, const IrcMessage *message) {
+	IrcClient *client = downstream->upstream->client;
+	gboolean is_registered = get_irc_client_status(client) == IRC_CLIENT_REGISTERED;
+	for (guint index = 0; index < G_N_ELEMENTS(NETWORK_COMMANDS); index++) {
+		if (!g_str_equal(message->command, NETWORK_COMMANDS[index].command))
+			continue;
+		if (is_registered && has_irc_cap(get_irc_client_state(client), NETWORK_COMMANDS[index].cap))
+			break;
+		send_from_bouncer(downstream, "FAIL", message->command, "UNSUPPORTED",
+			"The network does not support this", NULL);
+		return;
+	}
+	forward_to_upstream(downstream->upstream, downstream, message);
+}
+
+
 static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
 	Downstream *downstream = data;
 	const char *command = message->command;
@@ -686,7 +713,7 @@ static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data
 	else if (g_str_equal(command, "MARKREAD"))
 		answer_read_marker(downstream, message);
 	else
-		forward_to_upstream(downstream->upstream, downstream, message);
+		forward_supported(downstream, message);
 }
 
 
