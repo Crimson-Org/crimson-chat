@@ -18,7 +18,8 @@ typedef struct Downstream Downstream;
 struct Bouncer {
 	Database *database;
 	GTlsCertificate *certificate;
-	GSocketService *service;
+	GSocketService *irc_service, *web_service;
+	char *irc_port, *web_port;
 	GPtrArray *users;
 	GList *downstreams;
 	/* The name invites greet people with, and the certificate fingerprint they compare */
@@ -74,7 +75,7 @@ Bouncer *create_bouncer(Database *database, GTlsCertificate *certificate, const 
 BouncerUser *register_user(Bouncer *bouncer, const char *name, const char *password);
 gboolean is_valid_user_name(const char *name);
 BouncerUser *find_user(Bouncer *bouncer, gint64 id);
-gboolean listen_bouncer(Bouncer *bouncer, const char *address, GError **error);
+gboolean listen_bouncer(Bouncer *bouncer, const char *irc_address, const char *web_address, GError **error);
 BouncerUser *log_in_user(Bouncer *bouncer, const char *name, const char *password);
 Upstream *find_upstream(BouncerUser *user, const char *network_id);
 void add_upstream(BouncerUser *user, const NetworkRecord *record);
@@ -93,10 +94,10 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 char *get_upstream_nick(Upstream *upstream);
 
 /* Downstream */
-void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, GBytes *first_bytes);
+void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address);
 
 /* Website */
-void serve_web(Bouncer *bouncer, GIOStream *connection, GBytes *first_bytes);
+void serve_web(Bouncer *bouncer, GIOStream *connection);
 /* Creates an invite and returns its token */
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses);
 void close_downstream(Downstream *downstream);

@@ -71,10 +71,10 @@ static void open_requested_room(CrimsonRoom *room, gpointer data) {
 }
 
 
-static void share_invite(Session *session, const char *token, const char *uses, gpointer data) {
+static void share_invite(Session *session, const char *token, const char *uses, const char *port, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
-		show_invite_link(window, session, token, uses);
+		show_invite_link(window, session, token, uses, port);
 }
 
 

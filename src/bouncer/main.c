@@ -16,10 +16,11 @@
 #define KEY_FILE "key.pem"
 #define GROUP "bouncer"
 #define DEFAULT_LISTEN "6697"
+#define DEFAULT_WEB "8443"
 #define FAILURE_STATUS 1
 
 typedef struct {
-	char *listen;
+	char *listen, *web;
 	gboolean changes_password, shows_version;
 } Options;
 
@@ -50,6 +51,8 @@ static char *build_path(const char *base, const char *name) {
 static gboolean read_options(int *argument_count, char ***arguments, Options *options) {
 	const GOptionEntry ENTRIES[] = {
 		{"listen", 'l', 0, G_OPTION_ARG_STRING, &options->listen, "Listen on a port, or an address and port",
+			"ADDRESS"},
+		{"web", 'w', 0, G_OPTION_ARG_STRING, &options->web, "Serve the website on a port, or an address and port",
 			"ADDRESS"},
 		{"password", 'p', 0, G_OPTION_ARG_NONE, &options->changes_password, "Change a user's password", NULL},
 		{"version", 'v', 0, G_OPTION_ARG_NONE, &options->shows_version, "Print the version", NULL},
@@ -136,6 +139,8 @@ static GKeyFile *load_config(void) {
 	g_key_file_set_string(config, GROUP, "listen", DEFAULT_LISTEN);
 	g_key_file_set_comment(config, GROUP, "listen", " A port, or an address and port such as 127.0.0.1:6697",
 		NULL);
+	g_key_file_set_string(config, GROUP, "web", DEFAULT_WEB);
+	g_key_file_set_comment(config, GROUP, "web", " The website for signing in and invites, on a port browsers allow", NULL);
 	g_key_file_set_string(config, GROUP, "name", g_get_host_name());
 	g_key_file_set_comment(config, GROUP, "name", " The name invites greet people with", NULL);
 	g_key_file_save_to_file(config, path, NULL);
@@ -168,15 +173,18 @@ static int run_bouncer(Options *options) {
 		return FAILURE_STATUS;
 	g_autofree char *configured = g_key_file_get_string(config, GROUP, "listen", NULL);
 	const char *listen = options->listen ? options->listen : configured ? configured : DEFAULT_LISTEN;
+	g_autofree char *configured_web = g_key_file_get_string(config, GROUP, "web", NULL);
+	const char *web = options->web ? options->web : configured_web ? configured_web : DEFAULT_WEB;
 	g_autofree char *name = g_key_file_get_string(config, GROUP, "name", NULL);
 	Bouncer *bouncer = create_bouncer(database, certificate, name ? name : g_get_host_name());
-	if (!listen_bouncer(bouncer, listen, &error)) {
-		g_printerr("Could not listen on %s: %s\n", listen, error->message);
+	if (!listen_bouncer(bouncer, listen, web, &error)) {
+		g_printerr("Could not listen on %s and %s: %s\n", listen, web, error->message);
 		return FAILURE_STATUS;
 	}
 	g_autofree char *hash = hash_certificate(certificate);
 	g_autofree char *fingerprint = format_certificate_hash(hash);
 	g_message("Listening on %s with TLS", listen);
+	g_message("Website on https port %s", bouncer->web_port);
 	g_message("Certificate SHA-256 %s", fingerprint);
 	g_autoptr(GMainLoop) loop = g_main_loop_new(NULL, FALSE);
 	g_unix_signal_add(SIGINT, stop_running, loop);
@@ -198,5 +206,6 @@ int main(int argument_count, char **arguments) {
 	}
 	int status = run_bouncer(&options);
 	g_free(options.listen);
+	g_free(options.web);
 	return status;
 }

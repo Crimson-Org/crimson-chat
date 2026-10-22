@@ -251,14 +251,6 @@ IrcStream *create_irc_stream(GIOStream *connection, IrcStreamReceived received, 
 }
 
 
-void feed_irc_stream(IrcStream *stream, GBytes *bytes) {
-	gsize length = 0;
-	const guint8 *data = g_bytes_get_data(bytes, &length);
-	g_byte_array_append(stream->unread, data, (guint)length);
-	take_lines(stream);
-}
-
-
 void limit_irc_stream_rate(IrcStream *stream) {
 	stream->is_rate_limited = TRUE;
 }

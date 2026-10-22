@@ -608,7 +608,8 @@ static void handle_registering(Downstream *downstream, const IrcMessage *message
 }
 
 
-/* CRIMSON INVITE CREATE with a use count, or * for unlimited, lets an admin make invite links from a client */
+/* CRIMSON INVITE CREATE with a use count, or * for unlimited, lets an admin make invite links from a client,
+ * and the answer names the website's port the link points to */
 static void handle_invite_command(Downstream *downstream, const IrcMessage *message) {
 	const char *subcommand = get_irc_parameter(message, 0);
 	const char *action = get_irc_parameter(message, 1);
@@ -625,7 +626,7 @@ static void handle_invite_command(Downstream *downstream, const IrcMessage *mess
 	int uses = !count || g_str_equal(count, "*") ? -1 : MAX(1, (int)g_ascii_strtoll(count, NULL, 10));
 	g_autofree char *token = create_invite(downstream->bouncer, downstream->user, uses);
 	g_autofree char *uses_text = uses < 0 ? g_strdup("*") : g_strdup_printf("%d", uses);
-	send_from_bouncer(downstream, "CRIMSON", "INVITE", token, uses_text, NULL);
+	send_from_bouncer(downstream, "CRIMSON", "INVITE", token, uses_text, downstream->bouncer->web_port, NULL);
 }
 
 
@@ -674,7 +675,7 @@ static gboolean drop_unregistered(gpointer data) {
 }
 
 
-void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, GBytes *first_bytes) {
+void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address) {
 	Downstream *downstream = g_new0(Downstream, 1);
 	downstream->bouncer = bouncer;
 	downstream->address = g_strdup(address);
@@ -683,5 +684,4 @@ void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *addr
 	downstream->stream = create_irc_stream(connection, handle_message, handle_closed, downstream);
 	bouncer->downstreams = g_list_prepend(bouncer->downstreams, downstream);
 	downstream->registration_source = g_timeout_add_seconds(REGISTRATION_SECONDS, drop_unregistered, downstream);
-	feed_irc_stream(downstream->stream, first_bytes);
 }

@@ -185,8 +185,9 @@ static void split_host(const char *host, char **name, char **port) {
 
 
 static void add_connection_details(WebAnswer *answer, WebRequest *request, const char *user_name) {
-	g_autofree char *name = NULL, *port = NULL;
-	split_host(request->host, &name, &port);
+	g_autofree char *name = NULL, *web_port = NULL;
+	split_host(request->host, &name, &web_port);
+	const char *port = request->bouncer->irc_port;
 	add_text(answer, "<dl><dt>Address</dt><dd><code>%s</code></dd><dt>Port</dt><dd><code>%s</code></dd>"
 		"<dt>Username</dt><dd><code>%s</code></dd>"
 		"<dt>Fingerprint</dt><dd><code>%s</code></dd></dl>", name, port, user_name, request->bouncer->fingerprint);
@@ -529,14 +530,11 @@ static gboolean give_up(gpointer data) {
 }
 
 
-void serve_web(Bouncer *bouncer, GIOStream *connection, GBytes *first_bytes) {
+void serve_web(Bouncer *bouncer, GIOStream *connection) {
 	WebRequest *request = g_new0(WebRequest, 1);
 	request->bouncer = bouncer;
 	request->connection = g_object_ref(connection);
 	request->data = g_byte_array_new();
-	gsize length = 0;
-	const guint8 *bytes = g_bytes_get_data(first_bytes, &length);
-	g_byte_array_append(request->data, bytes, (guint)length);
 	request->timeout_source = g_timeout_add_seconds(REQUEST_SECONDS, give_up, request);
-	check_request(request);
+	read_more(request);
 }

@@ -18,4 +18,4 @@ void open_application_link(Window *window, const char *link);
 void capitalize_nick_field(GtkWidget *row);
 /* Creates an invite link on a bouncer the user administers and shows it ready to copy */
 void show_invite_dialog(Window *window, CrimsonNetwork *network);
-void show_invite_link(Window *window, Session *session, const char *token, const char *uses);
+void show_invite_link(Window *window, Session *session, const char *token, const char *uses, const char *port);

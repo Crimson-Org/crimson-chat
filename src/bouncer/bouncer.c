@@ -43,65 +43,34 @@ Bouncer *create_bouncer(Database *database, GTlsCertificate *certificate, const 
 }
 
 
-#define SNIFF_BYTES 4096
-
-/* A browser and an IRC client reach the same port, and the first words of the first line tell them apart */
-static gboolean is_web_request(GBytes *bytes) {
-	static const char *const METHODS[] = {"GET ", "POST ", "HEAD ", NULL};
-	gsize length = 0;
-	const char *data = g_bytes_get_data(bytes, &length);
-	for (int index = 0; METHODS[index]; index++) {
-		gsize size = strlen(METHODS[index]);
-		if (length >= size && memcmp(data, METHODS[index], size) == 0)
-			return TRUE;
-	}
-	return FALSE;
-}
-
-
-typedef struct {
-	Bouncer *bouncer;
-	GIOStream *connection;
-	char *address;
-} Arrival;
-
-
-static void finish_first_read(GObject *source, GAsyncResult *result, gpointer data) {
-	Arrival *arrival = data;
-	g_autoptr(GError) error = NULL;
-	g_autoptr(GBytes) bytes = g_input_stream_read_bytes_finish(G_INPUT_STREAM(source), result, &error);
-	if (bytes && g_bytes_get_size(bytes)) {
-		if (is_web_request(bytes))
-			serve_web(arrival->bouncer, arrival->connection, bytes);
-		else
-			accept_downstream(arrival->bouncer, arrival->connection, arrival->address, bytes);
-	} else {
-		g_io_stream_close_async(arrival->connection, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
-	}
-	g_object_unref(arrival->connection);
-	g_free(arrival->address);
-	g_free(arrival);
-}
-
-
-static gboolean take_connection(GSocketService *service, GSocketConnection *connection, GObject *source,
-	gpointer data) {
-	Bouncer *bouncer = data;
+/* Wraps a new connection in TLS with the bouncer's certificate, or returns NULL after logging why it failed */
+static GIOStream *secure_connection(Bouncer *bouncer, GSocketConnection *connection, char **address) {
 	g_autoptr(GError) error = NULL;
 	g_autoptr(GSocketAddress) remote = g_socket_connection_get_remote_address(connection, NULL);
-	g_autofree char *address = remote ? g_socket_connectable_to_string(G_SOCKET_CONNECTABLE(remote))
-		: g_strdup("unknown");
+	*address = remote ? g_socket_connectable_to_string(G_SOCKET_CONNECTABLE(remote)) : g_strdup("unknown");
 	GIOStream *secured = g_tls_server_connection_new(G_IO_STREAM(connection), bouncer->certificate, &error);
-	if (!secured) {
-		g_warning("TLS failed for %s: %s", address, error->message);
-		return TRUE;
-	}
-	Arrival *arrival = g_new0(Arrival, 1);
-	arrival->bouncer = bouncer;
-	arrival->connection = secured;
-	arrival->address = g_steal_pointer(&address);
-	g_input_stream_read_bytes_async(g_io_stream_get_input_stream(secured), SNIFF_BYTES, G_PRIORITY_DEFAULT, NULL,
-		finish_first_read, arrival);
+	if (!secured)
+		g_warning("TLS failed for %s: %s", *address, error->message);
+	return secured;
+}
+
+
+static gboolean take_irc_connection(GSocketService *service, GSocketConnection *connection, GObject *source,
+	gpointer data) {
+	g_autofree char *address = NULL;
+	g_autoptr(GIOStream) secured = secure_connection(data, connection, &address);
+	if (secured)
+		accept_downstream(data, secured, address);
+	return TRUE;
+}
+
+
+static gboolean take_web_connection(GSocketService *service, GSocketConnection *connection, GObject *source,
+	gpointer data) {
+	g_autofree char *address = NULL;
+	g_autoptr(GIOStream) secured = secure_connection(data, connection, &address);
+	if (secured)
+		serve_web(data, secured);
 	return TRUE;
 }
 
@@ -129,12 +98,35 @@ static gboolean add_listen_address(GSocketService *service, const char *text, GE
 }
 
 
-gboolean listen_bouncer(Bouncer *bouncer, const char *address, GError **error) {
-	bouncer->service = g_socket_service_new();
-	if (!add_listen_address(bouncer->service, address, error))
+/* The port part of a listen address, which is what clients and browsers connect to */
+static char *read_port(const char *address) {
+	const char *colon = strrchr(address, ':');
+	return g_strdup(colon ? colon + 1 : address);
+}
+
+
+static GSocketService *start_service(Bouncer *bouncer, const char *address, GCallback incoming, GError **error) {
+	GSocketService *service = g_socket_service_new();
+	if (!add_listen_address(service, address, error)) {
+		g_object_unref(service);
+		return NULL;
+	}
+	g_signal_connect(service, "incoming", incoming, bouncer);
+	g_socket_service_start(service);
+	return service;
+}
+
+
+/* Browsers refuse the usual IRC ports, so the website listens on a port of its own */
+gboolean listen_bouncer(Bouncer *bouncer, const char *irc_address, const char *web_address, GError **error) {
+	bouncer->irc_service = start_service(bouncer, irc_address, G_CALLBACK(take_irc_connection), error);
+	if (!bouncer->irc_service)
 		return FALSE;
-	g_signal_connect(bouncer->service, "incoming", G_CALLBACK(take_connection), bouncer);
-	g_socket_service_start(bouncer->service);
+	bouncer->web_service = start_service(bouncer, web_address, G_CALLBACK(take_web_connection), error);
+	if (!bouncer->web_service)
+		return FALSE;
+	bouncer->irc_port = read_port(irc_address);
+	bouncer->web_port = read_port(web_address);
 	for (guint index = 0; index < bouncer->users->len; index++) {
 		BouncerUser *user = g_ptr_array_index(bouncer->users, index);
 		for (guint network = 0; network < user->upstreams->len; network++)

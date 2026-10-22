@@ -526,10 +526,10 @@ static void copy_link(AdwAlertDialog *alert, const char *response, gpointer data
 }
 
 
-void show_invite_link(Window *window, Session *session, const char *token, const char *uses) {
-	const AccountRecord *record = session->record;
-	g_autofree char *port = record->port == HTTPS_PORT ? g_strdup("") : g_strdup_printf(":%d", record->port);
-	g_autofree char *link = g_strdup_printf("https://%s%s/invite?token=%s", record->host, port, token);
+void show_invite_link(Window *window, Session *session, const char *token, const char *uses, const char *port) {
+	gboolean is_default_port = g_ascii_strtoll(port, NULL, 10) == HTTPS_PORT;
+	g_autofree char *link = g_strdup_printf("https://%s%s%s/invite?token=%s", session->record->host,
+		is_default_port ? "" : ":", is_default_port ? "" : port, token);
 	AdwDialog *alert = adw_alert_dialog_new(TEXT_INVITE_READY,
 		g_strcmp0(uses, "*") == 0 ? TEXT_INVITE_READY_ANYONE : TEXT_INVITE_READY_BODY);
 	GtkWidget *entry = gtk_entry_new();

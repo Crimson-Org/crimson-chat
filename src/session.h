@@ -14,8 +14,8 @@ typedef struct {
 	void (*show_problem)(const char *text, gpointer data);
 	/* A room the user asked for, such as a channel just joined or a private chat just opened */
 	void (*room_opened)(CrimsonRoom *room, gpointer data);
-	/* A bouncer created an invite, with its token and its uses or * for unlimited */
-	void (*invite_ready)(Session *session, const char *token, const char *uses, gpointer data);
+	/* A bouncer created an invite, with its token, its uses or * for unlimited, and its website's port */
+	void (*invite_ready)(Session *session, const char *token, const char *uses, const char *port, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */

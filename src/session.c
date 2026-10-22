@@ -303,9 +303,9 @@ static void handle_control_received(IrcClient *client, const IrcMessage *message
 	if (g_str_equal(message->command, "BOUNCER") && g_strcmp0(subcommand, "NETWORK") == 0)
 		update_bouncer_network(session, message);
 	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "INVITE") == 0
-		&& get_irc_parameter(message, 2))
+		&& get_irc_parameter(message, 3))
 		session->chat->events.invite_ready(session, get_irc_parameter(message, 1), get_irc_parameter(message, 2),
-			session->chat->data);
+			get_irc_parameter(message, 3), session->chat->data);
 	else if (g_str_equal(message->command, "FAIL"))
 		session->chat->events.show_problem(get_irc_parameter(message, count_irc_parameters(message) - 1),
 			session->chat->data);

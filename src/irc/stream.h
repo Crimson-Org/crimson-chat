@@ -15,8 +15,6 @@ IrcStream *create_irc_stream(GIOStream *connection, IrcStreamReceived received, 
 	gpointer data);
 /* Servers drop clients that send too fast, so a stream to a server spaces out its lines after a short burst */
 void limit_irc_stream_rate(IrcStream *stream);
-/* Hands the stream bytes that were read before it existed, such as those used to tell IRC from a web request */
-void feed_irc_stream(IrcStream *stream, GBytes *bytes);
 
 void send_irc_message(IrcStream *stream, const IrcMessage *message);
 void send_irc_command(IrcStream *stream, const char *command, ...) G_GNUC_NULL_TERMINATED;

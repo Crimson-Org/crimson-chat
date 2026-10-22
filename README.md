@@ -46,6 +46,7 @@ Links to pictures over HTTPS show the picture, and bold, italics, colours and mo
 The first launch prompts for an admin username and password, creates a TLS certificate and prints its fingerprint.\
 Add the bouncer in Crimson Chat with that login, trust the fingerprint once, and add networks through it from then on.\
 The bouncer joins your channels, keeps their history in [SQLite](https://sqlite.org) and replays it to each client you connect.\
+Admins invite people with links made in Crimson Chat or on the bouncer's website, where the invited pick their own login.\
 It speaks the bouncer network extension of [soju](https://soju.im), which other modern IRC clients understand as well.
 
 ### Notifications and the tray
@@ -68,4 +69,4 @@ Clone it with `git clone --recurse-submodules` so the shared Crimson Core code c
 `sh .crimson-build/install.sh` installs both programs and `sh .crimson-build/uninstall.sh` removes them.\
 `sh .crimson-build/run.sh` builds and starts Crimson Chat, and `sh .crimson-build/archive.sh` writes a tar.gz to `dist/`.\
 `sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, SQLite and GnuTLS but no graphical libraries.\
-`crimson-chat-bouncer --listen 6697` sets the port, and `crimson-chat-bouncer --password` changes a password.
+`crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.
