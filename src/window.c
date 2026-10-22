@@ -714,19 +714,15 @@ static void add_breakpoint(Window *window) {
 
 void restore_window_choice(Window *window) {
 	update_view(window);
+	/* The app starts on the server from last time, with no chat open */
 	g_autofree char *network_key = NULL, *room_network = NULL, *room_name = NULL;
 	load_window_choice(&network_key, &room_network, &room_name);
-	CrimsonRoom *room = NULL;
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	for (guint index = 0; index < count; index++) {
 		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
 		if (g_strcmp0(network->key, network_key) == 0)
 			choose_network(window, network);
-		if (g_strcmp0(network->key, room_network) == 0 && room_name)
-			room = find_room(network, room_name);
 	}
-	if (room)
-		open_room(window, room);
 }
 
 
@@ -743,7 +739,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	window->banner = ADW_BANNER(adw_banner_new(""));
 	g_signal_connect(window->banner, "button-clicked", G_CALLBACK(retry_now), window);
 	window->room_list = create_room_list(window);
-	watch_room_list_pointer(window->room_list, GTK_WIDGET(window->window));
+	watch_room_list_focus(window->room_list, GTK_WIDGET(window->window));
 	/* The banner sits in the chat list under its search field, next to the server it is about */
 	GtkWidget *list = get_room_list_widget(window->room_list);
 	gtk_box_insert_child_after(GTK_BOX(list), GTK_WIDGET(window->banner), gtk_widget_get_first_child(list));

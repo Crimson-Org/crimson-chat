@@ -51,7 +51,7 @@ void refresh_window_later(Window *window);
 /* Hides the window in the tray when there is one, so the chats stay connected */
 void hide_window(Window *window);
 gboolean is_room_in_view(Window *window, CrimsonRoom *room);
-/* Opens the network and room from the last run, once the chats from the last run are back */
+/* Chooses the server from the last run, once the chats from the last run are back */
 void restore_window_choice(Window *window);
 /* An unread badge, crimson for a mention or a private message and grey for ordinary chatter */
 void style_unread_badge(GtkWidget *badge, guint count, gboolean has_mention);
@@ -65,8 +65,8 @@ void resort_room_list(RoomList *list);
 void set_room_list_narrow(RoomList *list, gboolean is_narrow);
 void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
-/* Lets the room list follow the pointer over the whole window, for its + button */
-void watch_room_list_pointer(RoomList *list, GtkWidget *window);
+/* Lets the room list follow whether the window has focus, for its + button */
+void watch_room_list_focus(RoomList *list, GtkWidget *window);
 /* The room above or below the chosen one in the list, for keyboard stepping */
 CrimsonRoom *step_listed_room(RoomList *list, int step);
 

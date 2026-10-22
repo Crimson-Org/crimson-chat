@@ -19,6 +19,8 @@ struct RoomList {
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
 	GtkWidget *add_button, *add_revealer;
+	/* Whether the press now going on started on the list's empty space */
+	gboolean is_space_pressed;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
@@ -102,7 +104,8 @@ static void click_room(GtkGestureClick *gesture, int presses, double x, double y
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(row), ROOM_KEY);
 	RoomList *list = data;
-	if (room)
+	/* A press dragged off the room before letting go opens nothing */
+	if (room && gtk_widget_contains(row, x, y))
 		open_room(list->window, room);
 }
 
@@ -231,34 +234,42 @@ static gpointer list_network_rooms(gpointer item, gpointer data) {
 }
 
 
-/* A click on the list's empty space closes the open chat, the same as going back */
-static void click_list_space(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
-	GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+static gboolean is_on_room(GtkWidget *view, double x, double y) {
 	for (GtkWidget *picked = gtk_widget_pick(view, x, y, GTK_PICK_DEFAULT); picked && picked != view;
 		picked = gtk_widget_get_parent(picked)) {
 		if (g_object_get_data(G_OBJECT(picked), ROOM_KEY))
-			return;
+			return TRUE;
 	}
+	return FALSE;
+}
+
+
+static void press_list_space(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
+	list->is_space_pressed = !is_on_room(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)), x, y);
+}
+
+
+/* A click that starts and ends on the list's empty space closes the open chat, the same as going back, and
+ * clears the keyboard focus so no room keeps its outline */
+static void click_list_space(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
+	GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	if (!list->is_space_pressed || is_on_room(view, x, y))
+		return;
+	list->is_space_pressed = FALSE;
 	close_open_room(list->window);
+	gtk_root_set_focus(gtk_widget_get_root(view), NULL);
 }
 
 
-/* The + button rises while the pointer is over the window and sinks out of sight when it leaves */
-static void show_add_button(GtkEventControllerMotion *motion, double x, double y, RoomList *list) {
-	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), TRUE);
+/* The + button rises while the window has focus and sinks out of sight when another window takes it */
+static void follow_window_focus(GtkWindow *window, GParamSpec *spec, RoomList *list) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), gtk_window_is_active(window));
 }
 
 
-static void hide_add_button(GtkEventControllerMotion *motion, RoomList *list) {
-	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), FALSE);
-}
-
-
-void watch_room_list_pointer(RoomList *list, GtkWidget *window) {
-	GtkEventController *motion = gtk_event_controller_motion_new();
-	g_signal_connect(motion, "enter", G_CALLBACK(show_add_button), list);
-	g_signal_connect(motion, "leave", G_CALLBACK(hide_add_button), list);
-	gtk_widget_add_controller(window, motion);
+void watch_room_list_focus(RoomList *list, GtkWidget *window) {
+	g_signal_connect(window, "notify::is-active", G_CALLBACK(follow_window_focus), list);
+	follow_window_focus(GTK_WINDOW(window), NULL, list);
 }
 
 
@@ -387,6 +398,7 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_set_valign(list->add_revealer, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_revealer);
 	GtkGesture *space = gtk_gesture_click_new();
+	g_signal_connect(space, "pressed", G_CALLBACK(press_list_space), list);
 	g_signal_connect(space, "released", G_CALLBACK(click_list_space), list);
 	gtk_widget_add_controller(list->list_view, GTK_EVENT_CONTROLLER(space));
 	return overlay;
