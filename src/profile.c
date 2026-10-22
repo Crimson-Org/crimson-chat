@@ -364,7 +364,10 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	own->old_password = g_strdup(network->bouncer_id ? NULL : record->sasl_password);
 	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account, TRUE);
 	own->password = adw_password_entry_row_new();
-	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), TEXT_PASSWORD);
+	/* A bouncer keeps the password without ever sending it back, so the field says it is saved there */
+	gboolean is_saved_on_bouncer = network->bouncer_id && own->old_account && *own->old_account;
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), is_saved_on_bouncer ? TEXT_PASSWORD_SAVED
+		: TEXT_PASSWORD);
 	gtk_editable_set_text(GTK_EDITABLE(own->password), own->old_password ? own->old_password : "");
 	gtk_list_box_append(GTK_LIST_BOX(login), own->password);
 	gtk_box_append(GTK_BOX(box), login);
@@ -372,7 +375,6 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	gtk_widget_add_css_class(save, "pill");
 	gtk_widget_add_css_class(save, "suggested-action");
 	gtk_widget_set_halign(save, GTK_ALIGN_CENTER);
-	gtk_widget_set_sensitive(save, network->state == NETWORK_CONNECTED);
 	g_signal_connect(save, "clicked", G_CALLBACK(save_own_profile), own);
 	gtk_box_append(GTK_BOX(box), save);
 	GtkWidget *toolbar = adw_toolbar_view_new();

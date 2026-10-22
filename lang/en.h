@@ -270,3 +270,4 @@
 #define TEXT_LAST_ACTIVE "Last active %s"
 #define TEXT_TOPIC_SET_BY "Topic Set By"
 #define TEXT_TOPIC_SET_ON "%s, %s"
+#define TEXT_PASSWORD_SAVED "Password (Saved)"
