@@ -17,6 +17,7 @@
 #define BADGE_LIMIT 999
 #define NETWORK_KEY "network"
 #define BANNER_DELAY_MS 1500
+#define MOUSE_BACK_BUTTON 8
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
 static Window *main_window;
@@ -685,6 +686,15 @@ static GtkWidget *create_sidebar(Window *window) {
 }
 
 
+/* The mouse's back button closes the open chat and leaves the middle empty */
+static void go_back(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	show_conversation_room(window->conversation, NULL);
+	select_listed_room(window->room_list, NULL);
+	adw_navigation_split_view_set_show_content(window->split, FALSE);
+	save_window_choice(window->network ? window->network->key : NULL, NULL);
+}
+
+
 static void add_breakpoint(Window *window) {
 	AdwBreakpoint *breakpoint = adw_breakpoint_new(adw_breakpoint_condition_parse(NARROW_CONDITION));
 	GValue collapsed = G_VALUE_INIT;
@@ -750,6 +760,11 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	adw_toast_overlay_set_child(window->toasts, window->pages);
 	adw_application_window_set_content(window->window, GTK_WIDGET(window->toasts));
 	add_breakpoint(window);
+	GtkGesture *back = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(back), MOUSE_BACK_BUTTON);
+	gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(back), GTK_PHASE_CAPTURE);
+	g_signal_connect(back, "pressed", G_CALLBACK(go_back), window);
+	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
 	add_window_actions(window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
 	static const TrayEntry TRAY_ENTRIES[] = {

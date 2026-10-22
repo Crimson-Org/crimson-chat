@@ -586,12 +586,6 @@ static GtkWidget *create_empty_page(void) {
 	gtk_widget_add_css_class(header, "flat");
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
 	gtk_box_append(GTK_BOX(page), header);
-	GtkWidget *pill = gtk_label_new(TEXT_SELECT_CHAT);
-	gtk_widget_add_css_class(pill, "empty-pill");
-	gtk_widget_set_halign(pill, GTK_ALIGN_CENTER);
-	gtk_widget_set_valign(pill, GTK_ALIGN_CENTER);
-	gtk_widget_set_vexpand(pill, TRUE);
-	gtk_box_append(GTK_BOX(page), pill);
 	return page;
 }
 

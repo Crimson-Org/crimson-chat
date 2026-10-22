@@ -195,6 +195,22 @@ static void stop_typing(CrimsonRoom *room, const char *nick) {
 }
 
 
+/* NickServ asking to identify means a login is missing, which the app offers to save instead of typed commands */
+static void offer_login(CrimsonNetwork *network, const CrimsonMessage *line) {
+	NetworkWork *work = get_network_work(network);
+	const char *login = network->bouncer_id ? g_hash_table_lookup(network->attributes, "sasl-username")
+		: network->session->record->sasl_username;
+	if (work->has_offered_login || (login && *login) || !line->sender || !line->text
+		|| g_ascii_strcasecmp(line->sender, "NickServ") != 0)
+		return;
+	g_autofree char *text = g_ascii_strdown(line->text, -1);
+	if (!strstr(text, "registered") && !strstr(text, "reserved") && !strstr(text, "identify"))
+		return;
+	work->has_offered_login = TRUE;
+	network->session->chat->events.login_wanted(network, network->session->chat->data);
+}
+
+
 static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *load) {
 	g_autoptr(CrimsonMessage) line = read_text_message(network, message, load != NULL);
 	if (!line)
@@ -212,6 +228,7 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	if (load)
 		return;
 	line->is_fresh = TRUE;
+	offer_login(network, line);
 	count_unread(room);
 	announce_room_change(room);
 	save_chat_cache_later(network->session->chat);

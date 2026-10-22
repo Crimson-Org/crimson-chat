@@ -23,7 +23,6 @@
 #define TEXT_SHOW_WINDOW "Show Crimson Chat"
 #define TEXT_RECONNECT "Reconnect"
 #define TEXT_NO_CHATS_TITLE "No Chats Yet"
-#define TEXT_SELECT_CHAT "Select a chat to start messaging"
 #define TEXT_NO_MESSAGES "No messages here yet"
 
 /* Connection states */
@@ -265,3 +264,5 @@
 #define TEXT_HELP_PROFILE "This is how you appear on this server, and the login to your account with it. A picture is a web address of an image, since servers do not store images. Fields the server does not support are greyed out."
 #define TEXT_SASL_LOGIN "Login (SASL)"
 #define TEXT_ACCOUNT_NAME "Account Name"
+#define TEXT_LOGIN_WANTED "NickServ asks you to log in"
+#define TEXT_LOG_IN "Log In"

@@ -18,6 +18,8 @@ typedef struct {
 	void (*invite_ready)(Session *session, const char *token, const char *uses, const char *port, gpointer data);
 	/* A network is about to go, whatever removed it, so nothing keeps pointing into it */
 	void (*network_removed)(CrimsonNetwork *network, gpointer data);
+	/* The network's nickname service asked the user to log in, and the app has no login for it */
+	void (*login_wanted)(CrimsonNetwork *network, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */
@@ -86,6 +88,8 @@ typedef struct {
 	gpointer listing_data;
 	/* Whether the list asked only for busy channels, so a short answer is asked again in full */
 	gboolean is_listing_busy;
+	/* Whether the user was already offered to log in on this connection */
+	gboolean has_offered_login;
 	/* The profile being collected from WHOIS replies, and who waits for it */
 	Profile *profile;
 	ProfileReady profile_ready;
