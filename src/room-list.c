@@ -338,6 +338,9 @@ static GtkWidget *create_header(RoomList *list) {
 	list->search_button = gtk_toggle_button_new();
 	gtk_button_set_icon_name(GTK_BUTTON(list->search_button), "system-search-symbolic");
 	gtk_widget_set_tooltip_text(list->search_button, TEXT_SEARCH);
+	/* Clicking the button must not first pull focus from the field, which would close it only for the click to
+	 * open it again */
+	gtk_widget_set_focus_on_click(list->search_button, FALSE);
 	g_signal_connect(list->search_button, "toggled", G_CALLBACK(toggle_search), list);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->search_button);
 	return list->header;
