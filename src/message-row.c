@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "../lang/en.h"
 #include "formatting.h"
 #include "images.h"
@@ -12,6 +14,9 @@
 #define PREVIEW_WIDTH 320
 #define PREVIEW_HEIGHT 220
 #define REPLY_SNIPPET_CHARS 80
+#define PERSON_KEY "person"
+/* Lines up to this long keep their time on the same line */
+#define INLINE_TIME_CHARS 40
 
 static const char *const QUICK_REACTIONS[] = {"👍", "❤️", "😂", "😮", "😢", "🙏", NULL};
 
@@ -180,6 +185,14 @@ static void open_message_menu(RowContext *context, double x, double y) {
 
 
 static void press_bubble(GtkGestureClick *gesture, int presses, double x, double y, RowContext *context) {
+	/* The sender's name inside the bubble has its own menu about the person */
+	for (GtkWidget *picked = gtk_widget_pick(context->bubble, x, y, GTK_PICK_DEFAULT); picked;
+		picked = gtk_widget_get_parent(picked)) {
+		if (g_object_get_data(G_OBJECT(picked), PERSON_KEY))
+			return;
+		if (picked == context->bubble)
+			break;
+	}
 	gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 	open_message_menu(context, x, y);
 }
@@ -370,8 +383,29 @@ static GtkWidget *create_reactions(CrimsonMessage *message, CrimsonRoom *room, R
 }
 
 
-static void click_sender(GtkGestureClick *gesture, int presses, double x, double y, RowContext *context) {
-	context->actions->open_person(context->message->sender, context->actions->data);
+static void click_person(GtkGestureClick *gesture, int presses, double x, double y, RowContext *context) {
+	context->actions->show_person(context->message->sender, context->actions->data);
+}
+
+
+static void press_person(GtkGestureClick *gesture, int presses, double x, double y, RowContext *context) {
+	GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+	context->actions->person_menu(widget, context->message->sender, x, y, context->actions->data);
+}
+
+
+/* A person's name or picture opens their profile on a click and their menu on a right click */
+static void make_person_target(GtkWidget *widget, RowContext *context) {
+	g_object_set_data(G_OBJECT(widget), PERSON_KEY, GINT_TO_POINTER(TRUE));
+	gtk_widget_set_cursor_from_name(widget, "pointer");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect(click, "released", G_CALLBACK(click_person), context);
+	gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(click));
+	GtkGesture *menu = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(menu), GDK_BUTTON_SECONDARY);
+	g_signal_connect(menu, "pressed", G_CALLBACK(press_person), context);
+	gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(menu));
 }
 
 
@@ -381,10 +415,8 @@ static GtkWidget *create_sender_label(CrimsonMessage *message, RowContext *conte
 	gtk_widget_add_css_class(name, "sender");
 	g_autofree char *color = g_strdup_printf("name-color-%d", pick_name_color(message->sender));
 	gtk_widget_add_css_class(name, color);
-	gtk_widget_set_cursor_from_name(name, "pointer");
-	GtkGesture *click = gtk_gesture_click_new();
-	g_signal_connect(click, "released", G_CALLBACK(click_sender), context);
-	gtk_widget_add_controller(name, GTK_EVENT_CONTROLLER(click));
+	gtk_widget_set_halign(name, GTK_ALIGN_START);
+	make_person_target(name, context);
 	return name;
 }
 
@@ -422,9 +454,22 @@ static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboo
 	gtk_label_set_selectable(GTK_LABEL(body), TRUE);
 	gtk_widget_set_focusable(body, FALSE);
 	gtk_widget_add_css_class(body, message->is_redacted ? "redacted" : "body");
-	gtk_box_append(GTK_BOX(bubble), body);
-	add_previews(bubble, message);
-	gtk_box_append(GTK_BOX(bubble), create_footer(message));
+	/* A short line keeps its time beside it, as in Telegram, while longer text and pictures put it underneath */
+	const char *text = message->text ? message->text : "";
+	gboolean is_short = !strchr(text, '\n') && g_utf8_strlen(text, -1) <= INLINE_TIME_CHARS && !strstr(text, "://");
+	if (is_short) {
+		GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+		gtk_box_append(GTK_BOX(line), body);
+		GtkWidget *footer = create_footer(message);
+		gtk_widget_set_valign(footer, GTK_ALIGN_END);
+		gtk_widget_set_hexpand(footer, TRUE);
+		gtk_box_append(GTK_BOX(line), footer);
+		gtk_box_append(GTK_BOX(bubble), line);
+	} else {
+		gtk_box_append(GTK_BOX(bubble), body);
+		add_previews(bubble, message);
+		gtk_box_append(GTK_BOX(bubble), create_footer(message));
+	}
 	add_menu_gestures(bubble, context);
 	return bubble;
 }
@@ -442,6 +487,7 @@ static GtkWidget *create_message_line(CrimsonMessage *message, CrimsonRoom *room
 		const char *url = find_metadata(room, message->sender, "avatar");
 		g_autofree char *sized = fill_image_size(url, AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
+		make_person_target(avatar, context);
 		gtk_box_append(GTK_BOX(line), avatar);
 	} else if (has_avatars) {
 		GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);

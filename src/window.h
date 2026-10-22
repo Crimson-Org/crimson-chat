@@ -38,6 +38,8 @@ Window *create_window(GtkApplication *application, Chat *chat);
 Window *get_main_window(void);
 void open_room(Window *window, CrimsonRoom *room);
 CrimsonRoom *get_open_room(Window *window);
+/* Closes the open chat, deselects it and leaves the middle empty */
+void close_open_room(Window *window);
 void choose_network(Window *window, CrimsonNetwork *network);
 /* Everything about one server, and the other servers to switch to when there is no rail to show them */
 GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network);
@@ -63,6 +65,8 @@ void resort_room_list(RoomList *list);
 void set_room_list_narrow(RoomList *list, gboolean is_narrow);
 void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
+/* Lets the room list follow the pointer over the whole window, for its + button */
+void watch_room_list_pointer(RoomList *list, GtkWidget *window);
 /* The room above or below the chosen one in the list, for keyboard stepping */
 CrimsonRoom *step_listed_room(RoomList *list, int step);
 

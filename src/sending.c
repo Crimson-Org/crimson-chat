@@ -368,6 +368,8 @@ void leave_room(CrimsonRoom *room) {
 		send_irc_client_command(network->client, "PART", room->name, NULL);
 	else if (room->kind == ROOM_PRIVATE && get_irc_support(get_network_state(network), "MONITOR"))
 		send_irc_client_command(network->client, "MONITOR", "-", room->name, NULL);
+	if (room->kind == ROOM_PRIVATE)
+		note_deleted_chat(network->key, room->name, g_get_real_time());
 	room->is_joined = FALSE;
 	remove_room(network, room);
 	save_network_channels(network);

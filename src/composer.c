@@ -253,7 +253,7 @@ static GtkWidget *create_field(Composer *composer) {
 	gtk_label_set_xalign(GTK_LABEL(composer->placeholder), 0);
 	gtk_label_set_ellipsize(GTK_LABEL(composer->placeholder), PANGO_ELLIPSIZE_END);
 	gtk_widget_add_css_class(composer->placeholder, "composer-placeholder");
-	gtk_widget_set_valign(composer->placeholder, GTK_ALIGN_START);
+	gtk_widget_set_valign(composer->placeholder, GTK_ALIGN_CENTER);
 	gtk_widget_set_can_target(composer->placeholder, FALSE);
 	GtkWidget *overlay = gtk_overlay_new();
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), scroller);
@@ -318,9 +318,8 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 	g_signal_handler_unblock(composer->buffer, composer->change_handler);
 	gtk_widget_set_visible(composer->placeholder, !draft || !*draft);
 	gtk_widget_set_sensitive(composer->send_button, draft && *draft);
-	g_autofree char *hint = room && room->kind != ROOM_SERVER ? g_strdup_printf(TEXT_MESSAGE_ROOM, room->name)
-		: g_strdup(TEXT_SEND_COMMAND);
-	gtk_label_set_text(GTK_LABEL(composer->placeholder), hint);
+	gtk_label_set_text(GTK_LABEL(composer->placeholder), room && room->kind == ROOM_SERVER ? TEXT_SEND_COMMAND
+		: TEXT_WRITE_MESSAGE);
 }
 
 

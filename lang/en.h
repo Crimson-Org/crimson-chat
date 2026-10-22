@@ -91,7 +91,6 @@
 
 /* Composer */
 #define TEXT_WRITE_MESSAGE "Write a message…"
-#define TEXT_MESSAGE_ROOM "Message %s"
 #define TEXT_SEND_COMMAND "Send a command"
 #define TEXT_SEND "Send"
 #define TEXT_EMOJI "Emoji"
@@ -207,7 +206,7 @@
 #define TEXT_RECONNECTING "Reconnecting…"
 #define TEXT_RETRY "Retry"
 #define TEXT_LEAVE_ROOM "Leave Room"
-#define TEXT_CLOSE_CHAT "Close Chat"
+#define TEXT_DELETE_CHAT "Delete Chat"
 #define TEXT_RECONNECTING_TO "Reconnecting to %s…"
 #define TEXT_RECONNECTED_TO "Reconnected to %s"
 #define TEXT_CONNECTING_TO_ELLIPSIS "Connecting to %s…"

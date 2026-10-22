@@ -4,6 +4,7 @@
 #define ACCOUNTS_FILE "accounts.ini"
 #define ROOMS_FILE "rooms.ini"
 #define PROFILES_FILE "profiles.ini"
+#define DELETED_FILE "deleted-chats.ini"
 #define ACCOUNT_PREFIX "account "
 #define DEFAULT_PORT 6697
 #define CACHED_ROOMS_PER_NETWORK 200
@@ -234,4 +235,19 @@ void save_network_profile(const char *key, const char *display_name, const char 
 	if (picture && *picture)
 		g_key_file_set_string(file, key, "picture", picture);
 	save_key_file(file, path);
+}
+
+
+void note_deleted_chat(const char *key, const char *name, gint64 time) {
+	g_autofree char *path = get_state_file_path(DELETED_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	g_key_file_set_int64(file, key, name, time);
+	save_key_file(file, path);
+}
+
+
+gint64 find_deleted_chat(const char *key, const char *name) {
+	g_autofree char *path = get_state_file_path(DELETED_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	return g_key_file_get_int64(file, key, name, NULL);
 }

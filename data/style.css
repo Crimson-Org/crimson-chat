@@ -219,10 +219,14 @@ headerbar.top-bar menubutton > button {
 }
 
 /* The conversation */
+/* The wall carries the same film grain as Crimson Music's panels, tiled over its colours */
 .chat-background {
 	background-color: var(--chat-wall);
-	background-image: radial-gradient(ellipse at 20% 0%, alpha(#c8102e, 0.10), transparent 60%),
+	background-image: url("resource:///io/github/CrimsonOrg/CrimsonChat/grain.png"),
+		radial-gradient(ellipse at 20% 0%, alpha(#c8102e, 0.10), transparent 60%),
 		radial-gradient(ellipse at 90% 100%, alpha(#8e0a1d, 0.10), transparent 55%);
+	background-repeat: repeat, no-repeat, no-repeat;
+	background-size: 128px 128px, auto, auto;
 }
 
 .messages {
@@ -473,4 +477,11 @@ headerbar.top-bar menubutton > button {
 
 .profile {
 	margin: 0 24px 24px;
+}
+
+/* A menu item that cannot be undone, such as leaving a room */
+.destructive-item {
+	color: var(--destructive-color);
+	font-weight: normal;
+	padding: 6px 12px;
 }

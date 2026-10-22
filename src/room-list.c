@@ -18,7 +18,7 @@ struct RoomList {
 	GtkWidget *box, *header, *search, *menu_button;
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
-	GtkWidget *add_button;
+	GtkWidget *add_button, *add_revealer;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
@@ -118,12 +118,17 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(row), ROOM_KEY);
 	if (!room || room->kind == ROOM_SERVER)
 		return;
-	g_autoptr(GMenu) menu = g_menu_new();
-	g_autoptr(GMenuItem) leave = g_menu_item_new(room->kind == ROOM_CHANNEL ? TEXT_LEAVE_ROOM : TEXT_CLOSE_CHAT, NULL);
-	g_menu_item_set_action_and_target_value(leave, "win.leave-chat", g_variant_new("(ss)", room->network->key,
+	/* Leaving cannot be undone from here, so the item is red */
+	GtkWidget *leave = gtk_button_new_with_label(room->kind == ROOM_CHANNEL ? TEXT_LEAVE_ROOM : TEXT_DELETE_CHAT);
+	gtk_widget_add_css_class(leave, "flat");
+	gtk_widget_add_css_class(leave, "destructive-item");
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-chat");
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(leave), g_variant_new("(ss)", room->network->key,
 		room->name));
-	g_menu_append_item(menu, leave);
-	GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+	GtkWidget *popover = gtk_popover_new();
+	gtk_widget_add_css_class(popover, "menu");
+	gtk_popover_set_child(GTK_POPOVER(popover), leave);
+	g_signal_connect_swapped(leave, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
 	gtk_widget_set_parent(popover, row);
 	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
@@ -223,6 +228,37 @@ static gpointer list_network_rooms(gpointer item, gpointer data) {
 	GListStore *rooms = g_object_ref(network->rooms);
 	g_object_unref(network);
 	return rooms;
+}
+
+
+/* A click on the list's empty space closes the open chat, the same as going back */
+static void click_list_space(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
+	GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	for (GtkWidget *picked = gtk_widget_pick(view, x, y, GTK_PICK_DEFAULT); picked && picked != view;
+		picked = gtk_widget_get_parent(picked)) {
+		if (g_object_get_data(G_OBJECT(picked), ROOM_KEY))
+			return;
+	}
+	close_open_room(list->window);
+}
+
+
+/* The + button rises while the pointer is over the window and sinks out of sight when it leaves */
+static void show_add_button(GtkEventControllerMotion *motion, double x, double y, RoomList *list) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), TRUE);
+}
+
+
+static void hide_add_button(GtkEventControllerMotion *motion, RoomList *list) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), FALSE);
+}
+
+
+void watch_room_list_pointer(RoomList *list, GtkWidget *window) {
+	GtkEventController *motion = gtk_event_controller_motion_new();
+	g_signal_connect(motion, "enter", G_CALLBACK(show_add_button), list);
+	g_signal_connect(motion, "leave", G_CALLBACK(hide_add_button), list);
+	gtk_widget_add_controller(window, motion);
 }
 
 
@@ -338,14 +374,21 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_add_css_class(list->add_button, "suggested-action");
 	gtk_widget_add_css_class(list->add_button, "add-chat");
 	gtk_widget_set_tooltip_text(list->add_button, TEXT_ADD);
-	gtk_widget_set_halign(list->add_button, GTK_ALIGN_END);
-	gtk_widget_set_valign(list->add_button, GTK_ALIGN_END);
+
 	g_autoptr(GMenu) menu = g_menu_new();
 	g_menu_append(menu, TEXT_JOIN_ROOM, "win.join-room");
 	g_menu_append(menu, TEXT_START_PRIVATE_CHAT, "win.message-someone");
 	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(list->add_button), G_MENU_MODEL(menu));
 	gtk_menu_button_set_direction(GTK_MENU_BUTTON(list->add_button), GTK_ARROW_UP);
-	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_button);
+	list->add_revealer = gtk_revealer_new();
+	gtk_revealer_set_transition_type(GTK_REVEALER(list->add_revealer), GTK_REVEALER_TRANSITION_TYPE_SLIDE_UP);
+	gtk_revealer_set_child(GTK_REVEALER(list->add_revealer), list->add_button);
+	gtk_widget_set_halign(list->add_revealer, GTK_ALIGN_END);
+	gtk_widget_set_valign(list->add_revealer, GTK_ALIGN_END);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_revealer);
+	GtkGesture *space = gtk_gesture_click_new();
+	g_signal_connect(space, "released", G_CALLBACK(click_list_space), list);
+	gtk_widget_add_controller(list->list_view, GTK_EVENT_CONTROLLER(space));
 	return overlay;
 }
 
@@ -395,7 +438,7 @@ void refresh_room_list_header(RoomList *list) {
 	gboolean has_rooms = g_list_model_get_n_items(G_LIST_MODEL(list->selection)) > 0;
 	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), has_rooms || is_searching
 		|| !list->window->chat->has_started ? "list" : "no-rooms");
-	gtk_widget_set_visible(list->add_button, has_rooms || is_searching);
+	gtk_widget_set_visible(list->add_revealer, has_rooms || is_searching);
 	/* The header names the server, and the banner under it says when it is not connected */
 	gtk_label_set_text(GTK_LABEL(list->title), list->network ? list->network->name : "");
 	g_autofree char *placeholder = list->network ? g_strdup_printf(TEXT_SEARCH_IN, list->network->name)

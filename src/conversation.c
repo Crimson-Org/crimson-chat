@@ -281,9 +281,9 @@ static void append_member_item(GMenu *menu, const char *label, const char *actio
 static GMenuModel *create_member_menu(Conversation *conversation, const char *nick) {
 	GMenu *menu = g_menu_new();
 	GMenu *person = g_menu_new();
+	append_member_item(person, TEXT_VIEW_PROFILE, "member.profile", nick);
 	append_member_item(person, TEXT_SEND_MESSAGE, "member.message", nick);
 	append_member_item(person, TEXT_MENTION, "member.mention", nick);
-	append_member_item(person, TEXT_VIEW_PROFILE, "member.profile", nick);
 	g_menu_append_section(menu, NULL, G_MENU_MODEL(person));
 	g_object_unref(person);
 	IrcState *state = get_network_state(conversation->room->network);
@@ -313,19 +313,38 @@ static void forget_member_menu(GtkPopover *popover, gpointer data) {
 
 
 /* Right-clicking a person offers what can be done with them, and moderation where the user may moderate */
-static void open_member_menu(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
-	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-	const char *nick = gtk_label_get_text(g_object_get_data(G_OBJECT(row), "name"));
+static void show_person_menu(GtkWidget *anchor, const char *nick, double x, double y, gpointer data) {
+	Conversation *conversation = data;
 	if (!conversation->room || !nick || !*nick)
 		return;
 	g_autoptr(GMenuModel) model = create_member_menu(conversation, nick);
 	GtkWidget *popover = gtk_popover_menu_new_from_model(model);
-	gtk_widget_set_parent(popover, row);
+	gtk_widget_set_parent(popover, anchor);
 	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
 	gtk_widget_set_halign(popover, GTK_ALIGN_START);
 	g_signal_connect(popover, "closed", G_CALLBACK(forget_member_menu), NULL);
 	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
+static void open_member_menu(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	show_person_menu(row, gtk_label_get_text(g_object_get_data(G_OBJECT(row), "name")), x, y, conversation);
+}
+
+
+static void show_person(const char *nick, gpointer data) {
+	Conversation *conversation = data;
+	if (conversation->room && nick)
+		show_profile(conversation->window, conversation->room, nick);
+}
+
+
+/* A click on a person in the member list opens their profile */
+static void click_member(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	show_person(gtk_label_get_text(g_object_get_data(G_OBJECT(row), "name")), conversation);
 }
 
 
@@ -353,6 +372,9 @@ static void set_up_member(GtkSignalListItemFactory *factory, GtkListItem *item, 
 	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
 	g_signal_connect(click, "pressed", G_CALLBACK(open_member_menu), data);
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(click));
+	GtkGesture *open = gtk_gesture_click_new();
+	g_signal_connect(open, "released", G_CALLBACK(click_member), data);
+	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(open));
 	gtk_list_item_set_child(item, row);
 }
 
@@ -443,17 +465,12 @@ static void add_member_actions(Conversation *conversation) {
 	};
 	GSimpleActionGroup *group = g_simple_action_group_new();
 	g_action_map_add_action_entries(G_ACTION_MAP(group), ENTRIES, G_N_ELEMENTS(ENTRIES), conversation);
-	gtk_widget_insert_action_group(conversation->member_view, "member", G_ACTION_GROUP(group));
+	/* The members panel and the messages both offer a person's menu, so the actions serve the whole room view */
+	gtk_widget_insert_action_group(conversation->split, "member", G_ACTION_GROUP(group));
 	g_object_unref(group);
 }
 
 
-/* Double-clicking a person opens a private chat with them, while one click only picks them */
-static void open_member(GtkListView *view, guint position, Conversation *conversation) {
-	g_autoptr(GtkStringObject) item = g_list_model_get_item(G_LIST_MODEL(conversation->members), position);
-	if (item)
-		open_person(gtk_string_object_get_string(item), conversation);
-}
 
 
 typedef struct {
@@ -512,8 +529,10 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
 	gtk_widget_add_css_class(header, "top-bar");
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new(TEXT_MEMBERS_TITLE, NULL));
-	/* The panel sits at the window's right edge, so its header carries the window buttons there */
+	/* The panel sits at the window's right edge, so its header carries the window buttons there, and it never
+	 * offers the narrow window's Back, which would leave the whole room instead of closing the panel */
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
+	adw_header_bar_set_show_back_button(ADW_HEADER_BAR(header), FALSE);
 	gtk_box_append(GTK_BOX(panel), header);
 	conversation->members = gtk_string_list_new(NULL);
 	GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
@@ -524,9 +543,7 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	gtk_single_selection_set_can_unselect(selection, TRUE);
 	gtk_single_selection_set_selected(selection, GTK_INVALID_LIST_POSITION);
 	conversation->member_view = gtk_list_view_new(GTK_SELECTION_MODEL(selection), factory);
-	add_member_actions(conversation);
 	gtk_widget_add_css_class(conversation->member_view, "member-list");
-	g_signal_connect(conversation->member_view, "activate", G_CALLBACK(open_member), conversation);
 	GtkWidget *scroller = gtk_scrolled_window_new();
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), conversation->member_view);
@@ -611,6 +628,7 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 	adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split),
 		create_member_panel(conversation));
 	g_signal_connect(conversation->split, "notify::show-sidebar", G_CALLBACK(follow_member_panel), conversation);
+	add_member_actions(conversation);
 	return conversation->split;
 }
 
@@ -648,8 +666,8 @@ Conversation *create_conversation(Window *window) {
 	Conversation *conversation = g_new0(Conversation, 1);
 	conversation->window = window;
 	conversation->is_pinned = TRUE;
-	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, open_person,
-		conversation};
+	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, show_person,
+		show_person_menu, conversation};
 	conversation->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");

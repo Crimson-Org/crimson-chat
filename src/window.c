@@ -18,8 +18,8 @@
 #define NETWORK_KEY "network"
 #define BANNER_DELAY_MS 1500
 #define MOUSE_BACK_BUTTON 8
-#define MINIMUM_WIDTH 420
-#define MINIMUM_HEIGHT 620
+#define MINIMUM_WIDTH 436
+#define MINIMUM_HEIGHT 644
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
 static Window *main_window;
@@ -688,12 +688,17 @@ static GtkWidget *create_sidebar(Window *window) {
 }
 
 
-/* The mouse's back button closes the open chat and leaves the middle empty */
-static void go_back(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+void close_open_room(Window *window) {
 	show_conversation_room(window->conversation, NULL);
 	select_listed_room(window->room_list, NULL);
 	adw_navigation_split_view_set_show_content(window->split, FALSE);
 	save_window_choice(window->network ? window->network->key : NULL, NULL);
+}
+
+
+/* The mouse's back button closes the open chat and leaves the middle empty */
+static void go_back(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	close_open_room(window);
 }
 
 
@@ -738,6 +743,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	window->banner = ADW_BANNER(adw_banner_new(""));
 	g_signal_connect(window->banner, "button-clicked", G_CALLBACK(retry_now), window);
 	window->room_list = create_room_list(window);
+	watch_room_list_pointer(window->room_list, GTK_WIDGET(window->window));
 	/* The banner sits in the chat list under its search field, next to the server it is about */
 	GtkWidget *list = get_room_list_widget(window->room_list);
 	gtk_box_insert_child_after(GTK_BOX(list), GTK_WIDGET(window->banner), gtk_widget_get_first_child(list));

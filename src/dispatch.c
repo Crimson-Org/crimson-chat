@@ -583,6 +583,11 @@ static void deliver_targets(CrimsonNetwork *network, const IrcMessage *message) 
 	IrcState *state = get_network_state(network);
 	if (!target || !state || is_irc_channel_name(state, target) || is_service_nick(target))
 		return;
+	/* A deleted chat only comes back with a message newer than its deletion */
+	g_autoptr(GDateTime) latest = parse_irc_time(get_irc_parameter(message, 2));
+	gint64 deleted = find_deleted_chat(network->key, target);
+	if (deleted && (!latest || g_date_time_to_unix_usec(latest) <= deleted))
+		return;
 	open_private_room(network, target);
 }
 

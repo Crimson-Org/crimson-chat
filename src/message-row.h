@@ -10,7 +10,9 @@ typedef struct {
 	void (*react)(CrimsonMessage *message, const char *reaction, gpointer data);
 	void (*remove)(CrimsonMessage *message, gpointer data);
 	void (*show_message)(const char *message_id, gpointer data);
-	void (*open_person)(const char *nick, gpointer data);
+	/* A click on a person's name or picture opens their profile, and a right click their menu */
+	void (*show_person)(const char *nick, gpointer data);
+	void (*person_menu)(GtkWidget *anchor, const char *nick, double x, double y, gpointer data);
 	gpointer data;
 } MessageActions;
 
