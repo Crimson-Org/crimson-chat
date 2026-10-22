@@ -18,8 +18,8 @@
 #define NETWORK_KEY "network"
 #define BANNER_DELAY_MS 1500
 #define MOUSE_BACK_BUTTON 8
-#define MINIMUM_WIDTH 436
-#define MINIMUM_HEIGHT 644
+#define MINIMUM_WIDTH 452
+#define MINIMUM_HEIGHT 660
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
 static Window *main_window;
