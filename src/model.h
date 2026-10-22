@@ -128,6 +128,8 @@ gboolean is_room_typing(CrimsonRoom *room);
 
 CrimsonNetwork *create_network(Session *session, const char *key, const char *name);
 void announce_network_change(CrimsonNetwork *network);
+/* Network services such as NickServ and SaslServ, whose messages belong with the server's own */
+gboolean is_service_nick(const char *nick);
 CrimsonRoom *find_room(CrimsonNetwork *network, const char *name);
 CrimsonRoom *ensure_room(CrimsonNetwork *network, RoomKind kind, const char *name);
 void remove_room(CrimsonNetwork *network, CrimsonRoom *room);

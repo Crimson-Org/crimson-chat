@@ -8,6 +8,7 @@
 #include "window.h"
 
 #define ROOM_AVATAR_SIZE 50
+#define SEARCH_SLIDE_MS 200
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
@@ -15,6 +16,8 @@
 struct RoomList {
 	Window *window;
 	GtkWidget *box, *header, *search, *menu_button;
+	/* The server's name until the search button slides the search field open in its place */
+	GtkWidget *title_stack, *title, *search_button;
 	GtkWidget *add_button;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
@@ -237,6 +240,30 @@ static void change_search(GtkSearchEntry *entry, RoomList *list) {
 }
 
 
+/* The search field slides in from the button's side, and slides back out once it is left empty */
+static void toggle_search(GtkToggleButton *button, RoomList *list) {
+	gboolean is_open = gtk_toggle_button_get_active(button);
+	gtk_stack_set_transition_type(GTK_STACK(list->title_stack), is_open ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
+		: GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
+	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), is_open ? "search" : "title");
+	if (is_open)
+		gtk_widget_grab_focus(list->search);
+	else
+		gtk_editable_set_text(GTK_EDITABLE(list->search), "");
+}
+
+
+static void stop_search(GtkSearchEntry *entry, RoomList *list) {
+	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(list->search_button), FALSE);
+}
+
+
+static void leave_search(GtkEventControllerFocus *focus, RoomList *list) {
+	if (!*gtk_editable_get_text(GTK_EDITABLE(list->search)))
+		gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(list->search_button), FALSE);
+}
+
+
 static GtkWidget *create_header(RoomList *list) {
 	list->header = adw_header_bar_new();
 	gtk_widget_add_css_class(list->header, "top-bar");
@@ -247,7 +274,25 @@ static GtkWidget *create_header(RoomList *list) {
 	gtk_widget_set_hexpand(list->search, TRUE);
 	gtk_widget_add_css_class(list->search, "room-search");
 	g_signal_connect(list->search, "search-changed", G_CALLBACK(change_search), list);
-	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->search);
+	g_signal_connect(list->search, "stop-search", G_CALLBACK(stop_search), list);
+	GtkEventController *focus = gtk_event_controller_focus_new();
+	g_signal_connect(focus, "leave", G_CALLBACK(leave_search), list);
+	gtk_widget_add_controller(list->search, focus);
+	list->title = gtk_label_new(NULL);
+	gtk_label_set_ellipsize(GTK_LABEL(list->title), PANGO_ELLIPSIZE_END);
+	gtk_widget_add_css_class(list->title, "list-title");
+	list->title_stack = gtk_stack_new();
+	gtk_stack_set_transition_duration(GTK_STACK(list->title_stack), SEARCH_SLIDE_MS);
+	gtk_stack_set_hhomogeneous(GTK_STACK(list->title_stack), FALSE);
+	gtk_stack_add_named(GTK_STACK(list->title_stack), list->title, "title");
+	gtk_stack_add_named(GTK_STACK(list->title_stack), list->search, "search");
+	gtk_widget_set_hexpand(list->title_stack, TRUE);
+	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->title_stack);
+	list->search_button = gtk_toggle_button_new();
+	gtk_button_set_icon_name(GTK_BUTTON(list->search_button), "system-search-symbolic");
+	gtk_widget_set_tooltip_text(list->search_button, TEXT_SEARCH);
+	g_signal_connect(list->search_button, "toggled", G_CALLBACK(toggle_search), list);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->search_button);
 	return list->header;
 }
 
@@ -351,7 +396,8 @@ void refresh_room_list_header(RoomList *list) {
 	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), has_rooms || is_searching
 		|| !list->window->chat->has_started ? "list" : "no-rooms");
 	gtk_widget_set_visible(list->add_button, has_rooms || is_searching);
-	/* The search field names the server, and the banner above the window says when it is not connected */
+	/* The header names the server, and the banner under it says when it is not connected */
+	gtk_label_set_text(GTK_LABEL(list->title), list->network ? list->network->name : "");
 	g_autofree char *placeholder = list->network ? g_strdup_printf(TEXT_SEARCH_IN, list->network->name)
 		: g_strdup(TEXT_SEARCH);
 	gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(list->search), placeholder);
@@ -391,6 +437,7 @@ void set_room_list_narrow(RoomList *list, gboolean is_narrow) {
 
 
 void focus_room_search(RoomList *list) {
+	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(list->search_button), TRUE);
 	gtk_widget_grab_focus(list->search);
 }
 

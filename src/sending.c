@@ -163,11 +163,15 @@ static void message_someone(CrimsonNetwork *network, const char *rest, const cha
 	if (!*target)
 		return;
 	IrcState *state = get_network_state(network);
-	CrimsonRoom *room = state && is_irc_channel_name(state, target) ? find_room(network, target)
+	/* Talking to a service happens in the server's messages, where its answers arrive */
+	gboolean is_service = is_service_nick(target);
+	CrimsonRoom *room = is_service || (state && is_irc_channel_name(state, target)) ? find_room(network, target)
 		: open_private_room(network, target);
 	if (!room) {
 		g_autofree char *line = g_strdup_printf("%s %s :%s", command, target, rest);
 		send_raw(network, line);
+		if (is_service)
+			network->session->chat->events.room_opened(network->server_room, network->session->chat->data);
 		return;
 	}
 	if (*rest)

@@ -9,6 +9,7 @@
 #include "room-look.h"
 #include "window.h"
 
+#define SLIDE_DURATION_MS 220
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
@@ -19,6 +20,10 @@
 struct Conversation {
 	Window *window;
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller, *jump_button;
+	/* A still image of the chat that is leaving, which slides away while the real view already holds the next */
+	GtkWidget *still;
+	/* A narrow window slides whole pages itself, so the chat view does not slide on top of that */
+	gboolean is_narrow;
 	GtkWidget *member_view, *empty_note;
 	GtkStringList *members;
 	GtkNoSelection *messages;
@@ -610,6 +615,35 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 }
 
 
+/* Shows a still image of the open chat in its place, so the chat can change underneath while the image slides */
+static gboolean freeze_open_chat(Conversation *conversation) {
+	GtkWidget *page = gtk_stack_get_visible_child(GTK_STACK(conversation->stack));
+	if (conversation->is_narrow || page == conversation->still || gtk_widget_get_width(page) <= 0
+		|| !gtk_widget_get_mapped(page) || g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(conversation->stack)),
+		"room") != 0)
+		return FALSE;
+	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(page);
+	g_autoptr(GdkPaintable) image = gdk_paintable_get_current_image(live);
+	gtk_picture_set_paintable(GTK_PICTURE(conversation->still), image);
+	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), GTK_STACK_TRANSITION_TYPE_NONE);
+	gtk_stack_set_visible_child(GTK_STACK(conversation->stack), conversation->still);
+	return TRUE;
+}
+
+
+static void slide_to(Conversation *conversation, const char *name, GtkStackTransitionType transition) {
+	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), conversation->is_narrow
+		? GTK_STACK_TRANSITION_TYPE_NONE : transition);
+	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), name);
+}
+
+
+static void forget_still(GtkStack *stack, GParamSpec *spec, Conversation *conversation) {
+	if (!gtk_stack_get_transition_running(stack))
+		gtk_picture_set_paintable(GTK_PICTURE(conversation->still), NULL);
+}
+
+
 Conversation *create_conversation(Window *window) {
 	Conversation *conversation = g_new0(Conversation, 1);
 	conversation->window = window;
@@ -619,6 +653,11 @@ Conversation *create_conversation(Window *window) {
 	conversation->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");
+	conversation->still = gtk_picture_new();
+	gtk_picture_set_content_fit(GTK_PICTURE(conversation->still), GTK_CONTENT_FIT_FILL);
+	gtk_stack_add_named(GTK_STACK(conversation->stack), conversation->still, "still");
+	gtk_stack_set_transition_duration(GTK_STACK(conversation->stack), SLIDE_DURATION_MS);
+	g_signal_connect(conversation->stack, "notify::transition-running", G_CALLBACK(forget_still), conversation);
 	return conversation;
 }
 
@@ -683,12 +722,15 @@ static gboolean settle_at_bottom(gpointer data) {
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
+	gboolean was_open = freeze_open_chat(conversation);
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
 	gtk_no_selection_set_model(conversation->messages, room ? G_LIST_MODEL(room->messages) : NULL);
-	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
+	/* A chat slides in from the right, and going back slides it out to the right */
+	slide_to(conversation, room ? "room" : "empty", room || !was_open ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
+		: GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
 	if (!room)
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);
@@ -706,6 +748,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 
 
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow) {
+	conversation->is_narrow = is_narrow;
 	AdwOverlaySplitView *split = ADW_OVERLAY_SPLIT_VIEW(conversation->split);
 	adw_overlay_split_view_set_collapsed(split, is_narrow);
 	adw_overlay_split_view_set_show_sidebar(split, conversation->wants_members && !is_narrow);

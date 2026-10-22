@@ -157,6 +157,9 @@ void load_room_cache(CrimsonNetwork *network) {
 		if (g_strv_length(fields) != 8)
 			continue;
 		RoomKind kind = (RoomKind)g_ascii_strtoll(fields[0], NULL, 10);
+		/* Chats with services from before they went to the server's messages are left behind */
+		if (kind == ROOM_PRIVATE && is_service_nick(fields[1]))
+			continue;
 		CrimsonRoom *room = kind == ROOM_SERVER ? network->server_room : ensure_room(network, kind, fields[1]);
 		room->last_time = g_ascii_strtoll(fields[2], NULL, 10);
 		room->unread_count = (guint)g_ascii_strtoull(fields[3], NULL, 10);

@@ -141,6 +141,15 @@ headerbar.top-bar menubutton > button {
 }
 
 .room-name {
+	font-size: 18px;
+	font-weight: 700;
+}
+
+.room-preview {
+	font-size: 17px;
+}
+
+.list-title {
 	font-weight: 700;
 }
 
@@ -445,6 +454,7 @@ headerbar.top-bar menubutton > button {
 
 .member-row {
 	padding: 6px 8px;
+	font-size: 17px;
 }
 
 .member-role {

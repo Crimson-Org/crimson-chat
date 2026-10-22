@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "model.h"
 
 enum {
@@ -331,4 +333,12 @@ guint count_network_unread(CrimsonNetwork *network, gboolean *has_mention) {
 		*has_mention |= room->has_mention;
 	}
 	return total;
+}
+
+
+gboolean is_service_nick(const char *nick) {
+	if (!nick)
+		return FALSE;
+	gsize length = strlen(nick);
+	return (length > 4 && g_ascii_strcasecmp(nick + length - 4, "serv") == 0) || g_ascii_strcasecmp(nick, "Global") == 0;
 }

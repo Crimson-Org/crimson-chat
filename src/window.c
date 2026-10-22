@@ -18,6 +18,8 @@
 #define NETWORK_KEY "network"
 #define BANNER_DELAY_MS 1500
 #define MOUSE_BACK_BUTTON 8
+#define MINIMUM_WIDTH 420
+#define MINIMUM_HEIGHT 620
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
 static Window *main_window;
@@ -732,7 +734,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	g_object_set_data(G_OBJECT(window->window), "window", window);
 	load_window_geometry_state(&window->geometry);
 	apply_window_geometry(GTK_WINDOW(window->window), &window->geometry);
-	gtk_widget_set_size_request(GTK_WIDGET(window->window), 360, 480);
+	gtk_widget_set_size_request(GTK_WIDGET(window->window), MINIMUM_WIDTH, MINIMUM_HEIGHT);
 	window->banner = ADW_BANNER(adw_banner_new(""));
 	g_signal_connect(window->banner, "button-clicked", G_CALLBACK(retry_now), window);
 	window->room_list = create_room_list(window);

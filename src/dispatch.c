@@ -116,6 +116,9 @@ static CrimsonRoom *find_conversation(CrimsonNetwork *network, const IrcMessage 
 		return context_room;
 	g_autofree char *sender = get_source_nick(message->source);
 	const char *peer = is_own_nick(state, sender) ? target : sender;
+	/* What services say, such as the last login, goes with the server's messages instead of opening chats */
+	if (is_service_nick(peer))
+		return network->server_room;
 	gboolean is_new = !find_room(network, peer);
 	CrimsonRoom *room = ensure_room(network, ROOM_PRIVATE, peer);
 	if (is_new && get_irc_support(state, "MONITOR"))
@@ -204,7 +207,9 @@ static void offer_login(CrimsonNetwork *network, const CrimsonMessage *line) {
 		|| g_ascii_strcasecmp(line->sender, "NickServ") != 0)
 		return;
 	g_autofree char *text = g_ascii_strdown(line->text, -1);
-	if (!strstr(text, "registered") && !strstr(text, "reserved") && !strstr(text, "identify"))
+	/* Only the prompt about the nickname itself, not help text that merely mentions identifying */
+	if (!strstr(text, "nickname is registered") && !strstr(text, "nickname is reserved")
+		&& !strstr(text, "nick is registered"))
 		return;
 	work->has_offered_login = TRUE;
 	network->session->chat->events.login_wanted(network, network->session->chat->data);
@@ -475,6 +480,9 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 		HistoryLoad *load = g_new0(HistoryLoad, 1);
 		const char *target = get_irc_parameter(message, 2);
 		load->room = target ? find_room(network, target) : NULL;
+		/* A service's history belongs with the server's messages, like what it says live */
+		if (!load->room && is_service_nick(target))
+			load->room = network->server_room;
 		if (!load->room && target)
 			load->room = ensure_room(network, is_irc_channel_name(get_network_state(network), target) ? ROOM_CHANNEL
 				: ROOM_PRIVATE, target);
@@ -573,7 +581,7 @@ static gboolean gather_multiline(CrimsonNetwork *network, const IrcMessage *mess
 static void deliver_targets(CrimsonNetwork *network, const IrcMessage *message) {
 	const char *target = get_irc_parameter(message, 1);
 	IrcState *state = get_network_state(network);
-	if (!target || !state || is_irc_channel_name(state, target))
+	if (!target || !state || is_irc_channel_name(state, target) || is_service_nick(target))
 		return;
 	open_private_room(network, target);
 }
