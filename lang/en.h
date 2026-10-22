@@ -264,5 +264,5 @@
 #define TEXT_HELP_PROFILE "This is how you appear on this server, and the login to your account with it. A picture is a web address of an image, since servers do not store images. Fields the server does not support are greyed out."
 #define TEXT_SASL_LOGIN "Login (SASL)"
 #define TEXT_ACCOUNT_NAME "Account Name"
-#define TEXT_LOGIN_WANTED "NickServ asks you to log in"
+#define TEXT_LOGIN_WANTED "Log in to keep your nickname"
 #define TEXT_LOG_IN "Log In"
