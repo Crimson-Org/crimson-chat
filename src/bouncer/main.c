@@ -18,10 +18,10 @@
 #define DEFAULT_LISTEN "6697"
 #define DEFAULT_WEB "8443"
 #define FAILURE_STATUS 1
-/* Uploaded pictures are on unless the owner turns them off, as square PNGs of 256 pixels from at most 2.5 MB */
+/* Uploaded pictures are on unless the owner turns them off, as square PNGs of 96 pixels from at most 2.5 MB */
 #define DEFAULT_AVATAR_FORMAT "png"
 #define DEFAULT_AVATAR_QUALITY 90
-#define DEFAULT_AVATAR_SIZE 256
+#define DEFAULT_AVATAR_SIZE 96
 #define DEFAULT_AVATAR_LARGEST_MB 2.5
 #define AVATAR_FOLDER "avatars"
 
