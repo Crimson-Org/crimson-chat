@@ -3,6 +3,10 @@
 #include "casemap.h"
 #include "message.h"
 
+/* The keys of the IRCv3 metadata registry followed for every person and room, which the bouncer subscribes to
+ * before it joins anything so the server sends them with each join */
+#define FOLLOWED_PROFILE_KEYS "avatar", "display-name", "color", "status", "pronouns", "homepage", "bot"
+
 /* Someone seen in a shared channel, as far as the server has told */
 typedef struct {
 	char *nick, *user, *host, *account, *realname;

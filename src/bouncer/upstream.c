@@ -187,6 +187,10 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 		is_final ? ", not retrying" : status == IRC_CLIENT_DISCONNECTED ? ", retrying" : "");
 	for_each_bound_downstream(upstream, tell_progress, NULL);
 	if (status == IRC_CLIENT_REGISTERED) {
+		/* The server sends a room's picture and its people's profiles on join only to a connection that follows
+		 * them, so the bouncer follows them itself before any client is there to ask */
+		if (has_irc_cap(get_irc_client_state(client), "draft/metadata-2"))
+			send_irc_client_command(client, "METADATA", "*", "SUB", FOLLOWED_PROFILE_KEYS, NULL);
 		join_saved_channels(upstream);
 		for_each_bound_downstream(upstream, tell_new_nick, NULL);
 		for_each_bound_downstream(upstream, drop_missing_caps, NULL);

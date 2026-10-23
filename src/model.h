@@ -98,9 +98,8 @@ struct _CrimsonRoom {
 };
 
 /* The profile keys of the IRCv3 metadata registry that people set for themselves, which the app keeps and sets
- * again on each connection, and those it follows for everyone */
+ * again on each connection */
 #define OWN_PROFILE_KEYS "display-name", "avatar", "status", "pronouns", "homepage"
-#define FOLLOWED_PROFILE_KEYS "avatar", "display-name", "color", "status", "pronouns", "homepage", "bot"
 
 /* The Crimson project's own server, suggested first and shown with the Crimson logo */
 #define CRIMSON_SERVER_NAME "Crimson"
