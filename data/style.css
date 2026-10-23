@@ -415,7 +415,12 @@ headerbar.top-bar menubutton > button {
 
 .composer-placeholder {
 	color: alpha(currentColor, 0.45);
-	margin-top: 8px;
+}
+
+/* The smiley matches the send button's size, so both sit centred on a one line message */
+.emoji-button > button {
+	min-width: 44px;
+	min-height: 44px;
 }
 
 .send-button {

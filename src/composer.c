@@ -276,6 +276,7 @@ Composer *create_composer(void) {
 	gtk_widget_set_tooltip_text(emoji, TEXT_EMOJI);
 	gtk_widget_add_css_class(emoji, "flat");
 	gtk_widget_add_css_class(emoji, "circular");
+	gtk_widget_add_css_class(emoji, "emoji-button");
 	gtk_widget_set_valign(emoji, GTK_ALIGN_END);
 	GtkWidget *chooser = gtk_emoji_chooser_new();
 	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), composer);
