@@ -650,10 +650,12 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 
 
 static void deliver_standard_reply(CrimsonNetwork *network, const IrcMessage *message) {
+	/* Profile details the app asks for and sets on every connection are quietly left out where the server lacks
+	 * them, since the user did not do anything */
+	if (g_strcmp0(get_irc_parameter(message, 0), "METADATA") == 0)
+		return;
 	add_status(network->server_room, message, get_last_parameter(message));
-	/* Profile details the app sets on every connection are quietly left out where the server lacks them */
-	gboolean is_quiet = g_strcmp0(get_irc_parameter(message, 0), "METADATA") == 0;
-	if (g_str_equal(message->command, "FAIL") && !is_quiet)
+	if (g_str_equal(message->command, "FAIL"))
 		network->session->chat->events.show_problem(get_last_parameter(message), network->session->chat->data);
 }
 

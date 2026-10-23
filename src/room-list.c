@@ -10,6 +10,7 @@
 #define ROOM_AVATAR_SIZE 50
 #define SEARCH_SLIDE_MS 200
 #define CONNECTION_SPINNER_SIZE 24
+#define CONNECTION_NOTE_CHARS 30
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
@@ -19,9 +20,11 @@ struct RoomList {
 	GtkWidget *box, *header, *search, *menu_button;
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
-	GtkWidget *add_button, *add_revealer, *connection;
-	/* Whether the press now going on started on the list's empty space */
-	gboolean is_space_pressed;
+	GtkWidget *add_button, *add_revealer, *connection, *connection_button, *connection_icons, *connection_note,
+		*connection_label;
+	/* Whether the press now going on started on the list's empty space, whether the list holds chats, and whether
+	 * the corner shows a problem rather than a wait */
+	gboolean is_space_pressed, has_chats, is_problem;
 	GtkWidget *stack, *list_view;
 	GtkCustomFilter *filter;
 	GtkCustomSorter *sorter;
@@ -252,6 +255,16 @@ static void press_list_space(GtkGestureClick *gesture, int presses, double x, do
 }
 
 
+static void show_connection_note(GtkEventControllerMotion *motion, double x, double y, RoomList *list) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->connection_note), TRUE);
+}
+
+
+static void hide_connection_note(GtkEventControllerMotion *motion, RoomList *list) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->connection_note), list->is_problem);
+}
+
+
 /* A click that starts and ends on the list's empty space closes the open chat, the same as going back, and
  * clears the keyboard focus so no room keeps its outline */
 static void click_list_space(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
@@ -403,20 +416,42 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_set_halign(list->add_revealer, GTK_ALIGN_END);
 	gtk_widget_set_valign(list->add_revealer, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_revealer);
-	/* A spinner in the other corner while a connection is down, saying which when pointed at */
-	list->connection = gtk_button_new();
+	/* A spinner in the other corner while a connection is down, or a warning when it needs the user, with what it
+	 * is about sliding out beside it */
+	list->connection_button = gtk_button_new();
+	list->connection_icons = gtk_stack_new();
 	GtkWidget *spinner = adw_spinner_new();
 	gtk_widget_set_size_request(spinner, CONNECTION_SPINNER_SIZE, CONNECTION_SPINNER_SIZE);
-	gtk_widget_set_halign(spinner, GTK_ALIGN_CENTER);
-	gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER);
-	gtk_button_set_child(GTK_BUTTON(list->connection), spinner);
-	gtk_widget_add_css_class(list->connection, "circular");
-	gtk_widget_add_css_class(list->connection, "connection-spinner");
-	gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection), "win.retry-connection");
+	gtk_stack_add_named(GTK_STACK(list->connection_icons), spinner, "waiting");
+	gtk_stack_add_named(GTK_STACK(list->connection_icons), gtk_image_new_from_icon_name("dialog-warning-symbolic"),
+		"problem");
+	gtk_widget_set_halign(list->connection_icons, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(list->connection_icons, GTK_ALIGN_CENTER);
+	gtk_button_set_child(GTK_BUTTON(list->connection_button), list->connection_icons);
+	gtk_widget_add_css_class(list->connection_button, "circular");
+	gtk_widget_add_css_class(list->connection_button, "flat");
+	gtk_widget_add_css_class(list->connection_button, "connection-spinner");
+	list->connection_label = gtk_label_new(NULL);
+	gtk_label_set_wrap(GTK_LABEL(list->connection_label), TRUE);
+	gtk_label_set_max_width_chars(GTK_LABEL(list->connection_label), CONNECTION_NOTE_CHARS);
+	gtk_label_set_xalign(GTK_LABEL(list->connection_label), 0);
+	gtk_widget_add_css_class(list->connection_label, "connection-note");
+	list->connection_note = gtk_revealer_new();
+	gtk_revealer_set_transition_type(GTK_REVEALER(list->connection_note), GTK_REVEALER_TRANSITION_TYPE_SLIDE_RIGHT);
+	gtk_revealer_set_child(GTK_REVEALER(list->connection_note), list->connection_label);
+	gtk_widget_set_valign(list->connection_note, GTK_ALIGN_CENTER);
+	/* One rounded shape that is a circle around the spinner and grows into a pill as the note slides out */
+	list->connection = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(list->connection, "connection-pill");
+	gtk_box_append(GTK_BOX(list->connection), list->connection_button);
+	gtk_box_append(GTK_BOX(list->connection), list->connection_note);
+	GtkEventController *hover = gtk_event_controller_motion_new();
+	g_signal_connect(hover, "enter", G_CALLBACK(show_connection_note), list);
+	g_signal_connect(hover, "leave", G_CALLBACK(hide_connection_note), list);
+	gtk_widget_add_controller(list->connection, hover);
 	gtk_widget_set_halign(list->connection, GTK_ALIGN_START);
 	gtk_widget_set_valign(list->connection, GTK_ALIGN_END);
 	gtk_widget_set_visible(list->connection, FALSE);
-	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->connection);
 	GtkGesture *space = gtk_gesture_click_new();
 	g_signal_connect(space, "pressed", G_CALLBACK(press_list_space), list);
 	g_signal_connect(space, "released", G_CALLBACK(click_list_space), list);
@@ -453,7 +488,12 @@ RoomList *create_room_list(Window *window) {
 	list->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");
-	gtk_box_append(GTK_BOX(list->box), list->stack);
+	/* The connection note sits over every page of the list, including the one for a server without chats */
+	GtkWidget *pages = gtk_overlay_new();
+	gtk_overlay_set_child(GTK_OVERLAY(pages), list->stack);
+	gtk_overlay_add_overlay(GTK_OVERLAY(pages), list->connection);
+	gtk_widget_set_vexpand(pages, TRUE);
+	gtk_box_append(GTK_BOX(list->box), pages);
 	set_room_list_narrow(list, FALSE);
 	return list;
 }
@@ -470,7 +510,8 @@ void refresh_room_list_header(RoomList *list) {
 	gboolean has_rooms = g_list_model_get_n_items(G_LIST_MODEL(list->selection)) > 0;
 	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), has_rooms || is_searching
 		|| !list->window->chat->has_started ? "list" : "no-rooms");
-	gtk_widget_set_visible(list->add_revealer, has_rooms || is_searching);
+	list->has_chats = has_rooms || is_searching;
+	gtk_widget_set_visible(list->add_revealer, list->has_chats && !gtk_widget_get_visible(list->connection));
 	/* The header names the app, the search field the server, and a spinner in the corner says when it is down */
 	gtk_label_set_text(GTK_LABEL(list->title), TEXT_APPLICATION_NAME);
 	g_autofree char *placeholder = list->network ? g_strdup_printf(TEXT_SEARCH_IN, list->network->name)
@@ -531,10 +572,20 @@ CrimsonRoom *step_listed_room(RoomList *list, int step) {
 }
 
 
-void show_room_list_connection(RoomList *list, const char *message) {
-	gtk_widget_set_visible(list->connection, message != NULL);
-	gtk_widget_set_tooltip_text(list->connection, message);
-	if (message)
+void show_room_list_connection(RoomList *list, const ConnectionNote *note) {
+	gtk_widget_set_visible(list->connection, note != NULL);
+	list->is_problem = note && note->is_problem;
+	if (note) {
+		gtk_label_set_text(GTK_LABEL(list->connection_label), note->message);
+		gtk_stack_set_visible_child_name(GTK_STACK(list->connection_icons), note->is_problem ? "problem" : "waiting");
+		gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_button), note->action);
+		gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->connection_button), note->target);
+	}
+	/* A problem keeps its explanation out, while waiting only shows it when pointed at */
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->connection_note), list->is_problem);
+	/* While waiting there is nowhere to join or message yet, so the + button steps aside */
+	gtk_widget_set_visible(list->add_revealer, !note && list->has_chats);
+	if (note)
 		gtk_widget_add_css_class(list->list_view, "is-offline");
 	else
 		gtk_widget_remove_css_class(list->list_view, "is-offline");

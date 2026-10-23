@@ -54,6 +54,8 @@ struct Upstream {
 	GHashTable *channel_keys;
 	/* Set while the network is being removed, so its last disconnect announces nothing */
 	gboolean is_removed;
+	/* Why the network last disconnected, which clients that log in later are told as well */
+	char *error;
 };
 
 /* A client logged in to the bouncer, bound to one network or managing the network list */

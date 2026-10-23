@@ -79,6 +79,8 @@ GHashTable *describe_upstream(Upstream *upstream) {
 	add_attribute(attributes, "username", record->username);
 	add_attribute(attributes, "realname", record->realname);
 	add_attribute(attributes, "sasl-username", record->sasl_username);
+	if (upstream->client && get_irc_client_status(upstream->client) == IRC_CLIENT_DISCONNECTED)
+		add_attribute(attributes, "error", upstream->error);
 	return attributes;
 }
 
@@ -150,6 +152,8 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	Upstream *upstream = data;
 	if (upstream->is_removed)
 		return;
+	g_free(upstream->error);
+	upstream->error = status == IRC_CLIENT_DISCONNECTED && reason ? g_strdup(reason) : NULL;
 	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	add_attribute(attributes, "state", describe_upstream_state(upstream));
 	g_hash_table_insert(attributes, g_strdup("error"), g_strdup(status == IRC_CLIENT_DISCONNECTED && reason
@@ -274,6 +278,7 @@ void free_upstream(Upstream *upstream) {
 	clear_network_record(&upstream->record);
 	g_queue_clear_full(&upstream->pending_echoes, (GDestroyNotify)free_pending_echo);
 	g_hash_table_unref(upstream->channel_keys);
+	g_free(upstream->error);
 	g_free(upstream);
 }
 

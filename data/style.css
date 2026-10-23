@@ -508,7 +508,6 @@ headerbar.top-bar menubutton > button {
 }
 
 .connection-spinner {
-	margin: 16px;
 	min-width: 48px;
 	min-height: 48px;
 }
@@ -516,4 +515,16 @@ headerbar.top-bar menubutton > button {
 .plain-item {
 	font-weight: normal;
 	padding: 6px 12px;
+}
+
+/* The corner's circle around the spinner, which grows into a pill holding what it waits for */
+.connection-pill {
+	margin: 16px;
+	border-radius: 24px;
+	background-color: color-mix(in srgb, var(--window-fg-color) 12%, var(--window-bg-color));
+	box-shadow: 0 2px 8px alpha(black, 0.3);
+}
+
+.connection-note {
+	padding: 8px 18px 8px 8px;
 }

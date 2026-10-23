@@ -22,7 +22,9 @@ struct Window {
 	gboolean is_connection_shown;
 	guint connection_source;
 	char *lost_name, *lost_message;
-	gboolean can_retry;
+	/* The server whose connection the corner is about, so switching servers does not count as reconnecting */
+	CrimsonNetwork *lost_network;
+	gboolean is_problem, is_login_problem;
 	AdwNavigationSplitView *split;
 	GtkWidget *rail, *rail_list;
 	RoomList *room_list;
@@ -69,8 +71,17 @@ void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
 /* Lets the room list follow whether the window has focus, for its + button */
 void watch_room_list_focus(RoomList *list, GtkWidget *window);
-/* Shows a spinner in the list's corner with the message as its tooltip and dims the chats, or hides it with NULL */
-void show_room_list_connection(RoomList *list, const char *message);
+/* What the chat list's corner says about a connection that is down, and what clicking it does */
+typedef struct {
+	const char *message;
+	/* A problem the user has to fix, shown as a warning, where otherwise the app is waiting */
+	gboolean is_problem;
+	const char *action;
+	GVariant *target;
+} ConnectionNote;
+
+/* Shows the connection note in the list's corner and dims the chats, or hides it with NULL */
+void show_room_list_connection(RoomList *list, const ConnectionNote *note);
 /* The room above or below the chosen one in the list, for keyboard stepping */
 CrimsonRoom *step_listed_room(RoomList *list, int step);
 

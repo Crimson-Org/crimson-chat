@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "../lang/en.h"
 #include "common/startup.h"
 #include "dialogs.h"
@@ -19,6 +21,7 @@
 #define CONNECTION_DELAY_MS 1500
 #define MOUSE_BACK_BUTTON 8
 #define MINIMUM_WIDTH 452
+#define RAIL_SPINNER_SIZE 22
 #define MINIMUM_HEIGHT 660
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
@@ -104,6 +107,16 @@ static const char *describe_state(NetworkState state) {
 }
 
 
+/* Whether a disconnect reason is a refused login or certificate, which the connection never retries by itself */
+static gboolean needs_user(const char *error) {
+	if (!error)
+		return FALSE;
+	g_autofree char *reason = g_ascii_strdown(error, -1);
+	return strstr(reason, "sasl") || strstr(reason, "authentication") || strstr(reason, "password")
+		|| strstr(reason, "login") || strstr(reason, "certificate");
+}
+
+
 static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	AdwAvatar *avatar = g_object_get_data(G_OBJECT(row), "avatar");
 	GtkWidget *badge = g_object_get_data(G_OBJECT(row), "badge");
@@ -114,6 +127,12 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	guint unread = count_network_unread(network, &has_mention);
 	style_unread_badge(badge, unread, has_mention);
 	gtk_widget_set_opacity(GTK_WIDGET(avatar), network->state == NETWORK_CONNECTED ? 1.0 : 0.45);
+	/* A server that is not connected shows a spinner over its picture while it connects, or a warning when it
+	 * stopped with a reason and waits for the user */
+	gboolean is_stopped = network->state == NETWORK_DISCONNECTED && needs_user(network->error);
+	GtkWidget *state = g_object_get_data(G_OBJECT(row), "state");
+	gtk_widget_set_visible(state, network->state != NETWORK_CONNECTED);
+	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
 	/* A connected server only names itself, and one that is not also says so */
 	g_autofree char *tooltip = network->state == NETWORK_CONNECTED ? g_strdup(network->name)
 		: g_strdup_printf("%s\n%s", network->name, describe_state(network->state));
@@ -140,7 +159,17 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	gtk_widget_set_halign(badge, GTK_ALIGN_END);
 	gtk_widget_set_valign(badge, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), badge);
+	GtkWidget *state = gtk_stack_new();
+	GtkWidget *spinner = adw_spinner_new();
+	gtk_widget_set_size_request(spinner, RAIL_SPINNER_SIZE, RAIL_SPINNER_SIZE);
+	gtk_stack_add_named(GTK_STACK(state), spinner, "waiting");
+	gtk_stack_add_named(GTK_STACK(state), gtk_image_new_from_icon_name("dialog-warning-symbolic"), "problem");
+	gtk_widget_set_halign(state, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(state, GTK_ALIGN_CENTER);
+	gtk_widget_set_can_target(state, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), state);
 	gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), overlay);
+	g_object_set_data(G_OBJECT(row), "state", state);
 	g_object_set_data(G_OBJECT(row), "avatar", avatar);
 	g_object_set_data(G_OBJECT(row), "badge", badge);
 	g_object_set_data(G_OBJECT(row), NETWORK_KEY, network);
@@ -190,21 +219,38 @@ static void refresh_welcome(Window *window) {
 }
 
 
-/* The connection behind the chosen server that is down: its bouncer when it goes through one, or itself; it can
- * be retried from here unless the bouncer is the one reconnecting to the server */
-static const char *find_lost_connection(Window *window, gboolean *was_connected, gboolean *can_retry) {
+/* The connection behind the chosen server that is down: its bouncer when it goes through one, or itself */
+static const char *find_lost_connection(Window *window, gboolean *was_connected) {
 	CrimsonNetwork *network = window->network;
 	if (!network)
 		return NULL;
 	Session *session = network->session;
 	*was_connected = session->has_connected;
-	*can_retry = TRUE;
 	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED)
 		return describe_account_name(session);
 	if (network->state == NETWORK_CONNECTED)
 		return NULL;
-	*can_retry = !network->bouncer_id;
 	return network->name;
+}
+
+
+/* Only a refused login or certificate stops a server for good, since the connection retries anything else by
+ * itself, so only those show as a problem the user has to fix */
+static void read_connection_problem(Window *window) {
+	CrimsonNetwork *network = window->network;
+	gboolean is_stopped = network && network->state == NETWORK_DISCONNECTED
+		&& !(network->session->record->is_bouncer && read_account_state(network->session) != NETWORK_CONNECTED);
+	window->is_problem = is_stopped && needs_user(network->error);
+	window->is_login_problem = window->is_problem && !strstr(network->error, "ertificate");
+}
+
+
+/* Clicking the corner opens the server's messages, where what happened is written */
+static void show_connection(Window *window) {
+	g_autoptr(GVariant) target = window->network ? g_variant_ref_sink(g_variant_new_string(window->network->key))
+		: NULL;
+	ConnectionNote note = {window->lost_message, window->is_problem, target ? "win.server-messages" : NULL, target};
+	show_room_list_connection(window->room_list, &note);
 }
 
 
@@ -212,18 +258,20 @@ static gboolean reveal_connection(gpointer data) {
 	Window *window = data;
 	window->connection_source = 0;
 	window->is_connection_shown = TRUE;
-	show_room_list_connection(window->room_list, window->lost_message);
+	show_connection(window);
 	return G_SOURCE_REMOVE;
 }
 
 
 /* A lost connection shows as a spinner until it is back, and coming back says so once */
 static void refresh_connection(Window *window) {
-	gboolean was_connected = FALSE, can_retry = FALSE;
-	const char *lost = window->chat->has_started ? find_lost_connection(window, &was_connected, &can_retry) : NULL;
+	gboolean was_connected = FALSE;
+	const char *lost = window->chat->has_started ? find_lost_connection(window, &was_connected) : NULL;
+	gboolean is_same_server = window->lost_network == window->network;
+	window->lost_network = lost ? window->network : NULL;
 	if (!lost) {
 		g_clear_handle_id(&window->connection_source, g_source_remove);
-		if (window->is_connection_shown && window->lost_name) {
+		if (window->is_connection_shown && window->lost_name && is_same_server) {
 			g_autofree char *text = g_strdup_printf(TEXT_RECONNECTED_TO, window->lost_name);
 			show_toast(window, text);
 		}
@@ -233,28 +281,21 @@ static void refresh_connection(Window *window) {
 		g_clear_pointer(&window->lost_message, g_free);
 		return;
 	}
+	read_connection_problem(window);
 	g_free(window->lost_message);
-	window->lost_message = g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS, lost);
-	window->can_retry = can_retry;
+	window->lost_message = window->is_problem ? g_strdup_printf(window->is_login_problem ? TEXT_LOGIN_FAILED_ON
+		: TEXT_PROBLEM_ON, lost, window->network->error) : g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO
+		: TEXT_CONNECTING_TO_ELLIPSIS, lost);
 	g_free(window->lost_name);
 	window->lost_name = was_connected ? g_strdup(lost) : NULL;
-	if (window->is_connection_shown)
-		show_room_list_connection(window->room_list, window->lost_message);
-	else if (!window->connection_source)
+	/* A problem shows at once, since nothing is coming to fix it, and so does a server that was already down when
+	 * chosen, while a fresh drop waits a moment in case it comes straight back */
+	if (window->is_connection_shown || window->is_problem || !is_same_server) {
+		g_clear_handle_id(&window->connection_source, g_source_remove);
+		window->is_connection_shown = TRUE;
+		show_connection(window);
+	} else if (!window->connection_source)
 		window->connection_source = g_timeout_add(CONNECTION_DELAY_MS, reveal_connection, window);
-}
-
-
-/* Clicking the spinner tries again at once, where the app itself is the one waiting to retry */
-static void retry_connection_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	Window *window = data;
-	if (!window->can_retry)
-		return;
-	Session *bouncer = find_bouncer(window->chat);
-	if (bouncer && read_account_state(bouncer) != NETWORK_CONNECTED)
-		connect_session(bouncer);
-	else if (window->network)
-		reconnect_network(window->network);
 }
 
 
@@ -330,6 +371,8 @@ void choose_network(Window *window, CrimsonNetwork *network) {
 	window->network = network;
 	select_rail_row(window, network);
 	show_room_list_network(window->room_list, network);
+	/* The corner's spinner and the dimming belong to the chosen server's own connection */
+	refresh_window_later(window);
 	save_window_choice(network ? network->key : NULL, NULL);
 }
 
@@ -717,7 +760,6 @@ static void add_window_actions(Window *window) {
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
-		{"retry-connection", retry_connection_action, NULL, NULL, NULL, {0}},
 		{"invite-people", invite_action, NULL, NULL, NULL, {0}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(window->window), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
