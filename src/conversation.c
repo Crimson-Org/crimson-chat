@@ -13,6 +13,8 @@
 #include "shown-messages.h"
 
 #define FADE_DURATION_MS 160
+/* The narrow window's list slides away over this long once the chat under it is built */
+#define SLIDE_DURATION_MS 300
 #define ACTIVITY_SECONDS 120
 #define SECONDS_PER_MINUTE 60
 #define HEADER_AVATAR_SIZE 38
@@ -62,9 +64,10 @@ struct Conversation {
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller;
 	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
 	GtkWidget *jump_button, *jump_icons, *jump_count;
-	/* A still image of the chat that is leaving, lying over the next one while it is built and then fading away */
+	/* A still image of the view that is leaving, over the next chat while it is built, then fading or sliding away */
 	GtkWidget *view, *still;
-	AdwAnimation *fade;
+	AdwAnimation *fade, *slide;
+	double slide_progress;
 	/* The opened room waits a frame to show the click, builds its rows under the still and then fades in */
 	guint settle_tick, reveal_source, read_source;
 	guint settle_frames;
@@ -1166,17 +1169,51 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 }
 
 
-/* Lays a still image of the chat over it, so the chat can change underneath while the image fades */
-static gboolean freeze_open_chat(Conversation *conversation) {
-	GtkWidget *view = conversation->view;
-	if (conversation->is_narrow || gtk_widget_get_width(view) <= 0 || !gtk_widget_get_mapped(view))
+/* The view a newly opened chat replaces: the chat itself in the wide window, or the list of chats the narrow window
+ * leaves, while the narrow window's own slide takes the chat away again */
+static GtkWidget *find_leaving_view(Conversation *conversation, CrimsonRoom *room) {
+	AdwNavigationSplitView *split = conversation->window->split;
+	if (!conversation->is_narrow)
+		return conversation->view;
+	return room && !adw_navigation_split_view_get_show_content(split) ? GTK_WIDGET(split) : NULL;
+}
+
+
+/* Lays a still image of the leaving view over the chat, so the chat can change underneath while the image fades or
+ * slides away */
+static gboolean freeze_open_chat(Conversation *conversation, CrimsonRoom *room) {
+	GtkWidget *view = find_leaving_view(conversation, room);
+	if (!view || gtk_widget_get_width(view) <= 0 || !gtk_widget_get_mapped(view))
 		return FALSE;
 	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(view);
 	g_autoptr(GdkPaintable) image = gdk_paintable_get_current_image(live);
 	adw_animation_reset(conversation->fade);
+	adw_animation_reset(conversation->slide);
+	conversation->slide_progress = 0;
 	gtk_picture_set_paintable(GTK_PICTURE(conversation->still), image);
 	gtk_widget_set_opacity(conversation->still, 1);
 	gtk_widget_set_visible(conversation->still, TRUE);
+	gtk_widget_queue_allocate(conversation->view);
+	return TRUE;
+}
+
+
+static void move_still(double value, gpointer data) {
+	Conversation *conversation = data;
+	conversation->slide_progress = value;
+	gtk_widget_queue_allocate(conversation->view);
+}
+
+
+/* The sliding still moves off to the left across the chat */
+static gboolean place_still(GtkOverlay *overlay, GtkWidget *widget, GdkRectangle *allocation,
+	Conversation *conversation) {
+	if (widget != conversation->still)
+		return FALSE;
+	/* The overlay places its main child first, so that child already has the size the still should have */
+	int width = gtk_widget_get_width(conversation->stack);
+	*allocation = (GdkRectangle){(int)(-conversation->slide_progress * width), 0, width,
+		gtk_widget_get_height(conversation->stack)};
 	return TRUE;
 }
 
@@ -1184,7 +1221,8 @@ static gboolean freeze_open_chat(Conversation *conversation) {
 static void refresh_members_later(Conversation *conversation);
 
 
-static void finish_fade(Conversation *conversation) {
+static void uncover_chat(Conversation *conversation) {
+	conversation->slide_progress = 0;
 	gtk_widget_set_visible(conversation->still, FALSE);
 	gtk_picture_set_paintable(GTK_PICTURE(conversation->still), NULL);
 	conversation->is_settling = FALSE;
@@ -1228,7 +1266,12 @@ Conversation *create_conversation(Window *window) {
 	AdwAnimationTarget *target = adw_property_animation_target_new(G_OBJECT(conversation->still), "opacity");
 	conversation->fade = adw_timed_animation_new(conversation->still, 1, 0, FADE_DURATION_MS, target);
 	adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(conversation->fade), ADW_EASE_OUT_CUBIC);
-	g_signal_connect_swapped(conversation->fade, "done", G_CALLBACK(finish_fade), conversation);
+	g_signal_connect_swapped(conversation->fade, "done", G_CALLBACK(uncover_chat), conversation);
+	AdwAnimationTarget *mover = adw_callback_animation_target_new(move_still, conversation, NULL);
+	conversation->slide = adw_timed_animation_new(conversation->still, 0, 1, SLIDE_DURATION_MS, mover);
+	adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(conversation->slide), ADW_EASE_OUT_CUBIC);
+	g_signal_connect_swapped(conversation->slide, "done", G_CALLBACK(uncover_chat), conversation);
+	g_signal_connect(conversation->view, "get-child-position", G_CALLBACK(place_still), conversation);
 	return conversation;
 }
 
@@ -1452,12 +1495,12 @@ static void follow_room(CrimsonRoom *room, Conversation *conversation) {
 }
 
 
-/* The list takes the room's first rows in one change, so it can reuse the rows of the last room */
-static void attach_room_messages(Conversation *conversation) {
+/* The list takes the room's first rows in one change, so it reuses the rows of the last room */
+static void attach_room_messages(Conversation *conversation, guint shown_count) {
 	CrimsonRoom *room = conversation->room;
 	g_clear_object(&conversation->recent_messages);
 	if (room)
-		conversation->recent_messages = create_shown_messages(G_LIST_MODEL(room->messages), SETTLE_ROWS_PER_FRAME,
+		conversation->recent_messages = create_shown_messages(G_LIST_MODEL(room->messages), shown_count,
 			count_filling_messages(conversation));
 	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->recent_messages));
 	conversation->is_attached = TRUE;
@@ -1467,13 +1510,13 @@ static void attach_room_messages(Conversation *conversation) {
 
 
 /* Hidden joins and leaves take no room, so the chat is filled by what it shows, which the list has measured by the
- * next frame */
+ * next frame, and until it can scroll there is room left */
 static gboolean is_chat_unfilled(Conversation *conversation) {
 	GtkAdjustment *scroll = get_scroll(conversation);
 	double page = gtk_adjustment_get_page_size(scroll);
 	if (page <= 0)
 		return g_list_model_get_n_items(G_LIST_MODEL(conversation->messages)) < count_filling_messages(conversation);
-	return gtk_adjustment_get_upper(scroll) < page;
+	return gtk_adjustment_get_upper(scroll) <= page;
 }
 
 
@@ -1492,7 +1535,7 @@ static gboolean settle_room(GtkWidget *widget, GdkFrameClock *clock, gpointer da
 		return G_SOURCE_CONTINUE;
 	if (!conversation->is_attached) {
 		if (!is_waiting_for_history(conversation))
-			attach_room_messages(conversation);
+			attach_room_messages(conversation, SETTLE_ROWS_PER_FRAME);
 		return G_SOURCE_CONTINUE;
 	}
 	CrimsonShownMessages *shown = conversation->recent_messages;
@@ -1503,7 +1546,7 @@ static gboolean settle_room(GtkWidget *widget, GdkFrameClock *clock, gpointer da
 	}
 	conversation->settle_tick = 0;
 	if (conversation->is_settling)
-		adw_animation_play(conversation->fade);
+		adw_animation_play(conversation->is_narrow ? conversation->slide : conversation->fade);
 	else
 		reveal_when_near_top(conversation);
 	return G_SOURCE_REMOVE;
@@ -1522,11 +1565,8 @@ static void stop_settling(Conversation *conversation) {
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
-	gboolean is_frozen = freeze_open_chat(conversation);
+	gboolean is_frozen = freeze_open_chat(conversation, room);
 	stop_settling(conversation);
-	/* Without a still over it the last room's messages would show under the next one's name */
-	if (!is_frozen)
-		gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
 	conversation->is_settling = is_frozen;
 	conversation->opened_at = g_get_monotonic_time();
 	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
@@ -1548,6 +1588,10 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	/* History is asked for first, so a room still loading does not show itself as empty for a moment */
 	if (room && !room->has_history)
 		request_latest_history(room);
+	/* Without a still to build under, such as when the narrow window's open chat switches rooms, the chat is filled
+	 * at once instead of half built */
+	if (!is_frozen)
+		attach_room_messages(conversation, count_filling_messages(conversation));
 	conversation->settle_tick = gtk_widget_add_tick_callback(conversation->view, settle_room, conversation, NULL);
 	if (!room)
 		return;
