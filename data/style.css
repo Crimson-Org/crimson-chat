@@ -83,15 +83,15 @@ headerbar.title-bar {
 }
 
 /* Unread counters, crimson when they hold a mention */
-/* A circle that fits two digits, with more shown as 99+ */
+/* A circle that fits two digits, with more shown as 99+; GTK adds padding outside the minimum size, so any would stretch it */
 .unread-badge {
 	min-width: 26px;
 	min-height: 26px;
-	padding: 0 3px;
+	padding: 0;
 	border-radius: 9999px;
-	/* A dimmed window text colour with the window's own colour on it reads in light and dark themes alike */
-	background-color: color-mix(in srgb, var(--window-fg-color) 45%, var(--window-bg-color));
-	color: var(--window-bg-color);
+	/* A soft grey with the window text on it reads in light and dark themes alike */
+	background-color: color-mix(in srgb, var(--window-fg-color) 26%, var(--window-bg-color));
+	color: var(--window-fg-color);
 	font-weight: 700;
 	font-size: 16px;
 }
