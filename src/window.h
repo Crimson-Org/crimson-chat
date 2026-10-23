@@ -37,6 +37,10 @@ struct Window {
 	/* The rail only shows with more than one server */
 	gboolean is_narrow, has_rail, is_quitting;
 	guint refresh_source;
+	/* Waits out the moment after connecting before offering to register, and the servers whose login offer was
+	 * closed while the app runs */
+	guint banner_source;
+	GHashTable *dismissed_logins;
 	Tray *tray;
 	WindowGeometry geometry;
 };
@@ -78,6 +82,15 @@ GtkWidget *get_room_list_widget(RoomList *list);
 void show_room_list_network(RoomList *list, CrimsonNetwork *network);
 void select_listed_room(RoomList *list, CrimsonRoom *room);
 void resort_room_list(RoomList *list);
+/* An offer at the top of the chat list about the chosen server's account: to register the nickname, or to log in
+ * where the server said the nickname is registered */
+typedef enum {
+	ACCOUNT_BANNER_NONE,
+	ACCOUNT_BANNER_REGISTER,
+	ACCOUNT_BANNER_LOG_IN,
+} AccountBanner;
+
+void show_room_list_banner(RoomList *list, AccountBanner banner, const char *network_key);
 /* The list's header, which the side panel places across the rail and the list together */
 GtkWidget *get_room_list_header(RoomList *list);
 void refresh_room_list_header(RoomList *list);

@@ -6,6 +6,7 @@
 
 #define CACHE_DELAY_SECONDS 2
 #define WORK_KEY "work"
+#define NICKSERV "NickServ"
 /* The bouncer's word on whether it reconnects a network by itself */
 #define RETRY_ATTRIBUTE "crimson-chat/retrying"
 /* The name a bouncer announces when its owner gave it none */
@@ -21,7 +22,7 @@ static const char *const CLIENT_CAPS[] = {
 	"extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname", "invite-notify", "account-tag",
 	"labeled-response", "draft/chathistory", "draft/event-playback", "draft/read-marker", "draft/message-redaction",
 	"draft/metadata-2", "draft/channel-rename", "draft/multiline", "extended-monitor", "sts",
-	"soju.im/bouncer-networks", "draft/pre-away", NULL,
+	"soju.im/bouncer-networks", "draft/pre-away", "draft/account-registration", NULL,
 };
 
 /* The managing connection to a bouncer only needs the network list and its notifications */
@@ -66,6 +67,11 @@ static void free_network_work(NetworkWork *work) {
 	g_hash_table_unref(work->pending);
 	g_free(work->opening_room);
 	g_clear_handle_id(&work->typing_source, g_source_remove);
+	if (work->registration_reply)
+		work->registration_reply(REGISTRATION_FAILED, NULL, work->registration_data);
+	g_free(work->registering_account);
+	g_free(work->registering_password);
+	g_free(work->code_command);
 	g_free(work);
 }
 
@@ -153,10 +159,24 @@ static NetworkState read_network_state(CrimsonNetwork *network) {
 
 
 /* The server room shows its network's state, so it is drawn again along with the rail and the header */
+/* Servers without the IRCv3 commands register through NickServ, which a quiet WHOIS finds once connected */
+static void probe_nickserv(CrimsonNetwork *network) {
+	if (!network->client || can_network(network, "draft/account-registration"))
+		return;
+	get_network_work(network)->is_probing_nickserv = TRUE;
+	send_irc_client_command(network->client, "WHOIS", NICKSERV, NULL);
+}
+
+
 static void refresh_network_state(CrimsonNetwork *network) {
+	NetworkState previous = network->state;
 	network->state = read_network_state(network);
 	if (network->state == NETWORK_CONNECTED)
 		network->has_connected = TRUE;
+	if (network->state == NETWORK_CONNECTED && previous != NETWORK_CONNECTED) {
+		network->connected_since = g_get_monotonic_time();
+		probe_nickserv(network);
+	}
 	announce_network_change(network);
 	announce_account_change(network->session->item);
 	announce_room_change(network->server_room);
@@ -907,4 +927,219 @@ gboolean is_network_retrying(CrimsonNetwork *network) {
 	if (is_bouncer_link_up(network))
 		return g_strcmp0(g_hash_table_lookup(network->attributes, RETRY_ATTRIBUTE), "1") == 0;
 	return network->client && will_irc_client_retry(network->client);
+}
+
+
+gboolean is_logged_in(CrimsonNetwork *network) {
+	IrcState *state = get_network_state(network);
+	return state && state->account && *state->account;
+}
+
+
+gboolean can_register_account(CrimsonNetwork *network) {
+	return can_network(network, "draft/account-registration") || network->has_nickserv;
+}
+
+
+/* The keys the server gives with the registration capability, such as email-required, where it gives them */
+static gboolean has_registration_key(CrimsonNetwork *network, const char *key) {
+	IrcState *state = get_network_state(network);
+	const char *value = state ? g_hash_table_lookup(state->available_caps, "draft/account-registration") : NULL;
+	if (!value)
+		return FALSE;
+	g_auto(GStrv) keys = g_strsplit(value, ",", -1);
+	for (int index = 0; keys[index]; index++) {
+		g_autofree char *name = g_strndup(keys[index], strcspn(keys[index], "="));
+		if (g_str_equal(name, key))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+
+gboolean is_email_required(CrimsonNetwork *network) {
+	return has_registration_key(network, "email-required");
+}
+
+
+gboolean allows_custom_account_name(CrimsonNetwork *network) {
+	return can_network(network, "draft/account-registration") && has_registration_key(network,
+		"custom-account-name");
+}
+
+
+void request_registration(CrimsonNetwork *network, const char *account, const char *email, const char *password,
+	RegistrationReply reply, gpointer data) {
+	NetworkWork *work = get_network_work(network);
+	cancel_registration(network);
+	work->registration_reply = reply;
+	work->registration_data = data;
+	work->registering_account = g_strdup(account);
+	work->registering_password = g_strdup(password);
+	work->is_nickserv_registration = !can_network(network, "draft/account-registration");
+	if (!work->is_nickserv_registration) {
+		send_irc_client_command(network->client, "REGISTER", account, email && *email ? email : "*", password,
+			NULL);
+		return;
+	}
+	g_autofree char *command = email && *email ? g_strdup_printf("REGISTER %s %s", password, email)
+		: g_strdup_printf("REGISTER %s", password);
+	send_irc_client_command(network->client, "PRIVMSG", NICKSERV, command, NULL);
+}
+
+
+void send_registration_code(CrimsonNetwork *network, const char *code) {
+	NetworkWork *work = get_network_work(network);
+	if (!work->is_nickserv_registration) {
+		send_irc_client_command(network->client, "VERIFY", work->registering_account, code, NULL);
+		return;
+	}
+	g_autofree char *command = g_strdup_printf("%s %s", work->code_command ? work->code_command : "CONFIRM", code);
+	send_irc_client_command(network->client, "PRIVMSG", NICKSERV, command, NULL);
+}
+
+
+void cancel_registration(CrimsonNetwork *network) {
+	NetworkWork *work = get_network_work(network);
+	work->registration_reply = NULL;
+	work->registration_data = NULL;
+	g_clear_pointer(&work->registering_account, g_free);
+	g_clear_pointer(&work->registering_password, g_free);
+	g_clear_pointer(&work->code_command, g_free);
+}
+
+
+/* A finished registration becomes the saved login, kept by the bouncer for its networks, which then logs in by
+ * itself, and in the account otherwise */
+static void keep_registered_login(CrimsonNetwork *network, const char *account) {
+	NetworkWork *work = get_network_work(network);
+	const char *name = account ? account : work->registering_account;
+	if (network->bouncer_id) {
+		/* The bouncer saves a login registered with the IRCv3 commands itself, and NickServ's it learns here */
+		if (work->is_nickserv_registration) {
+			g_autoptr(GHashTable) attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+			g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(name));
+			g_hash_table_insert(attributes, g_strdup("sasl-password"), g_strdup(work->registering_password));
+			change_bouncer_network(network, attributes);
+		}
+	} else {
+		AccountRecord *record = network->session->record;
+		g_free(record->sasl_username);
+		g_free(record->sasl_password);
+		record->sasl_username = g_strdup(name);
+		record->sasl_password = g_strdup(work->registering_password);
+		save_chat_accounts(network->session->chat);
+	}
+	network->wants_login = FALSE;
+}
+
+
+static void answer_registration(CrimsonNetwork *network, RegistrationResult result, const char *message,
+	const char *account) {
+	NetworkWork *work = get_network_work(network);
+	RegistrationReply reply = work->registration_reply;
+	gpointer data = work->registration_data;
+	if (result == REGISTRATION_DONE) {
+		keep_registered_login(network, account);
+		cancel_registration(network);
+	}
+	if (reply)
+		reply(result, message, data);
+	announce_network_change(network);
+}
+
+
+/* NickServ asks for a code with its own command, such as VERIFY REGISTER on Atheme or CONFIRM on Anope */
+static void read_nickserv_reply(CrimsonNetwork *network, const char *text) {
+	NetworkWork *work = get_network_work(network);
+	g_autofree char *lower = g_ascii_strdown(text, -1);
+	const char *verify = strstr(text, "VERIFY REGISTER");
+	if (verify) {
+		g_free(work->code_command);
+		g_autofree char *rest = g_strdup(verify);
+		/* The command names the account before the code, which is the part the user types */
+		g_auto(GStrv) words = g_strsplit(rest, " ", 4);
+		work->code_command = words[0] && words[1] && words[2] ? g_strdup_printf("%s %s %s", words[0], words[1],
+			words[2]) : g_strdup("VERIFY REGISTER");
+		answer_registration(network, REGISTRATION_NEEDS_CODE, text, NULL);
+	} else if (strstr(lower, "confirm") && (strstr(lower, "code") || strstr(lower, "passcode"))) {
+		g_free(work->code_command);
+		work->code_command = g_strdup("CONFIRM");
+		answer_registration(network, REGISTRATION_NEEDS_CODE, text, NULL);
+	} else if (strstr(lower, "already registered")) {
+		network->wants_login = TRUE;
+		answer_registration(network, REGISTRATION_EXISTS, text, NULL);
+	} else if (work->registration_reply) {
+		/* Anything else NickServ says shows as it is */
+		work->registration_reply(REGISTRATION_FAILED, text, work->registration_data);
+	}
+}
+
+
+static gboolean collect_nickserv_probe(CrimsonNetwork *network, const IrcMessage *message) {
+	NetworkWork *work = get_network_work(network);
+	const char *nick = get_irc_parameter(message, 1);
+	if (!work->is_probing_nickserv || !nick || g_ascii_strcasecmp(nick, NICKSERV) != 0)
+		return FALSE;
+	const char *command = message->command;
+	if (g_str_equal(command, "311")) {
+		network->has_nickserv = TRUE;
+		announce_network_change(network);
+	}
+	if (g_str_equal(command, "318") || g_str_equal(command, "401"))
+		work->is_probing_nickserv = FALSE;
+	return TRUE;
+}
+
+
+/* A server can refuse the nickname for belonging to an account, as Ergo does, which is the same as NickServ asking
+ * for a login */
+static void notice_reserved_nick(CrimsonNetwork *network, const IrcMessage *message) {
+	if (!g_str_equal(message->command, "433"))
+		return;
+	g_autofree char *reason = g_ascii_strdown(get_last_irc_parameter(message), -1);
+	if (!strstr(reason, "reserved") && !strstr(reason, "registered"))
+		return;
+	network->wants_login = TRUE;
+	announce_network_change(network);
+}
+
+
+gboolean collect_registration(CrimsonNetwork *network, const IrcMessage *message) {
+	notice_reserved_nick(network, message);
+	if (collect_nickserv_probe(network, message))
+		return TRUE;
+	NetworkWork *work = get_network_work(network);
+	const char *command = message->command;
+	const char *status = get_irc_parameter(message, 0);
+	gboolean is_reply = g_str_equal(command, "REGISTER") || g_str_equal(command, "VERIFY");
+	gboolean is_failure = g_str_equal(command, "FAIL") && (g_strcmp0(status, "REGISTER") == 0
+		|| g_strcmp0(status, "VERIFY") == 0);
+	if (is_reply && g_strcmp0(status, "SUCCESS") == 0) {
+		answer_registration(network, REGISTRATION_DONE, get_last_irc_parameter(message), get_irc_parameter(message, 1));
+		return TRUE;
+	}
+	if (is_reply && g_strcmp0(status, "VERIFICATION_REQUIRED") == 0) {
+		answer_registration(network, REGISTRATION_NEEDS_CODE, get_last_irc_parameter(message), NULL);
+		return TRUE;
+	}
+	if (is_failure) {
+		gboolean exists = g_strcmp0(get_irc_parameter(message, 1), "ACCOUNT_EXISTS") == 0;
+		if (exists)
+			network->wants_login = TRUE;
+		answer_registration(network, exists ? REGISTRATION_EXISTS : REGISTRATION_FAILED,
+			get_last_irc_parameter(message), NULL);
+		return TRUE;
+	}
+	if (!work->registration_reply || !work->is_nickserv_registration)
+		return FALSE;
+	/* NickServ logs the new account in once it is registered, which the server confirms with 900 */
+	if (g_str_equal(command, "900") && !work->code_command) {
+		answer_registration(network, REGISTRATION_DONE, NULL, get_irc_parameter(message, 2));
+		return FALSE;
+	}
+	g_autofree char *sender = get_source_nick(message->source);
+	if (g_str_equal(command, "NOTICE") && sender && g_ascii_strcasecmp(sender, NICKSERV) == 0)
+		read_nickserv_reply(network, get_last_irc_parameter(message));
+	return FALSE;
 }

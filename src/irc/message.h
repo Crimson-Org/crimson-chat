@@ -31,6 +31,8 @@ void add_irc_parameter(IrcMessage *message, const char *parameter);
 /* NULL when the message has fewer parameters */
 const char *get_irc_parameter(const IrcMessage *message, guint index);
 guint count_irc_parameters(const IrcMessage *message);
+/* The last parameter, which holds the human readable text of most replies, or "" without any */
+const char *get_last_irc_parameter(const IrcMessage *message);
 
 /* A tag without a value reads as an empty string, and a missing tag as NULL */
 const char *get_irc_tag(const IrcMessage *message, const char *name);

@@ -21,6 +21,8 @@ struct RoomList {
 	GtkWidget *title_stack, *title, *search_button;
 	GtkWidget *add_button, *add_revealer, *connection, *connection_button, *connection_icons, *connection_note,
 		*connection_label, *connection_fix;
+	/* The account offer above the chats, its words, its button and the button that closes it */
+	GtkWidget *banner, *banner_label, *banner_button, *banner_close;
 	/* Whether the press now going on started on the list's empty space, whether the list holds chats, and whether
 	 * the corner shows a problem rather than a wait */
 	gboolean is_space_pressed, has_chats, is_problem;
@@ -537,6 +539,49 @@ static void build_models(RoomList *list) {
 }
 
 
+static GtkWidget *create_banner(RoomList *list) {
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	gtk_widget_add_css_class(box, "account-banner");
+	list->banner_label = gtk_label_new(NULL);
+	gtk_label_set_wrap(GTK_LABEL(list->banner_label), TRUE);
+	gtk_label_set_xalign(GTK_LABEL(list->banner_label), 0);
+	gtk_widget_set_hexpand(list->banner_label, TRUE);
+	gtk_box_append(GTK_BOX(box), list->banner_label);
+	list->banner_button = gtk_button_new();
+	gtk_widget_add_css_class(list->banner_button, "suggested-action");
+	gtk_widget_add_css_class(list->banner_button, "connection-fix");
+	gtk_widget_set_valign(list->banner_button, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), list->banner_button);
+	list->banner_close = gtk_button_new_from_icon_name("window-close-symbolic");
+	gtk_widget_add_css_class(list->banner_close, "flat");
+	gtk_widget_add_css_class(list->banner_close, "circular");
+	gtk_widget_set_valign(list->banner_close, GTK_ALIGN_CENTER);
+	gtk_widget_set_tooltip_text(list->banner_close, TEXT_CLOSE);
+	gtk_box_append(GTK_BOX(box), list->banner_close);
+	list->banner = gtk_revealer_new();
+	gtk_revealer_set_transition_type(GTK_REVEALER(list->banner), GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN);
+	gtk_revealer_set_child(GTK_REVEALER(list->banner), box);
+	return list->banner;
+}
+
+
+void show_room_list_banner(RoomList *list, AccountBanner banner, const char *network_key) {
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->banner), banner != ACCOUNT_BANNER_NONE);
+	if (banner == ACCOUNT_BANNER_NONE)
+		return;
+	gboolean is_login = banner == ACCOUNT_BANNER_LOG_IN;
+	gtk_label_set_text(GTK_LABEL(list->banner_label), is_login ? TEXT_LOGIN_BANNER : TEXT_REGISTER_BANNER);
+	gtk_button_set_label(GTK_BUTTON(list->banner_button), is_login ? TEXT_LOG_IN : TEXT_REGISTER);
+	GVariant *target = g_variant_new_string(network_key);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(list->banner_button), is_login ? "win.own-profile"
+		: "win.register-account");
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->banner_button), target);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(list->banner_close), is_login ? "win.dismiss-login"
+		: "win.dismiss-register");
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->banner_close), target);
+}
+
+
 RoomList *create_room_list(Window *window) {
 	RoomList *list = g_new0(RoomList, 1);
 	list->window = window;
@@ -544,6 +589,7 @@ RoomList *create_room_list(Window *window) {
 	list->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(list->box, "room-column");
 	create_header(list);
+	gtk_box_append(GTK_BOX(list->box), create_banner(list));
 	list->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");

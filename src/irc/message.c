@@ -308,3 +308,9 @@ char *create_irc_identifier(void) {
 	identifier[IDENTIFIER_BYTES] = '\0';
 	return g_strdup(identifier);
 }
+
+
+const char *get_last_irc_parameter(const IrcMessage *message) {
+	guint count = count_irc_parameters(message);
+	return count ? get_irc_parameter(message, count - 1) : "";
+}

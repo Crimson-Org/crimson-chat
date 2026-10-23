@@ -40,12 +40,6 @@ gint64 read_message_time(const IrcMessage *message) {
 }
 
 
-static const char *get_last_parameter(const IrcMessage *message) {
-	guint count = count_irc_parameters(message);
-	return count ? get_irc_parameter(message, count - 1) : "";
-}
-
-
 static void add_status(CrimsonRoom *room, const IrcMessage *message, const char *text) {
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_STATUS, NULL, text, read_message_time(message));
 	insert_room_message(room, line);
@@ -142,7 +136,7 @@ static void answer_ctcp(CrimsonNetwork *network, const char *sender, const char 
 /* Turns PRIVMSG and NOTICE into a message, or NULL for a client query such as VERSION */
 static CrimsonMessage *read_text_message(CrimsonNetwork *network, const IrcMessage *message, gboolean is_history) {
 	g_autofree char *sender = get_source_nick(message->source);
-	const char *text = get_last_parameter(message);
+	const char *text = get_last_irc_parameter(message);
 	MessageKind kind = g_str_equal(message->command, "NOTICE") ? MESSAGE_NOTICE : MESSAGE_TEXT;
 	g_autofree char *body = g_strdup(text);
 	if (*body == CTCP_MARK) {
@@ -215,7 +209,8 @@ static void offer_login(CrimsonNetwork *network, const CrimsonMessage *line) {
 		&& !strstr(text, "nick is registered"))
 		return;
 	work->has_offered_login = TRUE;
-	network->session->chat->events.login_wanted(network, network->session->chat->data);
+	network->wants_login = TRUE;
+	announce_network_change(network);
 }
 
 
@@ -424,11 +419,11 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 		const char *kicked = get_irc_parameter(message, 1);
 		if (kicked && is_own_nick(state, kicked) && !load)
 			room->is_joined = FALSE;
-		add_event(room, message, g_strdup_printf(TEXT_KICKED, sender, kicked, get_last_parameter(message)));
+		add_event(room, message, g_strdup_printf(TEXT_KICKED, sender, kicked, get_last_irc_parameter(message)));
 	} else if (g_str_equal(command, "TOPIC") && room) {
 		g_free(room->topic);
 		room->topic = g_strdup(get_irc_parameter(message, 1));
-		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_parameter(message)));
+		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_irc_parameter(message)));
 	} else if (g_str_equal(command, "MODE") && room && shows) {
 		g_autoptr(GPtrArray) parts = g_ptr_array_new();
 		for (guint index = 1; index < count_irc_parameters(message); index++)
@@ -466,7 +461,7 @@ static void deliver_departure(CrimsonNetwork *network, const IrcMessage *message
 	}
 	for (guint index = 0; shows && index < rooms->len; index++) {
 		char *text = is_nick ? g_strdup_printf(TEXT_RENAMED, sender, new_nick)
-			: g_strdup_printf(TEXT_QUIT_EVENT, sender, get_last_parameter(message));
+			: g_strdup_printf(TEXT_QUIT_EVENT, sender, get_last_irc_parameter(message));
 		add_event(g_ptr_array_index(rooms, index), message, text);
 	}
 	for (guint index = 0; index < rooms->len; index++) {
@@ -496,7 +491,7 @@ static void deliver_read_marker(CrimsonNetwork *network, const IrcMessage *messa
 
 
 static void deliver_presence(CrimsonNetwork *network, const IrcMessage *message, gboolean is_online) {
-	g_auto(GStrv) entries = g_strsplit(get_last_parameter(message), ",", -1);
+	g_auto(GStrv) entries = g_strsplit(get_last_irc_parameter(message), ",", -1);
 	for (int index = 0; entries[index]; index++) {
 		g_autofree char *nick = get_source_nick(entries[index]);
 		CrimsonRoom *room = find_room(network, nick);
@@ -607,7 +602,7 @@ static gboolean gather_multiline(CrimsonNetwork *network, const IrcMessage *mess
 		gathered->command = g_strdup(message->command);
 	char **text = (char **)&g_ptr_array_index(gathered->parameters, 1);
 	const char *separator = has_irc_tag(message, "draft/multiline-concat") || is_first ? "" : "\n";
-	char *joined = g_strconcat(*text, separator, get_last_parameter(message), NULL);
+	char *joined = g_strconcat(*text, separator, get_last_irc_parameter(message), NULL);
 	g_free(*text);
 	*text = joined;
 	return TRUE;
@@ -654,7 +649,7 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 		CrimsonRoom *room = find_room(network, get_irc_parameter(message, 1));
 		if (room) {
 			g_free(room->topic);
-			room->topic = g_strdup(get_last_parameter(message));
+			room->topic = g_strdup(get_last_irc_parameter(message));
 			announce_room_change(room);
 		}
 		return;
@@ -681,7 +676,7 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 	/* A missing message of the day and a taken nick during registration are routine, and an unknown command
 	 * answers something the app sent on its own, not something the user did */
 	if (number >= 400 && number < 600 && number != 421 && number != 422 && number != 433)
-		network->session->chat->events.show_problem(get_last_parameter(message), network->session->chat->data);
+		network->session->chat->events.show_problem(get_last_irc_parameter(message), network->session->chat->data);
 }
 
 
@@ -690,9 +685,9 @@ static void deliver_standard_reply(CrimsonNetwork *network, const IrcMessage *me
 	 * them, since the user did not do anything */
 	if (g_strcmp0(get_irc_parameter(message, 0), "METADATA") == 0)
 		return;
-	add_status(network->server_room, message, get_last_parameter(message));
+	add_status(network->server_room, message, get_last_irc_parameter(message));
 	if (g_str_equal(message->command, "FAIL"))
-		network->session->chat->events.show_problem(get_last_parameter(message), network->session->chat->data);
+		network->session->chat->events.show_problem(get_last_irc_parameter(message), network->session->chat->data);
 }
 
 
@@ -757,7 +752,7 @@ static void handle_message_in(CrimsonNetwork *network, const IrcMessage *message
 	else if (g_str_equal(command, "INVITE"))
 		deliver_invite(network, message);
 	else if (g_str_equal(command, "ERROR"))
-		add_status(network->server_room, message, get_last_parameter(message));
+		add_status(network->server_room, message, get_last_irc_parameter(message));
 	else if (g_ascii_isdigit(*command))
 		deliver_numeric(network, message);
 }
@@ -781,6 +776,8 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 		return;
 	if (load)
 		note_oldest_line(load, message);
+	if (!load && collect_registration(network, message))
+		return;
 	handle_message_in(network, message, affected, load);
 }
 

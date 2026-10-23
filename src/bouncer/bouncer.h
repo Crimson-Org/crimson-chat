@@ -58,6 +58,8 @@ struct Upstream {
 	gboolean is_removed;
 	/* Why the network last disconnected, which clients that log in later are told as well */
 	char *error;
+	/* The account and password a client is registering, kept as the network's login once the server agrees */
+	char *registering_account, *registering_password;
 };
 
 /* A client logged in to the bouncer, bound to one network or managing the network list */

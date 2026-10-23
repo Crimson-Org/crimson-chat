@@ -6,6 +6,7 @@
 #include "dialogs.h"
 #include "images.h"
 #include "profile.h"
+#include "register.h"
 #include "room-picker.h"
 #include "settings.h"
 #include "state.h"
@@ -22,6 +23,8 @@
 #define NETWORK_KEY "network"
 #define CONNECTION_DELAY_MS 1500
 #define RAIL_DIMMED 0.45
+/* How long after connecting the offer to register waits, so a login prompt from NickServ can come first */
+#define REGISTER_OFFER_DELAY_US (5 * G_USEC_PER_SEC)
 #define MOUSE_BACK_BUTTON 8
 #define MINIMUM_WIDTH 452
 #define RAIL_SPINNER_SIZE 22
@@ -440,6 +443,44 @@ static void refresh_tray_attention(Window *window) {
 }
 
 
+/* A login is saved for the server, so not being logged in is a failed login rather than a missing account */
+static gboolean has_saved_login(CrimsonNetwork *network) {
+	const char *login = network->bouncer_id ? g_hash_table_lookup(network->attributes, "sasl-username")
+		: network->session->record->sasl_username;
+	return login && *login;
+}
+
+
+static gboolean show_banner_later(gpointer data) {
+	Window *window = data;
+	window->banner_source = 0;
+	refresh_window_later(window);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* NickServ saying the nickname is registered offers to log in at once, while a server that would register the
+ * nickname offers it a moment after connecting, once nothing asked for a login */
+static AccountBanner pick_account_banner(Window *window) {
+	CrimsonNetwork *network = window->network;
+	if (!network || network->state != NETWORK_CONNECTED || is_logged_in(network))
+		return ACCOUNT_BANNER_NONE;
+	if (network->wants_login && !g_hash_table_contains(window->dismissed_logins, network->key))
+		return ACCOUNT_BANNER_LOG_IN;
+	if (network->wants_login || has_saved_login(network) || !can_register_account(network)
+		|| is_registration_dismissed(network->key))
+		return ACCOUNT_BANNER_NONE;
+	gint64 waited = g_get_monotonic_time() - network->connected_since;
+	if (waited < REGISTER_OFFER_DELAY_US) {
+		if (!window->banner_source)
+			window->banner_source = g_timeout_add((guint)((REGISTER_OFFER_DELAY_US - waited) / 1000) + 1,
+				show_banner_later, window);
+		return ACCOUNT_BANNER_NONE;
+	}
+	return ACCOUNT_BANNER_REGISTER;
+}
+
+
 static gboolean refresh_now(gpointer data) {
 	Window *window = data;
 	window->refresh_source = 0;
@@ -448,6 +489,8 @@ static gboolean refresh_now(gpointer data) {
 	update_view(window);
 	resort_room_list(window->room_list);
 	refresh_conversation(window->conversation);
+	show_room_list_banner(window->room_list, pick_account_banner(window), window->network ? window->network->key
+		: NULL);
 	return G_SOURCE_REMOVE;
 }
 
@@ -779,6 +822,26 @@ static void choose_server_action(GSimpleAction *action, GVariant *parameter, gpo
 }
 
 
+static void register_account_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network)
+		show_registration(data, network);
+}
+
+
+static void dismiss_register_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	save_registration_dismissed(g_variant_get_string(parameter, NULL));
+	refresh_window_later(data);
+}
+
+
+static void dismiss_login_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	g_hash_table_add(window->dismissed_logins, g_strdup(g_variant_get_string(parameter, NULL)));
+	refresh_window_later(window);
+}
+
+
 static void own_profile_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	CrimsonNetwork *network = find_keyed_network(data, parameter);
 	if (network)
@@ -914,6 +977,9 @@ static void add_window_actions(Window *window) {
 		{"bouncer-admin", bouncer_admin_action, NULL, NULL, NULL, {0}},
 		{"choose-server", choose_server_action, "s", NULL, NULL, {0}},
 		{"own-profile", own_profile_action, "s", NULL, NULL, {0}},
+		{"register-account", register_account_action, "s", NULL, NULL, {0}},
+		{"dismiss-register", dismiss_register_action, "s", NULL, NULL, {0}},
+		{"dismiss-login", dismiss_login_action, "s", NULL, NULL, {0}},
 		{"server-messages", server_messages_action, "s", NULL, NULL, {0}},
 		{"hide-server-messages", hide_server_messages_action, "s", NULL, NULL, {0}},
 		{"network-settings", network_settings_action, "s", NULL, NULL, {0}},
@@ -1044,6 +1110,7 @@ static void remember_sidebar_width(int width, gpointer data) {
 Window *create_window(GtkApplication *application, Chat *chat) {
 	Window *window = g_new0(Window, 1);
 	main_window = window;
+	window->dismissed_logins = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	window->chat = chat;
 	window->window = ADW_APPLICATION_WINDOW(adw_application_window_new(application));
 	gtk_window_set_title(GTK_WINDOW(window->window), TEXT_APPLICATION_NAME);

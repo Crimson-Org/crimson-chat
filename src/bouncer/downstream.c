@@ -17,7 +17,7 @@ static const char *const OFFERED_CAPS[] = {
 	"batch", "echo-message", "draft/chathistory", "draft/event-playback", "draft/read-marker", "cap-notify",
 	"account-notify", "away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname",
 	"invite-notify", "account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename",
-	"extended-monitor", "crimson-chat/invites", NULL,
+	"extended-monitor", "crimson-chat/invites", "draft/account-registration", NULL,
 };
 
 /* Commands a client only receives once it took the capability that describes them */
@@ -32,7 +32,8 @@ static const struct {
 /* Capabilities the network itself has to support, since the bouncer only passes their commands on */
 static const char *const NETWORK_CAPS[] = {
 	"account-notify", "away-notify", "extended-join", "userhost-in-names", "chghost", "setname", "invite-notify",
-	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor", NULL,
+	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor",
+	"draft/account-registration", NULL,
 };
 
 static const char *const NETWORK_ATTRIBUTES[] = {
@@ -567,13 +568,21 @@ static void change_network_for(Downstream *downstream, const char *network_id, c
 	g_autoptr(GHashTable) attributes = parse_irc_attributes(text);
 	if (!check_attributes(downstream, "CHANGENETWORK", network_id, attributes))
 		return;
+	/* A login saved for the account the connection is already logged into, as after registering, needs no
+	 * reconnect, and neither does a new name */
+	IrcState *state = get_irc_client_state(upstream->client);
+	const char *new_login = g_hash_table_lookup(attributes, "sasl-username");
+	gboolean is_current_login = new_login && state->account && g_ascii_strcasecmp(new_login, state->account) == 0;
+	guint login_keys = g_hash_table_contains(attributes, "sasl-username") + g_hash_table_contains(attributes,
+		"sasl-password");
+	gboolean only_login = is_current_login && login_keys == g_hash_table_size(attributes);
 	apply_attributes(&upstream->record, attributes);
 	save_network(downstream->bouncer->database, &upstream->record);
 	g_hash_table_remove(attributes, "pass");
 	g_hash_table_remove(attributes, "sasl-password");
 	announce_network(upstream, g_hash_table_ref(attributes));
 	gboolean only_names = g_hash_table_size(attributes) == 1 && g_hash_table_contains(attributes, "name");
-	if (!only_names)
+	if (!only_names && !only_login)
 		restart_upstream(upstream);
 	send_from_bouncer(downstream, "BOUNCER", "CHANGENETWORK", network_id, NULL);
 }
@@ -672,7 +681,8 @@ static const struct {
 	const char *command, *cap;
 } NETWORK_COMMANDS[] = {
 	{"METADATA", "draft/metadata-2"}, {"REDACT", "draft/message-redaction"}, {"SETNAME", "setname"},
-	{"RENAME", "draft/channel-rename"},
+	{"RENAME", "draft/channel-rename"}, {"REGISTER", "draft/account-registration"},
+	{"VERIFY", "draft/account-registration"},
 };
 
 

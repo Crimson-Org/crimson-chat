@@ -63,3 +63,19 @@ int load_sidebar_width(int fallback) {
 	int width = g_key_file_get_integer(file, GROUP, "sidebar-width", NULL);
 	return width > 0 ? width : fallback;
 }
+
+
+#define DISMISSED_GROUP "registration-dismissed"
+
+
+void save_registration_dismissed(const char *network_key) {
+	g_autoptr(GKeyFile) file = load_state();
+	g_key_file_set_boolean(file, DISMISSED_GROUP, network_key, TRUE);
+	save_state(file);
+}
+
+
+gboolean is_registration_dismissed(const char *network_key) {
+	g_autoptr(GKeyFile) file = load_state();
+	return g_key_file_get_boolean(file, DISMISSED_GROUP, network_key, NULL);
+}

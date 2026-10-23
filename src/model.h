@@ -114,6 +114,11 @@ struct _CrimsonNetwork {
 	NetworkState state;
 	/* The server was connected at some point since the app started, so losing it later is a reconnection */
 	gboolean has_connected;
+	/* When the connection last came up, in monotonic time, so the offer to register waits a moment after it */
+	gint64 connected_since;
+	/* Whether the server has a NickServ to register with, for servers without the IRCv3 commands, and whether its
+	 * NickServ said the nickname belongs to an account the user is not logged into */
+	gboolean has_nickserv, wants_login;
 	IrcClient *client;
 	GListStore *rooms;
 	CrimsonRoom *server_room;

@@ -104,6 +104,15 @@ void replay_upstream(Downstream *downstream) {
 	IrcState *state = get_irc_client_state(downstream->upstream->client);
 	if (!state->is_registered)
 		return;
+	/* The client's own login was to the bouncer, so it learns which account, if any, the network knows it as */
+	g_autofree char *mask = g_strdup_printf("%s!%s@%s", state->nick, state->user ? state->user : "*",
+		state->host ? state->host : "*");
+	if (state->account) {
+		g_autofree char *text = g_strdup_printf("You are now logged in as %s", state->account);
+		send_downstream_numeric(downstream, "900", mask, state->account, text, NULL);
+	} else {
+		send_downstream_numeric(downstream, "901", mask, "You are now logged out", NULL);
+	}
 	if (state->is_away)
 		send_downstream_numeric(downstream, "306", "You have been marked as being away", NULL);
 	Database *database = downstream->bouncer->database;

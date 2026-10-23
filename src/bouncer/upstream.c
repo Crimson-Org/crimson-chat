@@ -9,13 +9,13 @@ static const char *const WANTED_CAPS[] = {
 	"message-tags", "server-time", "batch", "echo-message", "sasl", "cap-notify", "account-notify",
 	"away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname", "invite-notify",
 	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor",
-	"sts", NULL,
+	"sts", "draft/account-registration", NULL,
 };
 
 /* Replies the bouncer answers itself when a client binds, so the server's own copies stay with the bouncer */
 static const char *const KEPT_COMMANDS[] = {
 	"CAP", "AUTHENTICATE", "001", "002", "003", "004", "005", "250", "251", "252", "253", "254", "255", "265",
-	"266", "372", "375", "376", "422", "900", "901", "902", "903", "904", "905", "906", "907", "908", NULL,
+	"266", "372", "375", "376", "422", "902", "903", "904", "905", "906", "907", "908", NULL,
 };
 
 
@@ -170,6 +170,8 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	if (upstream->is_removed)
 		return;
 	g_free(upstream->error);
+	g_free(upstream->registering_account);
+	g_free(upstream->registering_password);
 	upstream->error = status == IRC_CLIENT_DISCONNECTED && reason ? g_strdup(reason) : NULL;
 	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	add_attribute(attributes, "state", describe_upstream_state(upstream));
@@ -258,11 +260,33 @@ static void relay_to_clients(Upstream *upstream, IrcMessage *message, Downstream
 }
 
 
+/* A registration the server completed becomes the network's login, so the bouncer logs in by itself next time,
+ * without reconnecting now since the server already counts the connection as logged in */
+static void keep_new_login(Upstream *upstream, const IrcMessage *message) {
+	const char *command = message->command;
+	gboolean is_done = (g_str_equal(command, "REGISTER") || g_str_equal(command, "VERIFY"))
+		&& g_strcmp0(get_irc_parameter(message, 0), "SUCCESS") == 0;
+	if (!is_done || !upstream->registering_password)
+		return;
+	const char *account = get_irc_parameter(message, 1);
+	g_free(upstream->record.sasl_username);
+	g_free(upstream->record.sasl_password);
+	upstream->record.sasl_username = g_strdup(account ? account : upstream->registering_account);
+	upstream->record.sasl_password = g_steal_pointer(&upstream->registering_password);
+	g_clear_pointer(&upstream->registering_account, g_free);
+	save_network(upstream->user->bouncer->database, &upstream->record);
+	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(upstream->record.sasl_username));
+	announce_network(upstream, attributes);
+}
+
+
 static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArray *affected, gpointer data) {
 	Upstream *upstream = data;
 	if (g_strv_contains(KEPT_COMMANDS, message->command))
 		return;
 	const char *command = message->command;
+	keep_new_login(upstream, message);
 	if (g_str_equal(command, "JOIN") || g_str_equal(command, "PART") || g_str_equal(command, "KICK"))
 		remember_channel(upstream, message);
 	g_autoptr(IrcMessage) copy = copy_irc_message(message);
@@ -383,6 +407,13 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 	g_autoptr(IrcMessage) copy = copy_irc_message(message);
 	g_clear_pointer(&copy->source, g_free);
 	keep_client_tags(state, copy);
+	if (g_str_equal(command, "REGISTER") && get_irc_parameter(copy, 2)) {
+		const char *account = get_irc_parameter(copy, 0);
+		g_free(upstream->registering_account);
+		g_free(upstream->registering_password);
+		upstream->registering_account = g_str_equal(account, "*") ? get_upstream_nick(upstream) : g_strdup(account);
+		upstream->registering_password = g_strdup(get_irc_parameter(copy, 2));
+	}
 	if (g_str_equal(command, "JOIN"))
 		note_requested_join(upstream, copy);
 	else if (g_str_equal(command, "NICK"))

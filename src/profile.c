@@ -416,6 +416,10 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 		: record->sasl_username);
 	own->old_password = g_strdup(network->bouncer_id ? NULL : record->sasl_password);
 	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account, TRUE);
+	/* Asked to log in for a registered nickname, the account is most likely named after it */
+	const char *wanted = network->bouncer_id ? g_hash_table_lookup(network->attributes, "nickname") : record->nick;
+	if (network->wants_login && (!own->old_account || !*own->old_account) && wanted)
+		gtk_editable_set_text(GTK_EDITABLE(own->account), wanted);
 	own->password = adw_password_entry_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), TEXT_PASSWORD);
 	/* A bouncer keeps the password without ever sending it back, so a stand-in shows that one is set */

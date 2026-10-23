@@ -84,19 +84,6 @@ static void forget_network(CrimsonNetwork *network, gpointer data) {
 }
 
 
-static void offer_login(CrimsonNetwork *network, gpointer data) {
-	Window *window = get_main_window();
-	if (!window)
-		return;
-	AdwToast *toast = adw_toast_new(TEXT_LOGIN_WANTED);
-	adw_toast_set_timeout(toast, 0);
-	adw_toast_set_button_label(toast, TEXT_LOG_IN);
-	adw_toast_set_action_name(toast, "win.own-profile");
-	adw_toast_set_action_target_value(toast, g_variant_new_string(network->key));
-	adw_toast_overlay_add_toast(window->toasts, toast);
-}
-
-
 static void share_invite(Session *session, const char *token, const char *uses, const char *port, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
@@ -194,7 +181,7 @@ static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_problem, open_requested_room,
-		share_invite, forget_network, offer_login, withdraw_notification};
+		share_invite, forget_network, withdraw_notification};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},

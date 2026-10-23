@@ -18,8 +18,6 @@ typedef struct {
 	void (*invite_ready)(Session *session, const char *token, const char *uses, const char *port, gpointer data);
 	/* A network is about to go, whatever removed it, so nothing keeps pointing into it */
 	void (*network_removed)(CrimsonNetwork *network, gpointer data);
-	/* The network's nickname service asked the user to log in, and the app has no login for it */
-	void (*login_wanted)(CrimsonNetwork *network, gpointer data);
 	/* A room was read, here or on another device, so its desktop notifications are no longer news */
 	void (*room_read)(CrimsonRoom *room, gpointer data);
 } ChatEvents;
@@ -76,6 +74,18 @@ typedef struct {
 /* Hands over the profile, or NULL when the network went away before the answer */
 typedef void (*ProfileReady)(Profile *profile, gpointer data);
 
+/* How a registration went: done and logged in, waiting for a code the server sent, or refused for a reason */
+typedef enum {
+	REGISTRATION_DONE,
+	REGISTRATION_NEEDS_CODE,
+	REGISTRATION_FAILED,
+	/* The nickname already belongs to an account, which wants logging into instead */
+	REGISTRATION_EXISTS,
+} RegistrationResult;
+
+/* Hears how a registration went, with the server's own words, possibly several times as its replies arrive */
+typedef void (*RegistrationReply)(RegistrationResult result, const char *message, gpointer data);
+
 /* Work in progress on a network, kept per connection */
 typedef struct {
 	/* Batch references to the history loads and multiline messages being collected */
@@ -101,6 +111,14 @@ typedef struct {
 	Profile *profile;
 	ProfileReady profile_ready;
 	gpointer profile_data;
+	/* Whether the quiet WHOIS that looks for NickServ is still out */
+	gboolean is_probing_nickserv;
+	/* A registration being made, who waits for it, the login it saves once done, and for NickServ the command its
+	 * code goes with */
+	RegistrationReply registration_reply;
+	gpointer registration_data;
+	char *registering_account, *registering_password, *code_command;
+	gboolean is_nickserv_registration;
 } NetworkWork;
 
 /* Frees what a network collects while a history batch arrives */
@@ -133,6 +151,20 @@ void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady rea
 void cancel_profile(CrimsonNetwork *network, gpointer data);
 /* Takes WHOIS replies about the person a profile was asked for, returning whether it took the line */
 gboolean collect_profile(CrimsonNetwork *network, int number, const IrcMessage *message);
+
+/* Whether the user is logged into an account on the server, and whether one can be registered there, through the
+ * IRCv3 commands or NickServ */
+gboolean is_logged_in(CrimsonNetwork *network);
+gboolean can_register_account(CrimsonNetwork *network);
+/* Whether the server needs an email address to register, and whether the account may be named apart from the nick */
+gboolean is_email_required(CrimsonNetwork *network);
+gboolean allows_custom_account_name(CrimsonNetwork *network);
+void request_registration(CrimsonNetwork *network, const char *account, const char *email, const char *password,
+	RegistrationReply reply, gpointer data);
+void send_registration_code(CrimsonNetwork *network, const char *code);
+void cancel_registration(CrimsonNetwork *network);
+/* Takes the replies a registration and the NickServ probe are waiting for, and says whether to keep them quiet */
+gboolean collect_registration(CrimsonNetwork *network, const IrcMessage *message);
 
 void add_bouncer_network(Session *session, GHashTable *attributes);
 void change_bouncer_network(CrimsonNetwork *network, GHashTable *attributes);

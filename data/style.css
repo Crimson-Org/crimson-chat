@@ -581,3 +581,15 @@ headerbar.top-bar menubutton > button {
 .picture-choice:hover > .picture-badge {
 	opacity: 1;
 }
+
+/* The offer to register or log in, a strip above the chats */
+.account-banner {
+	margin: 8px 8px 0;
+	padding: 8px 6px 8px 14px;
+	border-radius: 14px;
+	background-color: color-mix(in srgb, var(--accent-bg-color) 22%, var(--window-bg-color));
+}
+
+.registration {
+	margin: 6px 24px 24px;
+}
