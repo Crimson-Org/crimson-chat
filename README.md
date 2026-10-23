@@ -35,7 +35,7 @@ Each server's rooms and private chats sit in one list, newest first, with rooms 
 A rail of servers appears down the left only when you use more than one.\
 Right-click a room to leave it, or a person to message, mention or look them up, with moderation in rooms you run.\
 Your account on each server sets your nickname, display name, picture and login, wherever that server supports them.\
-Without an account, a banner offers to register your nickname, with the IRCv3 commands or NickServ, and to log in when the server says the nickname is already registered.\
+Without an account, a banner offers to register your nickname, with the IRCv3 commands or NickServ, and to log in when the nickname turns out to be registered already.\
 Messages from the same person group into bubbles under one avatar, with your own on the right.
 
 ### Modern IRC

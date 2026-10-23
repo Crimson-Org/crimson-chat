@@ -32,3 +32,6 @@ void save_network_profile(const char *key, const char *display_name, const char 
 /* A private chat the user deleted, with when, so a bouncer listing older history does not bring it back */
 void note_deleted_chat(const char *key, const char *name, gint64 time);
 gint64 find_deleted_chat(const char *key, const char *name);
+/* The order the user dragged the servers into, kept by their keys; a server never placed ranks last */
+void save_network_order(GListModel *networks);
+int find_network_rank(const char *key);

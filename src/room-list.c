@@ -50,13 +50,18 @@ static gboolean keep_room(gpointer item, gpointer data) {
 }
 
 
-/* The server room stays on top of a network's rooms, and the rest follow their latest message */
+/* When something last happened in a room: its latest message, or someone reacting to the user's own */
+static gint64 read_last_activity(const CrimsonRoom *room) {
+	return room->new_reaction ? MAX(room->last_time, room->new_reaction_time) : room->last_time;
+}
+
+
+/* Every chat, the server's messages included, follows its latest activity, newest first */
 static int order_rooms(gconstpointer first, gconstpointer second, gpointer data) {
 	const CrimsonRoom *one = first, *other = second;
-	if ((one->kind == ROOM_SERVER) != (other->kind == ROOM_SERVER))
-		return one->kind == ROOM_SERVER ? -1 : 1;
-	if (one->last_time != other->last_time)
-		return one->last_time > other->last_time ? -1 : 1;
+	gint64 one_time = read_last_activity(one), other_time = read_last_activity(other);
+	if (one_time != other_time)
+		return one_time > other_time ? -1 : 1;
 	return g_utf8_collate(one->name, other->name);
 }
 

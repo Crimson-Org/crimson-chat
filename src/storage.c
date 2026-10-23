@@ -5,6 +5,8 @@
 #define ROOMS_FILE "rooms.ini"
 #define PROFILES_FILE "profiles.ini"
 #define DELETED_FILE "deleted-chats.ini"
+#define ORDER_FILE "server-order.ini"
+#define ORDER_GROUP "order"
 #define ACCOUNT_PREFIX "account "
 #define DEFAULT_PORT 6697
 #define CACHED_ROOMS_PER_NETWORK 200
@@ -273,4 +275,31 @@ gint64 find_deleted_chat(const char *key, const char *name) {
 	g_autofree char *path = get_state_file_path(DELETED_FILE);
 	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
 	return g_key_file_get_int64(file, key, name, NULL);
+}
+
+
+void save_network_order(GListModel *networks) {
+	g_autoptr(GPtrArray) keys = g_ptr_array_new();
+	guint count = g_list_model_get_n_items(networks);
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(networks, index);
+		g_ptr_array_add(keys, network->key);
+	}
+	g_autoptr(GKeyFile) file = g_key_file_new();
+	g_key_file_set_string_list(file, ORDER_GROUP, "servers", (const char *const *)keys->pdata, keys->len);
+	g_autofree char *path = get_state_file_path(ORDER_FILE);
+	g_autofree char *folder = g_path_get_dirname(path);
+	g_mkdir_with_parents(folder, 0700);
+	g_key_file_save_to_file(file, path, NULL);
+}
+
+
+int find_network_rank(const char *key) {
+	g_autofree char *path = get_state_file_path(ORDER_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	g_auto(GStrv) keys = g_key_file_get_string_list(file, ORDER_GROUP, "servers", NULL, NULL);
+	for (int index = 0; keys && keys[index]; index++)
+		if (g_str_equal(keys[index], key))
+			return index;
+	return G_MAXINT;
 }

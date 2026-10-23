@@ -339,7 +339,18 @@ static CrimsonNetwork *add_network(Session *session, const char *key, const char
 	CrimsonNetwork *network = create_network(session, key, name);
 	load_room_cache(network);
 	g_ptr_array_add(session->networks, network);
-	g_list_store_append(session->chat->networks, network);
+	/* A server takes its place in the order the user chose, after those placed before it */
+	GListModel *networks = G_LIST_MODEL(session->chat->networks);
+	int rank = find_network_rank(key);
+	guint position = g_list_model_get_n_items(networks);
+	for (guint index = 0; index < g_list_model_get_n_items(networks); index++) {
+		g_autoptr(CrimsonNetwork) other = g_list_model_get_item(networks, index);
+		if (find_network_rank(other->key) > rank) {
+			position = index;
+			break;
+		}
+	}
+	g_list_store_insert(session->chat->networks, position, network);
 	if (session->item)
 		announce_account_change(session->item);
 	return network;

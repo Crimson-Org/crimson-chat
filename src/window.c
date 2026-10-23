@@ -10,6 +10,7 @@
 #include "room-picker.h"
 #include "settings.h"
 #include "state.h"
+#include "storage.h"
 #include "window.h"
 #include "wizards.h"
 #include "pictures.h"
@@ -216,6 +217,41 @@ static void refresh_rail_row(CrimsonNetwork *network, gpointer row) {
 }
 
 
+static void select_rail_row(Window *window, CrimsonNetwork *network);
+static CrimsonNetwork *find_keyed_network(Window *window, GVariant *parameter);
+
+
+/* A server dragged in the rail carries its key, and shows as a picture of its row under the pointer */
+static GdkContentProvider *start_rail_drag(GtkDragSource *source, double x, double y, gpointer data) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(source));
+	CrimsonNetwork *network = g_object_get_data(G_OBJECT(row), NETWORK_KEY);
+	g_autoptr(GdkPaintable) picture = gtk_widget_paintable_new(row);
+	gtk_drag_source_set_icon(source, picture, (int)x, (int)y);
+	return gdk_content_provider_new_typed(G_TYPE_STRING, network->key);
+}
+
+
+/* Dropping a server on another puts it in that one's place, and the new order is kept */
+static gboolean drop_on_rail_row(GtkDropTarget *target, const GValue *value, double x, double y, Window *window) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+	CrimsonNetwork *destination = g_object_get_data(G_OBJECT(row), NETWORK_KEY);
+	g_autoptr(GVariant) key = g_variant_ref_sink(g_variant_new_string(g_value_get_string(value)));
+	CrimsonNetwork *moved = find_keyed_network(window, key);
+	GListStore *networks = window->chat->networks;
+	guint from = 0, to = 0;
+	if (!moved || moved == destination || !g_list_store_find(networks, moved, &from)
+		|| !g_list_store_find(networks, destination, &to))
+		return FALSE;
+	g_object_ref(moved);
+	g_list_store_remove(networks, from);
+	g_list_store_insert(networks, to, moved);
+	g_object_unref(moved);
+	save_network_order(G_LIST_MODEL(networks));
+	select_rail_row(window, window->network);
+	return TRUE;
+}
+
+
 static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	CrimsonNetwork *network = item;
 	GtkWidget *row = gtk_list_box_row_new();
@@ -249,6 +285,13 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
 	g_signal_connect(click, "pressed", G_CALLBACK(open_rail_menu), data);
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(click));
+	GtkDragSource *drag = gtk_drag_source_new();
+	gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
+	g_signal_connect(drag, "prepare", G_CALLBACK(start_rail_drag), NULL);
+	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drag));
+	GtkDropTarget *drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
+	g_signal_connect(drop, "drop", G_CALLBACK(drop_on_rail_row), data);
+	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drop));
 	fill_rail_row(row, network);
 	g_signal_connect_object(network, "changed", G_CALLBACK(refresh_rail_row), row, 0);
 	/* The chat list header names the server and its state, so it follows the server even with the rail hidden */
