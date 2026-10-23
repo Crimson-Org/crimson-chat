@@ -7,6 +7,7 @@
 		<file>sounds/mention.ogg</file>
 		<file alias="common.css">../subprojects/crimson-core/data/common.css</file>
 		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonChat.svg</file>
+		<file>icons/scalable/apps/crimson-server.svg</file>
 		<file>icons/symbolic/apps/io.github.CrimsonOrg.CrimsonChat-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-channel-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-chats-symbolic.svg</file>
