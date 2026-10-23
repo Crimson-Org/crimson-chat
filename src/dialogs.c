@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include "../lang/en.h"
 #include "dialogs.h"
 #include "images.h"
@@ -10,6 +12,11 @@
 #define DEFAULT_TLS_PORT 6697
 #define DEFAULT_PLAIN_PORT 6667
 #define SERVER_AVATAR_SIZE 96
+/* The people offered for a new private chat: how many show at once, their picture size and how far back each room
+ * is read to see who spoke last */
+#define PEOPLE_SHOWN 10
+#define PERSON_AVATAR_SIZE 32
+#define PEOPLE_SCANNED_LINES 500
 
 /* The rows of the server form and what the form is for */
 typedef struct {
@@ -339,52 +346,176 @@ void show_network_settings(Window *window, CrimsonNetwork *network) {
 }
 
 
+/* The people a new private chat can go to: everyone in the user's rooms, those who spoke last first, filtered by
+ * what is typed, while the typed name itself reaches anyone on the server */
 typedef struct {
 	CrimsonNetwork *network;
 	Window *window;
-	GtkWidget *entry;
-	gboolean is_join;
-} AskForm;
+	AdwDialog *alert;
+	GtkWidget *entry, *people;
+	GPtrArray *nicks;
+} MessageForm;
 
 
-static void finish_ask(AdwAlertDialog *alert, const char *response, AskForm *form) {
-	const char *text = gtk_editable_get_text(GTK_EDITABLE(form->entry));
-	if (g_strcmp0(response, "go") != 0 || !*text)
+static void free_message_form(MessageForm *form) {
+	g_ptr_array_unref(form->nicks);
+	g_free(form);
+}
+
+
+static void open_chat_with(MessageForm *form, const char *nick) {
+	g_autofree char *trimmed = g_strstrip(g_strdup(nick));
+	if (!*trimmed)
 		return;
-	g_autofree char *trimmed = g_strstrip(g_strdup(text));
-	if (form->is_join) {
-		join_channel(form->network, trimmed, NULL);
-		return;
-	}
 	open_room(form->window, open_private_room(form->network, trimmed));
 }
 
 
-static void ask_for_name(Window *window, CrimsonNetwork *network, gboolean is_join) {
-	g_autofree char *body = g_strdup_printf(is_join ? TEXT_JOIN_BODY : TEXT_MESSAGE_BODY, network->name);
-	AdwDialog *alert = adw_alert_dialog_new(is_join ? TEXT_JOIN_ROOM : TEXT_MESSAGE_SOMEONE, body);
-	AskForm *form = g_new0(AskForm, 1);
-	form->network = network;
-	form->window = window;
-	form->is_join = is_join;
-	form->entry = gtk_entry_new();
-	gtk_entry_set_placeholder_text(GTK_ENTRY(form->entry), is_join ? TEXT_CHANNEL_PLACEHOLDER
-		: TEXT_NICK_PLACEHOLDER);
-	gtk_entry_set_activates_default(GTK_ENTRY(form->entry), TRUE);
-	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), form->entry);
-	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "go", is_join ? TEXT_JOIN
-		: TEXT_OPEN_CHAT, NULL);
-	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "go", ADW_RESPONSE_SUGGESTED);
-	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "go");
-	g_object_set_data_full(G_OBJECT(alert), "form", form, g_free);
-	g_signal_connect(alert, "response", G_CALLBACK(finish_ask), form);
-	adw_dialog_present(alert, GTK_WIDGET(window->window));
-	gtk_widget_grab_focus(form->entry);
+static void finish_message(AdwAlertDialog *alert, const char *response, MessageForm *form) {
+	if (g_strcmp0(response, "go") == 0)
+		open_chat_with(form, gtk_editable_get_text(GTK_EDITABLE(form->entry)));
+}
+
+
+static void pick_person(GtkListBox *people, GtkListBoxRow *row, MessageForm *form) {
+	const char *nick = g_object_get_data(G_OBJECT(row), "nick");
+	open_chat_with(form, nick);
+	adw_dialog_close(form->alert);
+}
+
+
+/* When each person last spoke in the user's rooms, so the list starts with whoever is active */
+static GHashTable *read_last_spoken(CrimsonNetwork *network) {
+	GHashTable *spoken = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	guint rooms = g_list_model_get_n_items(G_LIST_MODEL(network->rooms));
+	for (guint index = 0; index < rooms; index++) {
+		g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
+		guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+		for (guint line = count; line > 0 && count - line < PEOPLE_SCANNED_LINES; line--) {
+			g_autoptr(CrimsonMessage) message = g_list_model_get_item(G_LIST_MODEL(room->messages), line - 1);
+			if (!message->sender || message->is_own)
+				continue;
+			g_autofree char *folded = g_utf8_casefold(message->sender, -1);
+			gint64 known = GPOINTER_TO_SIZE(g_hash_table_lookup(spoken, folded));
+			if ((gint64)message->time > known)
+				g_hash_table_replace(spoken, g_steal_pointer(&folded), GSIZE_TO_POINTER((gsize)message->time));
+		}
+	}
+	return spoken;
+}
+
+
+static GHashTable *last_spoken_order;
+
+
+static int order_people(gconstpointer first, gconstpointer second) {
+	const char *a = *(const char **)first, *b = *(const char **)second;
+	g_autofree char *folded_a = g_utf8_casefold(a, -1);
+	g_autofree char *folded_b = g_utf8_casefold(b, -1);
+	gint64 time_a = GPOINTER_TO_SIZE(g_hash_table_lookup(last_spoken_order, folded_a));
+	gint64 time_b = GPOINTER_TO_SIZE(g_hash_table_lookup(last_spoken_order, folded_b));
+	if (time_a != time_b)
+		return time_a > time_b ? -1 : 1;
+	return g_utf8_collate(folded_a, folded_b);
+}
+
+
+static GPtrArray *collect_people(CrimsonNetwork *network) {
+	GPtrArray *nicks = g_ptr_array_new_with_free_func(g_free);
+	IrcState *state = get_network_state(network);
+	if (!state)
+		return nicks;
+	g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
+	GHashTableIter channels;
+	gpointer channel;
+	g_hash_table_iter_init(&channels, state->channels);
+	while (g_hash_table_iter_next(&channels, NULL, &channel)) {
+		GHashTableIter members;
+		gpointer folded;
+		g_hash_table_iter_init(&members, ((IrcChannel *)channel)->members);
+		while (g_hash_table_iter_next(&members, &folded, NULL)) {
+			IrcUser *user = g_hash_table_lookup(state->users, folded);
+			if (!user || g_hash_table_contains(seen, folded) || is_own_nick(state, user->nick))
+				continue;
+			g_hash_table_add(seen, folded);
+			g_ptr_array_add(nicks, g_strdup(user->nick));
+		}
+	}
+	last_spoken_order = read_last_spoken(network);
+	g_ptr_array_sort(nicks, order_people);
+	g_clear_pointer(&last_spoken_order, g_hash_table_unref);
+	return nicks;
+}
+
+
+static GtkWidget *create_person_row(MessageForm *form, const char *nick) {
+	GtkWidget *row = gtk_list_box_row_new();
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	gtk_widget_add_css_class(box, "person-row");
+	GtkWidget *avatar = adw_avatar_new(PERSON_AVATAR_SIZE, nick, TRUE);
+	CrimsonRoom *private = find_room(form->network, nick);
+	const char *url = private ? pick_person_picture(private, nick) : find_own_picture(form->network, PICTURE_PERSON,
+		nick);
+	g_autofree char *sized = fill_image_size(url, PERSON_AVATAR_SIZE * 2);
+	show_avatar_image(ADW_AVATAR(avatar), sized);
+	gtk_box_append(GTK_BOX(box), avatar);
+	GtkWidget *name = gtk_label_new(nick);
+	gtk_label_set_xalign(GTK_LABEL(name), 0);
+	gtk_label_set_ellipsize(GTK_LABEL(name), PANGO_ELLIPSIZE_END);
+	gtk_box_append(GTK_BOX(box), name);
+	gtk_list_box_row_set_child(GTK_LIST_BOX_ROW(row), box);
+	g_object_set_data_full(G_OBJECT(row), "nick", g_strdup(nick), g_free);
+	return row;
+}
+
+
+/* Up to a handful of people whose names hold what is typed, or the first of them with nothing typed */
+static void show_people(MessageForm *form) {
+	gtk_list_box_remove_all(GTK_LIST_BOX(form->people));
+	g_autofree char *typed = g_utf8_casefold(gtk_editable_get_text(GTK_EDITABLE(form->entry)), -1);
+	g_strstrip(typed);
+	guint shown = 0;
+	for (guint index = 0; index < form->nicks->len && shown < PEOPLE_SHOWN; index++) {
+		const char *nick = g_ptr_array_index(form->nicks, index);
+		g_autofree char *folded = g_utf8_casefold(nick, -1);
+		if (*typed && !strstr(folded, typed))
+			continue;
+		gtk_list_box_append(GTK_LIST_BOX(form->people), create_person_row(form, nick));
+		shown++;
+	}
+	gtk_widget_set_visible(form->people, shown > 0);
 }
 
 
 void show_message_dialog(Window *window, CrimsonNetwork *network) {
-	ask_for_name(window, network, FALSE);
+	g_autofree char *body = g_strdup_printf(TEXT_MESSAGE_BODY, network->name);
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_MESSAGE_SOMEONE, body);
+	MessageForm *form = g_new0(MessageForm, 1);
+	form->network = network;
+	form->window = window;
+	form->alert = alert;
+	form->nicks = collect_people(network);
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+	form->entry = gtk_entry_new();
+	gtk_entry_set_placeholder_text(GTK_ENTRY(form->entry), TEXT_NICK_PLACEHOLDER);
+	gtk_entry_set_activates_default(GTK_ENTRY(form->entry), TRUE);
+	g_signal_connect_swapped(form->entry, "changed", G_CALLBACK(show_people), form);
+	gtk_box_append(GTK_BOX(box), form->entry);
+	form->people = gtk_list_box_new();
+	gtk_list_box_set_selection_mode(GTK_LIST_BOX(form->people), GTK_SELECTION_NONE);
+	gtk_list_box_set_activate_on_single_click(GTK_LIST_BOX(form->people), TRUE);
+	gtk_widget_add_css_class(form->people, "boxed-list");
+	g_signal_connect(form->people, "row-activated", G_CALLBACK(pick_person), form);
+	gtk_box_append(GTK_BOX(box), form->people);
+	show_people(form);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), box);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "go", TEXT_OPEN_CHAT, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "go", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "go");
+	g_object_set_data_full(G_OBJECT(alert), "form", form, (GDestroyNotify)free_message_form);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_message), form);
+	adw_dialog_present(alert, GTK_WIDGET(window->window));
+	gtk_widget_grab_focus(form->entry);
 }
 
 

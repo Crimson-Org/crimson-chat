@@ -124,9 +124,7 @@
 #define TEXT_REMOVE_BOUNCER_NETWORK_BODY "The bouncer deletes its history"
 
 /* Join and message dialogs, with the network's name */
-#define TEXT_JOIN_BODY "On %s"
 #define TEXT_MESSAGE_BODY "On %s"
-#define TEXT_CHANNEL_PLACEHOLDER "#channel"
 #define TEXT_NICK_PLACEHOLDER "nickname"
 #define TEXT_JOIN "Join"
 #define TEXT_OPEN_CHAT "Open Chat"

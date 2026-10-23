@@ -297,6 +297,29 @@ static void click_list_space(GtkGestureClick *gesture, int presses, double x, do
 }
 
 
+static void forget_space_menu(GtkPopover *popover, gpointer data) {
+	g_idle_add_once((GSourceOnceFunc)gtk_widget_unparent, popover);
+}
+
+
+/* Right-clicking the list's empty space offers what the + button offers */
+static void open_space_menu(GtkGestureClick *gesture, int presses, double x, double y, RoomList *list) {
+	GtkWidget *view = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	if (is_on_room(view, x, y))
+		return;
+	g_autoptr(GMenu) menu = g_menu_new();
+	g_menu_append(menu, TEXT_JOIN_ROOM, "win.join-room");
+	g_menu_append(menu, TEXT_MESSAGE_SOMEONE, "win.message-someone");
+	GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+	gtk_widget_set_parent(popover, view);
+	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
+	gtk_widget_set_halign(popover, GTK_ALIGN_START);
+	g_signal_connect(popover, "closed", G_CALLBACK(forget_space_menu), NULL);
+	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
 /* The + button rises while the window has focus and sinks out of sight when another window takes it */
 static void follow_window_focus(GtkWindow *window, GParamSpec *spec, RoomList *list) {
 	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), gtk_window_is_active(window));
@@ -488,6 +511,10 @@ static GtkWidget *create_list_view(RoomList *list) {
 	g_signal_connect(space, "pressed", G_CALLBACK(press_list_space), list);
 	g_signal_connect(space, "released", G_CALLBACK(click_list_space), list);
 	gtk_widget_add_controller(list->list_view, GTK_EVENT_CONTROLLER(space));
+	GtkGesture *menu_click = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(menu_click), GDK_BUTTON_SECONDARY);
+	g_signal_connect(menu_click, "pressed", G_CALLBACK(open_space_menu), list);
+	gtk_widget_add_controller(list->list_view, GTK_EVENT_CONTROLLER(menu_click));
 	return overlay;
 }
 

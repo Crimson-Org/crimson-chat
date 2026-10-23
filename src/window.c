@@ -70,15 +70,22 @@ static void append_network_item(GMenu *menu, const char *label, const char *acti
 
 GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network) {
 	GMenu *items = g_menu_new();
+	/* Starting something new on the server comes first, above everything about the server itself */
+	g_autoptr(GMenu) starts = g_menu_new();
+	append_network_item(starts, TEXT_JOIN_ROOM, "win.join-room-on", network);
+	append_network_item(starts, TEXT_MESSAGE_SOMEONE, "win.message-on", network);
+	g_menu_append_section(items, NULL, G_MENU_MODEL(starts));
+	g_autoptr(GMenu) about = g_menu_new();
 	/* Without the rail, a server's menu is the way to switch to its chats */
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	if (!window->has_rail && count > 1)
-		append_network_item(items, TEXT_SHOW_CHATS, "win.choose-server", network);
-	append_network_item(items, TEXT_ACCOUNT_MENU, "win.own-profile", network);
-	append_network_item(items, TEXT_SERVER_MESSAGES, "win.server-messages", network);
-	append_network_item(items, TEXT_SERVER_SETTINGS, "win.network-settings", network);
-	append_network_item(items, TEXT_RECONNECT, "win.reconnect-server", network);
-	append_network_item(items, TEXT_REMOVE_SERVER, "win.remove-network", network);
+		append_network_item(about, TEXT_SHOW_CHATS, "win.choose-server", network);
+	append_network_item(about, TEXT_ACCOUNT_MENU, "win.own-profile", network);
+	append_network_item(about, TEXT_SERVER_MESSAGES, "win.server-messages", network);
+	append_network_item(about, TEXT_SERVER_SETTINGS, "win.network-settings", network);
+	append_network_item(about, TEXT_RECONNECT, "win.reconnect-server", network);
+	append_network_item(about, TEXT_REMOVE_SERVER, "win.remove-network", network);
+	g_menu_append_section(items, NULL, G_MENU_MODEL(about));
 	return G_MENU_MODEL(items);
 }
 
@@ -723,6 +730,25 @@ static CrimsonNetwork *find_keyed_network(Window *window, GVariant *parameter) {
 }
 
 
+/* The same, for a server named by its key, which becomes the chosen server first */
+static void join_room_on_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network) {
+		choose_network(data, network);
+		show_room_picker(data, network);
+	}
+}
+
+
+static void message_on_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	CrimsonNetwork *network = find_keyed_network(data, parameter);
+	if (network) {
+		choose_network(data, network);
+		show_message_dialog(data, network);
+	}
+}
+
+
 static void choose_server_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	CrimsonNetwork *network = find_keyed_network(data, parameter);
 	if (network)
@@ -858,6 +884,8 @@ static void add_window_actions(Window *window) {
 	static const GActionEntry ENTRIES[] = {
 		{"join-room", join_room_action, NULL, NULL, NULL, {0}},
 		{"message-someone", message_someone_action, NULL, NULL, NULL, {0}},
+		{"join-room-on", join_room_on_action, "s", NULL, NULL, {0}},
+		{"message-on", message_on_action, "s", NULL, NULL, {0}},
 		{"bouncer-settings", bouncer_settings_action, NULL, NULL, NULL, {0}},
 		{"disconnect-bouncer", disconnect_bouncer_action, NULL, NULL, NULL, {0}},
 		{"bouncer-admin", bouncer_admin_action, NULL, NULL, NULL, {0}},
