@@ -311,6 +311,7 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	GtkWidget *row = gtk_list_box_row_new();
 	gtk_widget_add_css_class(row, "rail-row");
 	GtkWidget *overlay = gtk_overlay_new();
+	gtk_widget_add_css_class(overlay, "rail-picture");
 	gtk_widget_set_halign(overlay, GTK_ALIGN_CENTER);
 	GtkWidget *avatar = adw_avatar_new(RAIL_AVATAR_SIZE, NULL, TRUE);
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), avatar);

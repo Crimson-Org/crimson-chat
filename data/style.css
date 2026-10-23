@@ -52,9 +52,17 @@ headerbar.title-bar {
 	box-shadow: none;
 }
 
-.rail-list > row:selected avatar,
+/* The chosen server sits on a glowing circle a little wider than its picture, so it shows whatever the picture is */
+.rail-picture {
+	padding: 5px;
+	border-radius: 9999px;
+}
+
+.rail-list > row:selected .rail-picture,
 .rail-all.chosen {
-	box-shadow: 0 0 0 3px var(--accent-bg-color);
+	background-image: linear-gradient(160deg, var(--accent-bg-color),
+		color-mix(in srgb, var(--accent-bg-color) 35%, transparent));
+	box-shadow: 0 0 12px color-mix(in srgb, var(--accent-bg-color) 45%, transparent);
 }
 
 /* Switching servers is instant, so only the dimming of a server still connecting fades */
@@ -79,8 +87,9 @@ headerbar.title-bar {
 	background-color: var(--rail-bg);
 }
 
+/* The picture's padding already moves the badge out, so it sits where it did against the bare picture */
 .rail-badge {
-	margin: -4px -6px;
+	margin: 1px -1px;
 	box-shadow: 0 0 0 2px var(--rail-bg);
 }
 
