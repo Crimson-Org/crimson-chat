@@ -52,6 +52,12 @@ headerbar.title-bar {
 	box-shadow: none;
 }
 
+/* The rail shows no keyboard focus ring, since the glowing circle already marks the chosen server */
+.rail-list > row:focus-visible,
+.rail-all:focus-visible {
+	outline: none;
+}
+
 /* The chosen server sits on a glowing circle a little wider than its picture, so it shows whatever the picture is */
 .rail-picture {
 	padding: 3px;
