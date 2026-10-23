@@ -1044,8 +1044,7 @@ static void finish_leave_question(AdwAlertDialog *alert, const char *response, W
 /* Leaving a room or deleting a chat cannot be undone, so it is asked first */
 static void ask_to_leave_room(Window *window, CrimsonRoom *room) {
 	gboolean is_channel = room->kind == ROOM_CHANNEL;
-	AdwDialog *alert = adw_alert_dialog_new(is_channel ? TEXT_LEAVE_ROOM_TITLE : TEXT_DELETE_CHAT_TITLE,
-		is_channel ? TEXT_LEAVE_ROOM_BODY : TEXT_DELETE_CHAT_BODY);
+	AdwDialog *alert = adw_alert_dialog_new(is_channel ? TEXT_LEAVE_ROOM_TITLE : TEXT_DELETE_CHAT_TITLE, NULL);
 	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "leave",
 		is_channel ? TEXT_LEAVE : TEXT_DELETE, NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "leave", ADW_RESPONSE_DESTRUCTIVE);
