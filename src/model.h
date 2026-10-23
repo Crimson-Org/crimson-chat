@@ -84,6 +84,10 @@ struct _CrimsonRoom {
 	gboolean is_listed;
 	/* Nicks to the monotonic moment their typing notice runs out */
 	GHashTable *typing;
+	/* Someone's newest reaction to one of the user's own messages, unseen until the room is read: the reaction, the
+	 * line the list shows for it and when it came */
+	char *new_reaction, *new_reaction_text;
+	gint64 new_reaction_time;
 };
 
 #define CRIMSON_TYPE_NETWORK (crimson_network_get_type())
@@ -149,4 +153,6 @@ CrimsonRoom *find_room(CrimsonNetwork *network, const char *name);
 CrimsonRoom *ensure_room(CrimsonNetwork *network, RoomKind kind, const char *name);
 void remove_room(CrimsonNetwork *network, CrimsonRoom *room);
 guint count_network_unread(CrimsonNetwork *network, gboolean *has_mention);
+/* Forgets the unseen reaction once the room is read, and says whether there was one */
+gboolean clear_new_reaction(CrimsonRoom *room);
 IrcState *get_network_state(CrimsonNetwork *network);

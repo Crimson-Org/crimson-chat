@@ -121,6 +121,8 @@ static void finalize_room(GObject *object) {
 	g_free(room->topic);
 	g_free(room->preview);
 	g_free(room->preview_sender);
+	g_free(room->new_reaction);
+	g_free(room->new_reaction_text);
 	g_object_unref(room->messages);
 	g_hash_table_unref(room->by_id);
 	g_hash_table_unref(room->typing);
@@ -330,9 +332,18 @@ guint count_network_unread(CrimsonNetwork *network, gboolean *has_mention) {
 		if (room->kind == ROOM_SERVER)
 			continue;
 		total += room->unread_count;
-		*has_mention |= room->has_mention;
+		*has_mention |= room->has_mention || room->new_reaction;
 	}
 	return total;
+}
+
+
+gboolean clear_new_reaction(CrimsonRoom *room) {
+	if (!room->new_reaction)
+		return FALSE;
+	g_clear_pointer(&room->new_reaction, g_free);
+	g_clear_pointer(&room->new_reaction_text, g_free);
+	return TRUE;
 }
 
 

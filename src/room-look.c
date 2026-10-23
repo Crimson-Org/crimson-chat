@@ -69,6 +69,8 @@ char *describe_room_preview(CrimsonRoom *room) {
 		return describe_room_subtitle(room);
 	if (is_room_typing(room) && get_settings()->shows_typing)
 		return describe_typing(room);
+	if (room->new_reaction_text && room->new_reaction_time >= room->last_time)
+		return g_strdup(room->new_reaction_text);
 	if (room->preview && *room->preview) {
 		g_autofree char *plain = strip_irc_formatting(room->preview);
 		if (room->is_preview_own)

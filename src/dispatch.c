@@ -1,12 +1,15 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "formatting.h"
 #include "session.h"
 #include "settings.h"
 
 #define TYPING_ACTIVE_SECONDS 6
 #define TYPING_PAUSED_SECONDS 30
 #define TARGETS_DAYS 30
+/* How much of the user's message the list quotes when someone reacts to it */
+#define REACTION_EXCERPT_CHARS 30
 #define TARGETS_LIMIT 100
 #define CTCP_MARK '\001'
 /* A page of history should show this many lines, so pages of hidden joins and parts lead to the next page */
@@ -290,6 +293,33 @@ static void note_typing(CrimsonNetwork *network, CrimsonRoom *room, const char *
 }
 
 
+/* Someone reacting to the user's own message shows in the list and the tray like a mention, and taking the reaction
+ * back takes that away again */
+static void note_new_reaction(CrimsonNetwork *network, CrimsonRoom *room, CrimsonMessage *target, const char *sender,
+	const char *reaction, const char *removal) {
+	if (removal) {
+		if (room->new_reaction && g_str_equal(room->new_reaction, removal) && clear_new_reaction(room))
+			announce_room_change(room);
+		return;
+	}
+	g_autofree char *plain = strip_irc_formatting(target->text);
+	g_autofree char *start = g_utf8_substring(plain, 0, REACTION_EXCERPT_CHARS);
+	g_autofree char *excerpt = g_utf8_strlen(plain, -1) > REACTION_EXCERPT_CHARS ? g_strconcat(start, "…", NULL)
+		: g_strdup(plain);
+	g_free(room->new_reaction);
+	g_free(room->new_reaction_text);
+	room->new_reaction = g_strdup(reaction);
+	room->new_reaction_text = g_strdup_printf(TEXT_REACTED_TO, sender, reaction, excerpt);
+	room->new_reaction_time = g_get_real_time();
+	announce_room_change(room);
+	if (get_settings()->notifies_mentions) {
+		g_autoptr(CrimsonMessage) notice = create_message(MESSAGE_TEXT, sender, room->new_reaction_text,
+			room->new_reaction_time);
+		network->session->chat->events.notify(room, notice, network->session->chat->data);
+	}
+}
+
+
 static void deliver_tag_message(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *load) {
 	g_autofree char *sender = get_source_nick(message->source);
 	CrimsonRoom *room = load ? load->room : find_conversation(network, message);
@@ -307,6 +337,8 @@ static void deliver_tag_message(CrimsonNetwork *network, const IrcMessage *messa
 		return;
 	if (change_reaction(target, reaction ? reaction : removal, sender, reaction != NULL))
 		announce_message_change(target);
+	if (!load && target->is_own && !is_own_nick(state, sender))
+		note_new_reaction(network, room, target, sender, reaction, removal);
 }
 
 
@@ -455,6 +487,7 @@ static void deliver_read_marker(CrimsonNetwork *network, const IrcMessage *messa
 		return;
 	room->read_time = read_time;
 	count_unread(room);
+	clear_new_reaction(room);
 	announce_room_change(room);
 	if (!room->unread_count)
 		network->session->chat->events.room_read(room, network->session->chat->data);

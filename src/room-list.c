@@ -79,7 +79,12 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 		gtk_widget_add_css_class(preview, "typing");
 	else
 		gtk_widget_remove_css_class(preview, "typing");
-	style_unread_badge(badge, room->unread_count, room->has_mention);
+	style_unread_badge(badge, room->unread_count, room->has_mention || room->new_reaction);
+	/* An unseen reaction to the user's message shows as itself where no unread lines are counted */
+	if (room->new_reaction && !room->unread_count) {
+		gtk_label_set_text(GTK_LABEL(badge), room->new_reaction);
+		gtk_widget_set_visible(badge, TRUE);
+	}
 	gtk_widget_set_opacity(row, room->kind == ROOM_CHANNEL && !room->is_joined ? 0.6 : 1.0);
 }
 

@@ -347,6 +347,10 @@ void send_typing(CrimsonRoom *room, const char *state) {
 
 
 void mark_room_read(CrimsonRoom *room) {
+	if (clear_new_reaction(room)) {
+		announce_room_change(room);
+		room->network->session->chat->events.room_read(room, room->network->session->chat->data);
+	}
 	CrimsonMessage *last = get_last_message(room);
 	if (!last || last->time <= room->read_time) {
 		if (room->unread_count) {

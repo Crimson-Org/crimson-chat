@@ -282,3 +282,4 @@
 #define TEXT_PICTURES "Pictures"
 #define TEXT_PICTURE_UNREADABLE "That picture couldn't be opened"
 #define TEXT_TAKE_BACK_REACTION "Take Back Reaction"
+#define TEXT_REACTED_TO "%s reacted %s to “%s”"
