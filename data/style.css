@@ -585,11 +585,30 @@ headerbar.top-bar menubutton > button {
 /* The offer to register or log in, a strip above the chats */
 .account-banner {
 	margin: 8px 8px 0;
-	padding: 8px 6px 8px 14px;
+	padding: 6px 4px 6px 12px;
 	border-radius: 14px;
 	background-color: color-mix(in srgb, var(--accent-bg-color) 22%, var(--window-bg-color));
 }
 
 .registration {
 	margin: 6px 24px 24px;
+}
+
+/* While a server is dragged in the rail, a line marks the gap it would land in */
+.rail-row.drop-before {
+	box-shadow: inset 0 3px var(--accent-color);
+}
+
+.rail-row.drop-after {
+	box-shadow: inset 0 -3px var(--accent-color);
+}
+
+/* The banner's button and close sit a little tighter, so its words fit beside the rail */
+.account-banner > .connection-fix {
+	padding: 0 12px;
+}
+
+.account-banner > button.circular {
+	min-width: 28px;
+	min-height: 28px;
 }

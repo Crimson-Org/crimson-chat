@@ -545,7 +545,7 @@ static void build_models(RoomList *list) {
 
 
 static GtkWidget *create_banner(RoomList *list) {
-	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 	gtk_widget_add_css_class(box, "account-banner");
 	list->banner_label = gtk_label_new(NULL);
 	gtk_label_set_ellipsize(GTK_LABEL(list->banner_label), PANGO_ELLIPSIZE_END);

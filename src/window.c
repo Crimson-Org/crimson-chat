@@ -222,18 +222,68 @@ static CrimsonNetwork *find_keyed_network(Window *window, GVariant *parameter);
 
 
 /* A server dragged in the rail carries its key, and shows as a picture of its row under the pointer */
-static GdkContentProvider *start_rail_drag(GtkDragSource *source, double x, double y, gpointer data) {
+static GdkContentProvider *start_rail_drag(GtkDragSource *source, double x, double y, Window *window) {
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(source));
 	CrimsonNetwork *network = g_object_get_data(G_OBJECT(row), NETWORK_KEY);
+	window->dragged_network = network;
 	g_autoptr(GdkPaintable) picture = gtk_widget_paintable_new(row);
 	gtk_drag_source_set_icon(source, picture, (int)x, (int)y);
 	return gdk_content_provider_new_typed(G_TYPE_STRING, network->key);
 }
 
 
-/* Dropping a server on another puts it in that one's place, and the new order is kept */
+/* Whether a drop over this point of the row lands before it rather than after */
+static gboolean is_drop_before(GtkWidget *row, double y) {
+	return y < gtk_widget_get_height(row) / 2.0;
+}
+
+
+/* Only one line shows at a time, so the previous one goes before another is drawn */
+static void clear_drop_line(Window *window) {
+	if (!window->drop_line_row)
+		return;
+	gtk_widget_remove_css_class(window->drop_line_row, "drop-before");
+	gtk_widget_remove_css_class(window->drop_line_row, "drop-after");
+	g_clear_object(&window->drop_line_row);
+}
+
+
+static gboolean is_dragged_row(Window *window, GtkWidget *row) {
+	return row && g_object_get_data(G_OBJECT(row), NETWORK_KEY) == window->dragged_network;
+}
+
+
+/* One line marks the gap the dragged server would land in, drawn on the server below the gap, or below the last
+ * server for the end of the rail; the gaps on either side of the dragged server would change nothing, so they
+ * show no line */
+static GdkDragAction follow_rail_drag(GtkDropTarget *target, double x, double y, Window *window) {
+	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+	GtkWidget *below = is_drop_before(row, y) ? row : gtk_widget_get_next_sibling(row);
+	GtkWidget *above = below ? gtk_widget_get_prev_sibling(below) : row;
+	clear_drop_line(window);
+	if (is_dragged_row(window, below) || is_dragged_row(window, above))
+		return GDK_ACTION_MOVE;
+	window->drop_line_row = g_object_ref(below ? below : row);
+	gtk_widget_add_css_class(window->drop_line_row, below ? "drop-before" : "drop-after");
+	return GDK_ACTION_MOVE;
+}
+
+
+static void leave_rail_row(GtkDropTarget *target, Window *window) {
+	clear_drop_line(window);
+}
+
+
+static void end_rail_drag(GtkDragSource *source, GdkDrag *drag, gboolean is_deleting, Window *window) {
+	clear_drop_line(window);
+	window->dragged_network = NULL;
+}
+
+
+/* Dropping a server lands it before or after the one under the pointer, and the new order is kept */
 static gboolean drop_on_rail_row(GtkDropTarget *target, const GValue *value, double x, double y, Window *window) {
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(target));
+	clear_drop_line(window);
 	CrimsonNetwork *destination = g_object_get_data(G_OBJECT(row), NETWORK_KEY);
 	g_autoptr(GVariant) key = g_variant_ref_sink(g_variant_new_string(g_value_get_string(value)));
 	CrimsonNetwork *moved = find_keyed_network(window, key);
@@ -242,9 +292,13 @@ static gboolean drop_on_rail_row(GtkDropTarget *target, const GValue *value, dou
 	if (!moved || moved == destination || !g_list_store_find(networks, moved, &from)
 		|| !g_list_store_find(networks, destination, &to))
 		return FALSE;
+	/* Taking the server out first moves every later position up by one */
+	guint position = to + (is_drop_before(row, y) ? 0 : 1);
+	if (from < position)
+		position--;
 	g_object_ref(moved);
 	g_list_store_remove(networks, from);
-	g_list_store_insert(networks, to, moved);
+	g_list_store_insert(networks, position, moved);
 	g_object_unref(moved);
 	save_network_order(G_LIST_MODEL(networks));
 	select_rail_row(window, window->network);
@@ -287,10 +341,14 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(click));
 	GtkDragSource *drag = gtk_drag_source_new();
 	gtk_drag_source_set_actions(drag, GDK_ACTION_MOVE);
-	g_signal_connect(drag, "prepare", G_CALLBACK(start_rail_drag), NULL);
+	g_signal_connect(drag, "prepare", G_CALLBACK(start_rail_drag), data);
+	g_signal_connect(drag, "drag-end", G_CALLBACK(end_rail_drag), data);
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drag));
 	GtkDropTarget *drop = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_MOVE);
 	g_signal_connect(drop, "drop", G_CALLBACK(drop_on_rail_row), data);
+	g_signal_connect(drop, "enter", G_CALLBACK(follow_rail_drag), data);
+	g_signal_connect(drop, "motion", G_CALLBACK(follow_rail_drag), data);
+	g_signal_connect(drop, "leave", G_CALLBACK(leave_rail_row), data);
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(drop));
 	fill_rail_row(row, network);
 	g_signal_connect_object(network, "changed", G_CALLBACK(refresh_rail_row), row, 0);

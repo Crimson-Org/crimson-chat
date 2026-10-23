@@ -41,6 +41,9 @@ struct Window {
 	 * closed while the app runs */
 	guint banner_source;
 	GHashTable *dismissed_logins;
+	/* The server being dragged in the rail, and the row that shows where it would land */
+	CrimsonNetwork *dragged_network;
+	GtkWidget *drop_line_row;
 	Tray *tray;
 	WindowGeometry geometry;
 };
