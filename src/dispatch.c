@@ -2,6 +2,7 @@
 
 #include "../lang/en.h"
 #include "formatting.h"
+#include "notifications.h"
 #include "questions.h"
 #include "settings.h"
 
@@ -272,9 +273,7 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	count_unread(room);
 	announce_room_change(room);
 	save_chat_cache_later(network->session->chat);
-	Settings *settings = get_settings();
-	gboolean wants_notice = room->kind == ROOM_PRIVATE ? settings->notifies_private : settings->notifies_mentions;
-	if (line->is_highlight && wants_notice && line->time > room->read_time)
+	if (line->sender && line->time > room->read_time && wants_notification(room, line))
 		network->session->chat->events.notify(room, line, network->session->chat->data);
 }
 
@@ -343,11 +342,11 @@ static void note_new_reaction(CrimsonNetwork *network, CrimsonRoom *room, Crimso
 	room->new_reaction_text = g_strdup_printf(TEXT_REACTED_TO, sender, reaction, excerpt);
 	room->new_reaction_time = g_get_real_time();
 	announce_room_change(room);
-	if (get_settings()->notifies_mentions) {
-		g_autoptr(CrimsonMessage) notice = create_message(MESSAGE_TEXT, sender, room->new_reaction_text,
-			room->new_reaction_time);
+	g_autoptr(CrimsonMessage) notice = create_message(MESSAGE_TEXT, sender, room->new_reaction_text,
+		room->new_reaction_time);
+	notice->is_highlight = TRUE;
+	if (wants_notification(room, notice))
 		network->session->chat->events.notify(room, notice, network->session->chat->data);
-	}
 }
 
 

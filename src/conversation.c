@@ -6,6 +6,7 @@
 #include "formatting.h"
 #include "images.h"
 #include "message-row.h"
+#include "notifications.h"
 #include "room-look.h"
 #include "sounds.h"
 #include "window.h"
@@ -615,15 +616,15 @@ static void click_sticky_avatar(GtkGestureClick *gesture, int presses, double x,
 }
 
 
-/* Someone else's message arriving in the open chat makes a short sound, with or without the window in focus,
- * while the messages already there when a chat opens make none */
+/* Someone else's message arriving in the open chat makes a short sound when it would notify, with or without the
+ * window in focus, while the messages already there when a chat opens make none */
 static void sound_new_message(GListModel *messages, guint position, guint removed, guint added, RoomView *view) {
 	guint count = g_list_model_get_n_items(messages);
 	if (!is_shown_view(view) || !added || position + added != count)
 		return;
 	g_autoptr(CrimsonMessage) message = g_list_model_get_item(messages, count - 1);
 	gboolean is_spoken = message->kind != MESSAGE_EVENT && message->kind != MESSAGE_STATUS;
-	if (is_message_arriving(message) && !message->is_own && is_spoken)
+	if (is_message_arriving(message) && is_spoken && wants_notification(view->room, message))
 		play_sound(SOUND_MESSAGE);
 }
 

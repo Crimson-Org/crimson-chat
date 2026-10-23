@@ -3,6 +3,7 @@
 #include "../lang/en.h"
 #include "formatting.h"
 #include "images.h"
+#include "notifications.h"
 #include "room-look.h"
 #include "settings.h"
 #include "window.h"
@@ -13,6 +14,11 @@
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
+#define MINUTES_KEY "minutes"
+#define ENABLES_KEY "enables"
+/* The minutes a room's notifications change for unless the user picks another number, and the most they can */
+#define OVERRIDE_MINUTES 60
+#define OVERRIDE_MINUTES_MOST (7 * 24 * 60)
 
 struct RoomList {
 	Window *window;
@@ -135,41 +141,164 @@ static void forget_row_menu(GtkPopover *popover, gpointer data) {
 }
 
 
-/* Right-clicking a room or private chat offers its card or the person's profile first, then leaving it */
+/* A menu item reading from the left like the app's other menus, with an arrow for one that opens a submenu */
+static GtkWidget *create_menu_item(const char *text, const char *css_class, const char *icon_name,
+	gboolean is_icon_first) {
+	GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+	GtkWidget *label = gtk_label_new(text);
+	gtk_label_set_xalign(GTK_LABEL(label), 0);
+	gtk_widget_set_hexpand(label, TRUE);
+	gtk_box_append(GTK_BOX(content), label);
+	if (icon_name) {
+		GtkWidget *icon = gtk_image_new_from_icon_name(icon_name);
+		if (is_icon_first)
+			gtk_box_prepend(GTK_BOX(content), icon);
+		else
+			gtk_box_append(GTK_BOX(content), icon);
+	}
+	GtkWidget *item = gtk_button_new();
+	gtk_button_set_child(GTK_BUTTON(item), content);
+	gtk_widget_add_css_class(item, "flat");
+	gtk_widget_add_css_class(item, css_class);
+	return item;
+}
+
+
+static GtkWidget *add_menu_item(GtkWidget *items, GtkWidget *popover, const char *text, const char *css_class) {
+	GtkWidget *item = create_menu_item(text, css_class, NULL, FALSE);
+	g_signal_connect_swapped(item, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
+	gtk_box_append(GTK_BOX(items), item);
+	return item;
+}
+
+
+static void set_room_action(GtkWidget *item, const char *action, CrimsonRoom *room) {
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(item), action);
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(item), g_variant_new("(ss)", room->network->key,
+		room->name));
+}
+
+
+static void override_notifications(GtkWidget *popover, gint64 until) {
+	CrimsonRoom *room = g_object_get_data(G_OBJECT(popover), ROOM_KEY);
+	gboolean enables = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(popover), ENABLES_KEY));
+	set_notification_override(room->network->key, room->name, enables, until);
+	gtk_popover_popdown(GTK_POPOVER(popover));
+}
+
+
+static void override_notifications_forever(GtkButton *item, GtkWidget *popover) {
+	override_notifications(popover, 0);
+}
+
+
+static void override_notifications_for_minutes(GtkWidget *source, GtkWidget *popover) {
+	GtkSpinButton *minutes = g_object_get_data(G_OBJECT(popover), MINUTES_KEY);
+	gint64 length = (gint64)gtk_spin_button_get_value_as_int(minutes) * 60 * G_USEC_PER_SEC;
+	override_notifications(popover, g_get_real_time() + length);
+}
+
+
+static void use_default_notifications(GtkButton *item, GtkWidget *popover) {
+	CrimsonRoom *room = g_object_get_data(G_OBJECT(popover), ROOM_KEY);
+	clear_notification_override(room->network->key, room->name);
+}
+
+
+static void name_minutes_item(GtkSpinButton *minutes, GtkButton *item) {
+	int count = gtk_spin_button_get_value_as_int(minutes);
+	g_autofree char *text = count == 1 ? g_strdup(TEXT_FOR_ONE_MINUTE) : g_strdup_printf(TEXT_FOR_MINUTES, count);
+	GtkWidget *content = gtk_button_get_child(item);
+	gtk_label_set_text(GTK_LABEL(gtk_widget_get_first_child(content)), text);
+}
+
+
+static void show_menu_page(GtkWidget *item, const char *page) {
+	GtkWidget *stack = gtk_widget_get_ancestor(item, GTK_TYPE_STACK);
+	gtk_stack_set_visible_child_name(GTK_STACK(stack), page);
+}
+
+
+static void open_notifications_page(GtkButton *item, gpointer data) {
+	show_menu_page(GTK_WIDGET(item), "notifications");
+}
+
+
+static void close_notifications_page(GtkButton *item, gpointer data) {
+	show_menu_page(GTK_WIDGET(item), "main");
+}
+
+
+/* The submenu switches the room's notifications the other way for ever or for a number of minutes */
+static GtkWidget *create_notifications_page(GtkWidget *popover, const char *title) {
+	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	GtkWidget *back = create_menu_item(title, "plain-item", "go-previous-symbolic", TRUE);
+	g_signal_connect(back, "clicked", G_CALLBACK(close_notifications_page), NULL);
+	gtk_box_append(GTK_BOX(items), back);
+	gtk_box_append(GTK_BOX(items), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+	GtkWidget *forever = create_menu_item(TEXT_FOREVER, "plain-item", NULL, FALSE);
+	g_signal_connect(forever, "clicked", G_CALLBACK(override_notifications_forever), popover);
+	gtk_box_append(GTK_BOX(items), forever);
+	GtkWidget *timed = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	GtkWidget *minutes = gtk_spin_button_new_with_range(1, OVERRIDE_MINUTES_MOST, 1);
+	gtk_spin_button_set_value(GTK_SPIN_BUTTON(minutes), OVERRIDE_MINUTES);
+	gtk_widget_add_css_class(minutes, "override-minutes");
+	g_object_set_data(G_OBJECT(popover), MINUTES_KEY, minutes);
+	GtkWidget *for_minutes = create_menu_item(NULL, "plain-item", NULL, FALSE);
+	gtk_widget_set_hexpand(for_minutes, TRUE);
+	name_minutes_item(GTK_SPIN_BUTTON(minutes), GTK_BUTTON(for_minutes));
+	g_signal_connect(minutes, "value-changed", G_CALLBACK(name_minutes_item), for_minutes);
+	g_signal_connect(minutes, "activate", G_CALLBACK(override_notifications_for_minutes), popover);
+	g_signal_connect(for_minutes, "clicked", G_CALLBACK(override_notifications_for_minutes), popover);
+	gtk_box_append(GTK_BOX(timed), for_minutes);
+	gtk_box_append(GTK_BOX(timed), minutes);
+	gtk_box_append(GTK_BOX(items), timed);
+	return items;
+}
+
+
+/* Right-clicking a room or private chat offers its card or the person's profile first, then its notifications,
+ * then leaving it */
 static void open_row_menu(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(row), ROOM_KEY);
 	if (!room)
 		return;
-	/* Leaving cannot be undone from here, so the item is red, while the server's messages only leave the list */
+	GtkWidget *popover = gtk_popover_new();
+	gtk_widget_add_css_class(popover, "menu");
+	g_object_set_data_full(G_OBJECT(popover), ROOM_KEY, g_object_ref(room), g_object_unref);
+	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	GtkWidget *pages = gtk_stack_new();
+	gtk_stack_set_transition_type(GTK_STACK(pages), GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT_RIGHT);
+	gtk_stack_set_hhomogeneous(GTK_STACK(pages), FALSE);
+	gtk_stack_set_vhomogeneous(GTK_STACK(pages), FALSE);
+	gtk_stack_set_interpolate_size(GTK_STACK(pages), TRUE);
+	gtk_stack_add_named(GTK_STACK(pages), items, "main");
+	/* The server's messages never notify and only leave the list */
 	gboolean is_server = room->kind == ROOM_SERVER;
-	GtkWidget *leave = gtk_button_new_with_label(is_server ? TEXT_HIDE : room->kind == ROOM_CHANNEL ? TEXT_LEAVE_ROOM
-		: TEXT_DELETE_CHAT);
-	gtk_widget_add_css_class(leave, "flat");
-	gtk_widget_add_css_class(leave, is_server ? "plain-item" : "destructive-item");
+	if (!is_server) {
+		GtkWidget *details = add_menu_item(items, popover, room->kind == ROOM_CHANNEL ? TEXT_ROOM_DETAILS
+			: TEXT_VIEW_PROFILE, "plain-item");
+		set_room_action(details, "win.chat-details", room);
+		gboolean enables = !is_room_notified(room);
+		g_object_set_data(G_OBJECT(popover), ENABLES_KEY, GINT_TO_POINTER(enables));
+		const char *title = enables ? TEXT_ENABLE_NOTIFICATIONS : TEXT_DISABLE_NOTIFICATIONS;
+		GtkWidget *notifications = create_menu_item(title, "plain-item", "go-next-symbolic", FALSE);
+		g_signal_connect(notifications, "clicked", G_CALLBACK(open_notifications_page), NULL);
+		gtk_box_append(GTK_BOX(items), notifications);
+		gtk_stack_add_named(GTK_STACK(pages), create_notifications_page(popover, title), "notifications");
+		if (find_notification_override(get_settings(), room->network->key, room->name)) {
+			GtkWidget *defaults = add_menu_item(items, popover, TEXT_DEFAULT_NOTIFICATIONS, "plain-item");
+			g_signal_connect(defaults, "clicked", G_CALLBACK(use_default_notifications), popover);
+		}
+	}
+	/* Leaving cannot be undone from here, so the item is red */
+	GtkWidget *leave = add_menu_item(items, popover, is_server ? TEXT_HIDE : room->kind == ROOM_CHANNEL
+		? TEXT_LEAVE_ROOM : TEXT_DELETE_CHAT, is_server ? "plain-item" : "destructive-item");
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), is_server ? "win.hide-server-messages" : "win.leave-chat");
 	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(leave), is_server ? g_variant_new_string(room->network->key)
 		: g_variant_new("(ss)", room->network->key, room->name));
-	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-	if (!is_server) {
-		GtkWidget *details = gtk_button_new_with_label(room->kind == ROOM_CHANNEL ? TEXT_ROOM_DETAILS
-			: TEXT_VIEW_PROFILE);
-		gtk_widget_add_css_class(details, "flat");
-		gtk_widget_add_css_class(details, "plain-item");
-		gtk_actionable_set_action_name(GTK_ACTIONABLE(details), "win.chat-details");
-		gtk_actionable_set_action_target_value(GTK_ACTIONABLE(details),
-			g_variant_new("(ss)", room->network->key, room->name));
-		gtk_box_append(GTK_BOX(items), details);
-	}
-	gtk_box_append(GTK_BOX(items), leave);
-	/* Menu items read from the left, like the app's other menus */
-	for (GtkWidget *item = gtk_widget_get_first_child(items); item; item = gtk_widget_get_next_sibling(item))
-		gtk_label_set_xalign(GTK_LABEL(gtk_button_get_child(GTK_BUTTON(item))), 0);
-	GtkWidget *popover = gtk_popover_new();
-	gtk_widget_add_css_class(popover, "menu");
-	gtk_popover_set_child(GTK_POPOVER(popover), items);
-	for (GtkWidget *item = gtk_widget_get_first_child(items); item; item = gtk_widget_get_next_sibling(item))
-		g_signal_connect_swapped(item, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
+	gtk_popover_set_child(GTK_POPOVER(popover), pages);
 	gtk_widget_set_parent(popover, row);
 	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});

@@ -41,14 +41,14 @@ static void withdraw_notification(CrimsonRoom *room, gpointer data) {
 }
 
 
-/* A desktop notification for a mention or a private message, unless the room is already on screen, with the longer
- * sound unless the chat is the open one, which makes its own short sound */
+/* A desktop notification for a message that notifies, unless the room is already on screen, with the longer sound
+ * for a mention or private message unless the chat is the open one, which makes its own short sound */
 static void notify_message(CrimsonRoom *room, CrimsonMessage *message, gpointer data) {
 	Window *window = get_main_window();
 	if (window && is_room_in_view(window, room))
 		return;
 	if (!window || get_open_room(window) != room)
-		play_sound(SOUND_MENTION);
+		play_sound(message->is_highlight ? SOUND_MENTION : SOUND_MESSAGE);
 	g_autofree char *title = room->kind == ROOM_PRIVATE ? g_strdup(message->sender)
 		: g_strdup_printf(TEXT_NOTIFICATION_TITLE, message->sender, room->name);
 	g_autofree char *body = strip_irc_formatting(message->text);

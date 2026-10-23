@@ -3,6 +3,7 @@
 #include "../lang/en.h"
 #include "common/themes.h"
 #include "dialogs.h"
+#include "formatting.h"
 #include "settings-dialog.h"
 #include "settings.h"
 #include "window.h"
@@ -92,6 +93,24 @@ static void change_words(GtkEditable *row, char **words) {
 }
 
 
+static void fill_general(GtkWidget *stack, Settings *settings) {
+	GtkWidget *page = add_page(stack, TEXT_GENERAL, "preferences-system-symbolic");
+	GtkWidget *chats = add_group(page, TEXT_CONVERSATIONS);
+	const SwitchSetting CHATS[] = {
+		{TEXT_SHOW_EVENTS, NULL, &settings->shows_events},
+		{TEXT_SHOW_IMAGES, NULL, &settings->shows_images},
+		{TEXT_SHOW_TYPING, NULL, &settings->shows_typing},
+		{TEXT_24_HOURS, NULL, &settings->uses_24_hours},
+	};
+	add_switches(chats, CHATS, G_N_ELEMENTS(CHATS));
+	GtkWidget *window = add_group(page, TEXT_WINDOW_GROUP);
+	const SwitchSetting WINDOW[] = {
+		{TEXT_CLOSE_TO_TRAY, TEXT_CLOSE_TO_TRAY_DETAIL, &settings->closes_to_tray},
+	};
+	add_switches(window, WINDOW, G_N_ELEMENTS(WINDOW));
+}
+
+
 static void fill_appearance(GtkWidget *stack, Settings *settings) {
 	GtkWidget *page = add_page(stack, TEXT_APPEARANCE, "applications-graphics-symbolic");
 	GtkWidget *look = add_group(page, TEXT_STYLE_GROUP);
@@ -105,17 +124,74 @@ static void fill_appearance(GtkWidget *stack, Settings *settings) {
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(look), style);
 	add_theme_row(look, TEXT_LIGHT_THEME, &settings->light_theme, DEFAULT_LIGHT_THEME);
 	add_theme_row(look, TEXT_DARK_THEME, &settings->dark_theme, DEFAULT_DARK_THEME);
-	const SwitchSetting LOOK[] = {
-		{TEXT_24_HOURS, NULL, &settings->uses_24_hours},
-	};
-	add_switches(look, LOOK, G_N_ELEMENTS(LOOK));
-	GtkWidget *chat = add_group(page, TEXT_CONVERSATIONS);
-	const SwitchSetting CHAT[] = {
-		{TEXT_SHOW_EVENTS, NULL, &settings->shows_events},
-		{TEXT_SHOW_IMAGES, NULL, &settings->shows_images},
-		{TEXT_SHOW_TYPING, NULL, &settings->shows_typing},
-	};
-	add_switches(chat, CHAT, G_N_ELEMENTS(CHAT));
+}
+
+
+static const char *find_network_name(const char *key) {
+	Window *window = get_main_window();
+	guint count = window ? g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks)) : 0;
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
+		if (g_str_equal(network->key, key))
+			return network->name;
+	}
+	return key;
+}
+
+
+/* Names the server and whether the override is on or off, with the moment it ends, on the day when not today */
+static char *describe_override(const NotificationOverride *override) {
+	const char *state = override->is_enabled ? TEXT_OVERRIDE_ON : TEXT_OVERRIDE_OFF;
+	g_autofree char *when = NULL;
+	if (override->until) {
+		g_autofree char *clock = format_clock_time(override->until);
+		g_autofree char *day = format_day_heading(override->until);
+		when = is_same_day(override->until, g_get_real_time()) ? g_steal_pointer(&clock)
+			: g_strdup_printf("%s %s", day, clock);
+	}
+	g_autofree char *status = when ? g_strdup_printf(TEXT_OVERRIDE_UNTIL, state, when) : g_strdup(state);
+	return g_strdup_printf(TEXT_OVERRIDE_ROOM, find_network_name(override->network_key), status);
+}
+
+
+static void show_overrides_hint(GtkWidget *group, Settings *settings) {
+	gboolean is_empty = settings->notification_overrides->len == 0;
+	adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), is_empty ? TEXT_OVERRIDES_EMPTY : NULL);
+}
+
+
+static void remove_override_row(GtkButton *button, GtkWidget *row) {
+	GtkWidget *group = gtk_widget_get_ancestor(row, ADW_TYPE_PREFERENCES_GROUP);
+	Settings *settings = g_object_get_data(G_OBJECT(group), "settings");
+	g_ptr_array_remove(settings->notification_overrides, g_object_get_data(G_OBJECT(row), "override"));
+	adw_preferences_group_remove(ADW_PREFERENCES_GROUP(group), row);
+	show_overrides_hint(group, settings);
+}
+
+
+/* Each room or chat set apart from the defaults, which a button returns to them once the form is saved */
+static void add_overrides(GtkWidget *page, Settings *settings) {
+	GtkWidget *group = add_group(page, TEXT_OVERRIDES_GROUP);
+	g_object_set_data(G_OBJECT(group), "settings", settings);
+	for (guint index = 0; index < settings->notification_overrides->len; index++) {
+		NotificationOverride *override = g_ptr_array_index(settings->notification_overrides, index);
+		GtkWidget *row = adw_action_row_new();
+		adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
+		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), override->room_name);
+		g_autofree char *description = describe_override(override);
+		adw_action_row_set_subtitle(ADW_ACTION_ROW(row), description);
+		g_object_set_data(G_OBJECT(row), "override", override);
+		GtkWidget *remove = gtk_button_new_from_icon_name("edit-delete-symbolic");
+		gtk_widget_set_valign(remove, GTK_ALIGN_CENTER);
+		gtk_widget_add_css_class(remove, "flat");
+		gtk_widget_set_tooltip_text(remove, TEXT_DEFAULT_NOTIFICATIONS);
+		gtk_accessible_update_property(GTK_ACCESSIBLE(remove), GTK_ACCESSIBLE_PROPERTY_LABEL,
+			TEXT_DEFAULT_NOTIFICATIONS, -1);
+		g_signal_connect(remove, "clicked", G_CALLBACK(remove_override_row), row);
+		adw_action_row_add_suffix(ADW_ACTION_ROW(row), remove);
+		adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
+	}
+	show_overrides_hint(group, settings);
 }
 
 
@@ -123,9 +199,9 @@ static void fill_notifications(GtkWidget *stack, Settings *settings) {
 	GtkWidget *page = add_page(stack, TEXT_NOTIFICATIONS, "preferences-system-notifications-symbolic");
 	GtkWidget *group = add_group(page, TEXT_NOTIFY_GROUP);
 	const SwitchSetting NOTICES[] = {
-		{TEXT_NOTIFY_MENTIONS, NULL, &settings->notifies_mentions},
+		{TEXT_NOTIFY_MENTIONS, TEXT_NOTIFY_MENTIONS_DETAIL, &settings->notifies_mentions},
 		{TEXT_NOTIFY_PRIVATE, NULL, &settings->notifies_private},
-		{TEXT_PLAY_SOUNDS, NULL, &settings->plays_sounds},
+		{TEXT_NOTIFY_ROOM_MESSAGES, NULL, &settings->notifies_room_messages},
 	};
 	add_switches(group, NOTICES, G_N_ELEMENTS(NOTICES));
 	GtkWidget *words = adw_entry_row_new();
@@ -133,6 +209,12 @@ static void fill_notifications(GtkWidget *stack, Settings *settings) {
 	gtk_editable_set_text(GTK_EDITABLE(words), settings->highlight_words ? settings->highlight_words : "");
 	g_signal_connect(words, "changed", G_CALLBACK(change_words), &settings->highlight_words);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), words);
+	GtkWidget *sound = add_group(page, TEXT_SOUND_GROUP);
+	const SwitchSetting SOUND[] = {
+		{TEXT_PLAY_SOUNDS, NULL, &settings->plays_sounds},
+	};
+	add_switches(sound, SOUND, G_N_ELEMENTS(SOUND));
+	add_overrides(page, settings);
 }
 
 
@@ -141,14 +223,9 @@ static void fill_privacy(GtkWidget *stack, Settings *settings) {
 	GtkWidget *group = add_group(page, TEXT_PRIVACY_GROUP);
 	const SwitchSetting PRIVACY[] = {
 		{TEXT_SEND_TYPING, NULL, &settings->sends_typing},
-		{TEXT_SEND_READ, NULL, &settings->sends_read_markers},
+		{TEXT_SEND_READ, TEXT_SEND_READ_DETAIL, &settings->sends_read_markers},
 	};
 	add_switches(group, PRIVACY, G_N_ELEMENTS(PRIVACY));
-	GtkWidget *window = add_group(page, TEXT_WINDOW_GROUP);
-	const SwitchSetting WINDOW[] = {
-		{TEXT_CLOSE_TO_TRAY, NULL, &settings->closes_to_tray},
-	};
-	add_switches(window, WINDOW, G_N_ELEMENTS(WINDOW));
 }
 
 
@@ -170,6 +247,7 @@ void show_settings(GtkWidget *parent) {
 	adw_dialog_set_content_height(dialog, SETTINGS_HEIGHT);
 	g_object_set_data_full(G_OBJECT(dialog), "draft", draft, (GDestroyNotify)free_settings);
 	GtkWidget *stack = adw_view_stack_new();
+	fill_general(stack, draft);
 	fill_appearance(stack, draft);
 	fill_notifications(stack, draft);
 	fill_privacy(stack, draft);

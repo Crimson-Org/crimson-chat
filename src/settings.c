@@ -6,6 +6,9 @@
 
 #define SETTINGS_FILE "settings.ini"
 #define GROUP "chat"
+#define OVERRIDES_GROUP "notification-overrides"
+#define OVERRIDE_ON "on"
+#define OVERRIDE_OFF "off"
 
 static Settings settings = {
 	.style = STYLE_SYSTEM,
@@ -16,6 +19,7 @@ static Settings settings = {
 	.notifies_mentions = TRUE,
 	.plays_sounds = TRUE,
 	.notifies_private = TRUE,
+	.notifies_room_messages = FALSE,
 	.closes_to_tray = TRUE,
 	.uses_24_hours = TRUE,
 };
@@ -23,6 +27,90 @@ static Settings settings = {
 
 Settings *get_settings(void) {
 	return &settings;
+}
+
+
+static void free_override(NotificationOverride *override) {
+	g_free(override->network_key);
+	g_free(override->room_name);
+	g_free(override);
+}
+
+
+static GPtrArray *create_overrides(void) {
+	return g_ptr_array_new_with_free_func((GDestroyNotify)free_override);
+}
+
+
+static void add_override(GPtrArray *overrides, const char *network_key, const char *room_name, gboolean is_enabled,
+	gint64 until) {
+	NotificationOverride *override = g_new(NotificationOverride, 1);
+	override->network_key = g_strdup(network_key);
+	override->room_name = g_strdup(room_name);
+	override->is_enabled = is_enabled;
+	override->until = until;
+	g_ptr_array_add(overrides, override);
+}
+
+
+static gboolean has_override_ended(const NotificationOverride *override) {
+	return override->until && override->until <= g_get_real_time();
+}
+
+
+static gboolean is_override_for(const NotificationOverride *override, const char *network_key, const char *room_name) {
+	return g_str_equal(override->network_key, network_key) && g_ascii_strcasecmp(override->room_name, room_name) == 0;
+}
+
+
+const NotificationOverride *find_notification_override(const Settings *chosen, const char *network_key,
+	const char *room_name) {
+	for (guint index = 0; index < chosen->notification_overrides->len; index++) {
+		const NotificationOverride *override = g_ptr_array_index(chosen->notification_overrides, index);
+		if (is_override_for(override, network_key, room_name))
+			return has_override_ended(override) ? NULL : override;
+	}
+	return NULL;
+}
+
+
+/* Takes away the room's override, along with any that have ended */
+static void remove_override(GPtrArray *overrides, const char *network_key, const char *room_name) {
+	for (guint index = overrides->len; index > 0; index--) {
+		const NotificationOverride *override = g_ptr_array_index(overrides, index - 1);
+		gboolean is_room = network_key && is_override_for(override, network_key, room_name);
+		if (is_room || has_override_ended(override))
+			g_ptr_array_remove_index(overrides, index - 1);
+	}
+}
+
+
+/* Each override is a line of its network, room, on or off and the moment it ends */
+static void load_overrides(GKeyFile *file) {
+	g_clear_pointer(&settings.notification_overrides, g_ptr_array_unref);
+	settings.notification_overrides = create_overrides();
+	g_auto(GStrv) keys = g_key_file_get_keys(file, OVERRIDES_GROUP, NULL, NULL);
+	for (guint index = 0; keys && keys[index]; index++) {
+		gsize count = 0;
+		g_auto(GStrv) parts = g_key_file_get_string_list(file, OVERRIDES_GROUP, keys[index], &count, NULL);
+		if (count != 4)
+			continue;
+		gint64 until = g_ascii_strtoll(parts[3], NULL, 10);
+		add_override(settings.notification_overrides, parts[0], parts[1], g_str_equal(parts[2], OVERRIDE_ON), until);
+	}
+	remove_override(settings.notification_overrides, NULL, NULL);
+}
+
+
+static void save_overrides(GKeyFile *file) {
+	for (guint index = 0; index < settings.notification_overrides->len; index++) {
+		const NotificationOverride *override = g_ptr_array_index(settings.notification_overrides, index);
+		g_autofree char *key = g_strdup_printf("%u", index + 1);
+		g_autofree char *until = g_strdup_printf("%" G_GINT64_FORMAT, override->until);
+		const char *parts[] = {override->network_key, override->room_name,
+			override->is_enabled ? OVERRIDE_ON : OVERRIDE_OFF, until};
+		g_key_file_set_string_list(file, OVERRIDES_GROUP, key, parts, G_N_ELEMENTS(parts));
+	}
 }
 
 
@@ -49,10 +137,12 @@ void load_settings(void) {
 	settings.notifies_mentions = read_switch(file, "notify-mentions", settings.notifies_mentions);
 	settings.plays_sounds = read_switch(file, "play-sounds", settings.plays_sounds);
 	settings.notifies_private = read_switch(file, "notify-private", settings.notifies_private);
+	settings.notifies_room_messages = read_switch(file, "notify-room-messages", settings.notifies_room_messages);
 	settings.closes_to_tray = read_switch(file, "close-to-tray", settings.closes_to_tray);
 	settings.uses_24_hours = read_switch(file, "24-hour-clock", settings.uses_24_hours);
 	g_free(settings.highlight_words);
 	settings.highlight_words = g_key_file_get_string(file, GROUP, "highlight-words", NULL);
+	load_overrides(file);
 }
 
 
@@ -70,9 +160,11 @@ void save_settings(void) {
 	g_key_file_set_boolean(file, GROUP, "notify-mentions", settings.notifies_mentions);
 	g_key_file_set_boolean(file, GROUP, "play-sounds", settings.plays_sounds);
 	g_key_file_set_boolean(file, GROUP, "notify-private", settings.notifies_private);
+	g_key_file_set_boolean(file, GROUP, "notify-room-messages", settings.notifies_room_messages);
 	g_key_file_set_boolean(file, GROUP, "close-to-tray", settings.closes_to_tray);
 	g_key_file_set_boolean(file, GROUP, "24-hour-clock", settings.uses_24_hours);
 	g_key_file_set_string(file, GROUP, "highlight-words", settings.highlight_words ? settings.highlight_words : "");
+	save_overrides(file);
 	g_autofree char *path = get_config_file_path(SETTINGS_FILE);
 	save_key_file(file, path);
 }
@@ -95,6 +187,14 @@ Settings *copy_settings(const Settings *source) {
 	copy->light_theme = g_strdup(source->light_theme);
 	copy->dark_theme = g_strdup(source->dark_theme);
 	copy->highlight_words = g_strdup(source->highlight_words);
+	copy->notification_overrides = create_overrides();
+	for (guint index = 0; index < source->notification_overrides->len; index++) {
+		const NotificationOverride *override = g_ptr_array_index(source->notification_overrides, index);
+		if (has_override_ended(override))
+			continue;
+		add_override(copy->notification_overrides, override->network_key, override->room_name,
+			override->is_enabled, override->until);
+	}
 	return copy;
 }
 
@@ -103,6 +203,7 @@ void free_settings(Settings *copy) {
 	g_free(copy->light_theme);
 	g_free(copy->dark_theme);
 	g_free(copy->highlight_words);
+	g_ptr_array_unref(copy->notification_overrides);
 	g_free(copy);
 }
 
@@ -112,8 +213,22 @@ void use_settings(const Settings *chosen) {
 	g_free(settings.light_theme);
 	g_free(settings.dark_theme);
 	g_free(settings.highlight_words);
+	g_ptr_array_unref(settings.notification_overrides);
 	settings = *copy;
 	g_free(copy);
 	save_settings();
 	apply_style();
+}
+
+
+void set_notification_override(const char *network_key, const char *room_name, gboolean is_enabled, gint64 until) {
+	remove_override(settings.notification_overrides, network_key, room_name);
+	add_override(settings.notification_overrides, network_key, room_name, is_enabled, until);
+	save_settings();
+}
+
+
+void clear_notification_override(const char *network_key, const char *room_name) {
+	remove_override(settings.notification_overrides, network_key, room_name);
+	save_settings();
 }
