@@ -362,6 +362,7 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	gtk_box_append(GTK_BOX(top), name);
 	gtk_box_append(GTK_BOX(top), time);
 	GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	gtk_widget_add_css_class(bottom, "room-bottom");
 	GtkWidget *preview = create_label("room-preview", TRUE);
 	GtkWidget *badge = gtk_label_new(NULL);
 	gtk_widget_add_css_class(badge, "unread-badge");

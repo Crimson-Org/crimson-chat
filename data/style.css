@@ -191,6 +191,11 @@ headerbar.title-bar {
 	font-weight: 500;
 }
 
+/* The preview line is as tall as the badge whether or not one shows, so the lines above never move */
+.room-bottom {
+	min-height: 26px;
+}
+
 .room-preview {
 	font-size: 17px;
 }
