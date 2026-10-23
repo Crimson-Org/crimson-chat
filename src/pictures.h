@@ -18,7 +18,7 @@ const char *pick_person_picture(CrimsonRoom *room, const char *nick);
 /* Clicking the avatar calls change with data, and pointing at it shows a picture sign in its corner; returns the
  * widget to place where the avatar would go */
 GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer data);
-/* Clicking the avatar chooses a picture from disk, and pointing at it shows a picture sign and, once the user chose
- * one, a button to go back to the server's; returns the widget to place where the avatar would go */
+/* Clicking the avatar asks before choosing a picture only the user sees, or one everyone sees where the user may set
+ * it, and its corner button removes the picture in place; returns the widget to place where the avatar would go */
 GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
 	const char *name);

@@ -805,8 +805,8 @@ headerbar.title-bar {
 	border-radius: 9999px;
 }
 
-/* A picture the user can change shows a small sign in its corner while pointed at, and a remove button once their
- * own is in place */
+/* A picture the user can change shows a button in its corner while pointed at, which chooses a picture or removes
+ * the one in place */
 .picture-choice > .picture-badge {
 	opacity: 0;
 	transition: opacity 200ms ease;
@@ -820,6 +820,12 @@ headerbar.title-bar {
 
 .picture-choice:hover > .picture-badge {
 	opacity: 1;
+}
+
+/* The sign on a picture only the user sees stays in view, since it tells who sees the picture */
+.picture-choice > .picture-badge.picture-local {
+	opacity: 1;
+	font-weight: bold;
 }
 
 /* The pen beside the user's own name only shows while the name is pointed at */

@@ -1,11 +1,14 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <glib/gstdio.h>
+#include <string.h>
 
 #include "../lang/en.h"
 #include "common/key-store.h"
 #include "images.h"
 #include "pictures.h"
 #include "room-look.h"
+#include "session.h"
+#include "uploads.h"
 
 #define PICTURES_FILE "pictures.ini"
 #define PICTURES_FOLDER "pictures"
@@ -116,6 +119,114 @@ static CrimsonNetwork *find_choice_network(PictureChoice *choice) {
 }
 
 
+/* Operators, admins and owners of a room may change what the room shows everyone */
+static gboolean is_room_operator(CrimsonNetwork *network, const char *name) {
+	IrcState *state = get_network_state(network);
+	IrcChannel *channel = state && name ? find_irc_channel(state, name) : NULL;
+	if (!channel || !state->nick)
+		return FALSE;
+	g_autofree char *folded = fold_state_name(state, state->nick);
+	const char *symbols = g_hash_table_lookup(channel->members, folded);
+	return symbols && (strchr(symbols, '@') || strchr(symbols, '&') || strchr(symbols, '~'));
+}
+
+
+/* An operator sets a room's picture for everyone where the bouncer takes uploads, and every other picture the user
+ * chooses stays on this computer */
+static gboolean is_picture_shared(CrimsonNetwork *network, PictureChoice *choice) {
+	if (choice->kind != PICTURE_ROOM || !can_network(network, "draft/metadata-2")
+		|| !is_room_operator(network, choice->name))
+		return FALSE;
+	g_autofree char *upload_url = find_avatar_upload_url(network);
+	return upload_url != NULL;
+}
+
+
+static const char *find_shared_room_picture(CrimsonNetwork *network, const char *name) {
+	CrimsonRoom *room = find_room(network, name);
+	return room ? find_metadata(room, NULL, "avatar") : NULL;
+}
+
+
+static const char *pick_choice_picture(CrimsonNetwork *network, PictureChoice *choice) {
+	if (choice->kind == PICTURE_SERVER)
+		return pick_network_picture(network);
+	if (choice->kind == PICTURE_PERSON) {
+		CrimsonRoom *room = find_room(network, choice->name);
+		return pick_person_picture(room ? room : network->server_room, choice->name);
+	}
+	const char *own = find_own_picture(network, PICTURE_ROOM, choice->name);
+	return own ? own : find_shared_room_picture(network, choice->name);
+}
+
+
+/* What clicking a picture or its button does, decided again on each click since pictures and operators change */
+typedef enum {
+	PICTURE_CHOOSE_OWN,
+	PICTURE_CHOOSE_SHARED,
+	PICTURE_REMOVE_OWN,
+	PICTURE_REMOVE_SHARED,
+} PictureAction;
+
+/* The words for each action, and its question names the room when everyone in it gets the change */
+static const struct {
+	const char *tooltip, *title, *answer;
+	gboolean is_removal;
+} ACTIONS[] = {
+	[PICTURE_CHOOSE_OWN] = {TEXT_CHOOSE_OWN_PICTURE, TEXT_CHOOSE_OWN_PICTURE_TITLE, TEXT_CHOOSE_PICTURE, FALSE},
+	[PICTURE_CHOOSE_SHARED] = {TEXT_CHOOSE_SHARED_PICTURE, TEXT_CHOOSE_SHARED_PICTURE_TITLE, TEXT_CHOOSE_PICTURE,
+		FALSE},
+	[PICTURE_REMOVE_OWN] = {TEXT_REMOVE_OWN_PICTURE, TEXT_REMOVE_OWN_PICTURE_TITLE, TEXT_REMOVE, TRUE},
+	[PICTURE_REMOVE_SHARED] = {TEXT_REMOVE_SHARED_PICTURE, TEXT_REMOVE_SHARED_PICTURE_TITLE, TEXT_REMOVE, TRUE},
+};
+
+
+static char *describe_action_body(PictureAction action, const char *name) {
+	switch (action) {
+	case PICTURE_CHOOSE_SHARED:
+		return g_strdup_printf(TEXT_CHOOSE_SHARED_PICTURE_BODY, name);
+	case PICTURE_REMOVE_SHARED:
+		return g_strdup_printf(TEXT_REMOVE_SHARED_PICTURE_BODY, name);
+	case PICTURE_REMOVE_OWN:
+		return g_strdup(TEXT_REMOVE_OWN_PICTURE_BODY);
+	default:
+		return g_strdup(TEXT_CHOOSE_OWN_PICTURE_BODY);
+	}
+}
+
+
+/* The button removes the picture on show, the user's own first, and offers to choose one while none is set */
+static PictureAction decide_button_action(CrimsonNetwork *network, PictureChoice *choice) {
+	if (find_own_picture(network, choice->kind, choice->name))
+		return PICTURE_REMOVE_OWN;
+	if (!is_picture_shared(network, choice))
+		return PICTURE_CHOOSE_OWN;
+	const char *shared = find_shared_room_picture(network, choice->name);
+	return shared && *shared ? PICTURE_REMOVE_SHARED : PICTURE_CHOOSE_SHARED;
+}
+
+
+/* The picture, its button and the sign on a picture only the user sees follow what is in place now */
+static void refresh_picture_choice(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	CrimsonNetwork *network = find_choice_network(template);
+	if (!network)
+		return;
+	int size = adw_avatar_get_size(ADW_AVATAR(avatar));
+	g_autofree char *sized = fill_image_size(pick_choice_picture(network, template), size * 2);
+	show_avatar_image(ADW_AVATAR(avatar), sized);
+	PictureAction change = is_picture_shared(network, template) ? PICTURE_CHOOSE_SHARED : PICTURE_CHOOSE_OWN;
+	gtk_widget_set_tooltip_text(avatar, ACTIONS[change].tooltip);
+	PictureAction action = decide_button_action(network, template);
+	GtkWidget *button = g_object_get_data(G_OBJECT(avatar), "picture-button");
+	gtk_button_set_icon_name(GTK_BUTTON(button), ACTIONS[action].is_removal ? "user-trash-symbolic"
+		: "image-x-generic-symbolic");
+	gtk_widget_set_tooltip_text(button, ACTIONS[action].tooltip);
+	GtkWidget *local = g_object_get_data(G_OBJECT(avatar), "picture-local");
+	gtk_widget_set_visible(local, find_own_picture(network, template->kind, template->name) != NULL);
+}
+
+
 /* Everything showing the picture is drawn again: the server's rail icon and messages, the room, or the person's
  * private chat, with the conversation and its members */
 static void show_new_picture(PictureChoice *choice, const char *file) {
@@ -135,19 +246,8 @@ static void show_new_picture(PictureChoice *choice, const char *file) {
 		g_key_file_remove_key(get_pictures(), GROUP, key, NULL);
 	save_pictures();
 	g_autoptr(GObject) avatar = g_weak_ref_get(&choice->avatar);
-	if (avatar) {
-		const char *url = choice->kind == PICTURE_SERVER ? pick_network_picture(network)
-			: choice->kind == PICTURE_ROOM ? find_own_picture(network, PICTURE_ROOM, choice->name)
-			: find_own_picture(network, PICTURE_PERSON, choice->name);
-		CrimsonRoom *room = choice->kind == PICTURE_SERVER ? NULL : find_room(network, choice->name);
-		if (room)
-			fill_room_avatar(ADW_AVATAR(avatar), room, adw_avatar_get_size(ADW_AVATAR(avatar)));
-		else
-			show_avatar_image(ADW_AVATAR(avatar), url);
-		GtkWidget *remove = g_object_get_data(avatar, "picture-remove");
-		if (remove)
-			gtk_widget_set_visible(remove, file != NULL);
-	}
+	if (avatar)
+		refresh_picture_choice(GTK_WIDGET(avatar));
 	announce_network_change(network);
 	announce_room_change(network->server_room);
 	CrimsonRoom *room = choice->name ? find_room(network, choice->name) : NULL;
@@ -207,6 +307,35 @@ static void finish_choosing(GObject *source, GAsyncResult *result, gpointer data
 }
 
 
+/* Once everyone has the new picture, the user's own one would only hide it from them */
+static void finish_sharing(const char *url, const char *problem, gpointer data) {
+	PictureChoice *choice = data;
+	g_autoptr(GObject) avatar = g_weak_ref_get(&choice->avatar);
+	if (avatar)
+		gtk_widget_set_sensitive(GTK_WIDGET(avatar), TRUE);
+	CrimsonNetwork *network = find_choice_network(choice);
+	if (url && network && find_own_picture(network, choice->kind, choice->name))
+		show_new_picture(choice, NULL);
+	show_toast(choice->window, url ? TEXT_PICTURE_UPLOADED : problem);
+	free_picture_choice(choice);
+}
+
+
+static void finish_choosing_shared(GObject *source, GAsyncResult *result, gpointer data) {
+	PictureChoice *choice = data;
+	g_autoptr(GFile) chosen = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+	CrimsonNetwork *network = find_choice_network(choice);
+	if (!chosen || !network) {
+		free_picture_choice(choice);
+		return;
+	}
+	g_autoptr(GObject) avatar = g_weak_ref_get(&choice->avatar);
+	if (avatar)
+		gtk_widget_set_sensitive(GTK_WIDGET(avatar), FALSE);
+	upload_avatar(network, choice->name, chosen, finish_sharing, choice);
+}
+
+
 static PictureChoice *copy_choice(GtkWidget *avatar) {
 	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
 	PictureChoice *choice = g_new0(PictureChoice, 1);
@@ -217,61 +346,102 @@ static PictureChoice *copy_choice(GtkWidget *avatar) {
 }
 
 
-static void choose_picture(GtkWidget *avatar) {
+/* The bouncer only reads these kinds of picture, while one kept here may be any picture the computer opens */
+static void open_picture_dialog(GtkWidget *avatar, gboolean is_shared) {
 	PictureChoice *choice = copy_choice(avatar);
 	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
 	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_PICTURE_TITLE);
 	g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
 	gtk_file_filter_set_name(filter, TEXT_PICTURES);
-	gtk_file_filter_add_mime_type(filter, "image/*");
+	if (is_shared) {
+		gtk_file_filter_add_mime_type(filter, "image/png");
+		gtk_file_filter_add_mime_type(filter, "image/jpeg");
+		gtk_file_filter_add_mime_type(filter, "image/webp");
+		gtk_file_filter_add_mime_type(filter, "image/gif");
+	} else {
+		gtk_file_filter_add_mime_type(filter, "image/*");
+	}
 	g_autoptr(GListStore) filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
 	g_list_store_append(filters, filter);
 	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
 	gtk_file_dialog_set_default_filter(dialog, filter);
-	gtk_file_dialog_open(dialog, GTK_WINDOW(choice->window->window), NULL, finish_choosing, choice);
+	gtk_file_dialog_open(dialog, GTK_WINDOW(choice->window->window), NULL,
+		is_shared ? finish_choosing_shared : finish_choosing, choice);
 }
 
 
-/* The remove button only shows while the user's own picture is in place */
-static void refresh_remove_button(GtkWidget *avatar) {
-	GtkWidget *remove = g_object_get_data(G_OBJECT(avatar), "picture-remove");
+static void remove_shared_picture(GtkWidget *avatar) {
 	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
-	CrimsonNetwork *network = template ? find_choice_network(template) : NULL;
-	if (remove)
-		gtk_widget_set_visible(remove, network && find_own_picture(network, template->kind, template->name));
+	CrimsonNetwork *network = find_choice_network(template);
+	if (network && network->client)
+		send_irc_client_command(network->client, "METADATA", template->name, "SET", "avatar", NULL);
 }
 
 
-static void finish_removing(AdwAlertDialog *alert, const char *response, GtkWidget *avatar) {
-	if (g_strcmp0(response, "remove") != 0)
+static void finish_asking(AdwAlertDialog *alert, const char *response, GtkWidget *avatar) {
+	if (g_strcmp0(response, "confirm") != 0)
 		return;
-	PictureChoice *choice = copy_choice(avatar);
-	show_new_picture(choice, NULL);
-	free_picture_choice(choice);
-	refresh_remove_button(avatar);
+	PictureAction action = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(alert), "picture-action"));
+	if (action == PICTURE_CHOOSE_OWN || action == PICTURE_CHOOSE_SHARED) {
+		open_picture_dialog(avatar, action == PICTURE_CHOOSE_SHARED);
+	} else if (action == PICTURE_REMOVE_OWN) {
+		PictureChoice *choice = copy_choice(avatar);
+		show_new_picture(choice, NULL);
+		free_picture_choice(choice);
+	} else {
+		remove_shared_picture(avatar);
+	}
 }
 
 
-static void ask_to_remove(GtkWidget *avatar) {
+/* Every change asks first, saying whether only the user or everyone in the room will see it */
+static void ask_about_picture(GtkWidget *avatar, PictureAction action) {
 	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
-	AdwDialog *alert = adw_alert_dialog_new(TEXT_REMOVE_PICTURE_TITLE, TEXT_REMOVE_PICTURE_BODY);
-	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_REMOVE, NULL);
-	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
+	g_autofree char *body = describe_action_body(action, template->name);
+	AdwDialog *alert = adw_alert_dialog_new(ACTIONS[action].title, body);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "confirm", ACTIONS[action].answer,
+		NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "confirm",
+		ACTIONS[action].is_removal ? ADW_RESPONSE_DESTRUCTIVE : ADW_RESPONSE_SUGGESTED);
 	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
-	g_signal_connect(alert, "response", G_CALLBACK(finish_removing), avatar);
+	g_object_set_data(G_OBJECT(alert), "picture-action", GINT_TO_POINTER(action));
+	g_signal_connect(alert, "response", G_CALLBACK(finish_asking), avatar);
 	adw_dialog_present(alert, GTK_WIDGET(template->window->window));
 }
 
 
-GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer data) {
+static void change_picture(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	CrimsonNetwork *network = find_choice_network(template);
+	if (network)
+		ask_about_picture(avatar, is_picture_shared(network, template) ? PICTURE_CHOOSE_SHARED : PICTURE_CHOOSE_OWN);
+}
+
+
+static void press_picture_button(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	CrimsonNetwork *network = find_choice_network(template);
+	if (network)
+		ask_about_picture(avatar, decide_button_action(network, template));
+}
+
+
+/* The avatar inside an overlay for its corner signs, calling change with data when clicked */
+static GtkWidget *wrap_picture(GtkWidget *avatar, GCallback change, gpointer data) {
 	gtk_widget_set_cursor_from_name(avatar, "pointer");
-	gtk_widget_set_tooltip_text(avatar, TEXT_CHANGE_PICTURE);
 	GtkGesture *click = gtk_gesture_click_new();
 	g_signal_connect_swapped(click, "released", change, data);
 	gtk_widget_add_controller(avatar, GTK_EVENT_CONTROLLER(click));
 	GtkWidget *overlay = gtk_overlay_new();
 	gtk_widget_add_css_class(overlay, "picture-choice");
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), avatar);
+	return overlay;
+}
+
+
+GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer data) {
+	gtk_widget_set_tooltip_text(avatar, TEXT_CHANGE_PICTURE);
+	GtkWidget *overlay = wrap_picture(avatar, change, data);
 	GtkWidget *sign = gtk_image_new_from_icon_name("image-x-generic-symbolic");
 	gtk_widget_add_css_class(sign, "picture-badge");
 	gtk_widget_set_halign(sign, GTK_ALIGN_END);
@@ -282,23 +452,46 @@ GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer da
 }
 
 
+/* A sign in the lower left that tells, when clicked, that nobody else sees the picture */
+static GtkWidget *create_local_sign(void) {
+	GtkWidget *sign = gtk_menu_button_new();
+	gtk_menu_button_set_label(GTK_MENU_BUTTON(sign), "!");
+	gtk_widget_add_css_class(sign, "picture-badge");
+	gtk_widget_add_css_class(sign, "picture-local");
+	gtk_widget_add_css_class(sign, "circular");
+	gtk_widget_set_tooltip_text(sign, TEXT_PICTURE_ONLY_YOURS);
+	gtk_widget_set_halign(sign, GTK_ALIGN_START);
+	gtk_widget_set_valign(sign, GTK_ALIGN_END);
+	GtkWidget *popover = gtk_popover_new();
+	gtk_popover_set_child(GTK_POPOVER(popover), gtk_label_new(TEXT_PICTURE_ONLY_YOURS));
+	gtk_menu_button_set_popover(GTK_MENU_BUTTON(sign), popover);
+	return sign;
+}
+
+
 GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
 	const char *name) {
 	PictureChoice *choice = g_new0(PictureChoice, 1);
 	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}};
 	g_weak_ref_init(&choice->avatar, NULL);
 	g_object_set_data_full(G_OBJECT(avatar), "picture-choice", choice, (GDestroyNotify)free_picture_choice);
-	GtkWidget *overlay = offer_picture_change(avatar, G_CALLBACK(choose_picture), avatar);
-	/* A remove button sits in the other corner where the user chose a picture */
-	GtkWidget *remove = gtk_button_new_from_icon_name("user-trash-symbolic");
-	gtk_widget_add_css_class(remove, "picture-badge");
-	gtk_widget_add_css_class(remove, "circular");
-	gtk_widget_set_tooltip_text(remove, TEXT_REMOVE_PICTURE);
-	gtk_widget_set_halign(remove, GTK_ALIGN_END);
-	gtk_widget_set_valign(remove, GTK_ALIGN_START);
-	g_signal_connect_swapped(remove, "clicked", G_CALLBACK(ask_to_remove), avatar);
-	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), remove);
-	g_object_set_data(G_OBJECT(avatar), "picture-remove", remove);
-	refresh_remove_button(avatar);
+	GtkWidget *overlay = wrap_picture(avatar, G_CALLBACK(change_picture), avatar);
+	GtkWidget *button = gtk_button_new();
+	gtk_widget_add_css_class(button, "picture-badge");
+	gtk_widget_add_css_class(button, "circular");
+	gtk_widget_set_halign(button, GTK_ALIGN_END);
+	gtk_widget_set_valign(button, GTK_ALIGN_END);
+	g_signal_connect_swapped(button, "clicked", G_CALLBACK(press_picture_button), avatar);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), button);
+	g_object_set_data(G_OBJECT(avatar), "picture-button", button);
+	GtkWidget *local = create_local_sign();
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), local);
+	g_object_set_data(G_OBJECT(avatar), "picture-local", local);
+	/* New pictures from the server and a change of operators change what the button does */
+	g_signal_connect_object(network, "changed", G_CALLBACK(refresh_picture_choice), avatar, G_CONNECT_SWAPPED);
+	CrimsonRoom *room = name ? find_room(network, name) : NULL;
+	if (room)
+		g_signal_connect_object(room, "changed", G_CALLBACK(refresh_picture_choice), avatar, G_CONNECT_SWAPPED);
+	refresh_picture_choice(avatar);
 	return overlay;
 }

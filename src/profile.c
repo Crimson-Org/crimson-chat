@@ -347,17 +347,7 @@ static const char *read_field(GtkWidget *row) {
 }
 
 
-/* Operators, admins and owners of a room may change what the room shows everyone */
-static gboolean is_room_operator(IrcState *state, IrcChannel *channel) {
-	if (!state || !channel || !state->nick)
-		return FALSE;
-	g_autofree char *folded = fold_state_name(state, state->nick);
-	const char *symbols = g_hash_table_lookup(channel->members, folded);
-	return symbols && (strchr(symbols, '@') || strchr(symbols, '&') || strchr(symbols, '~'));
-}
-
-
-/* Tells the row or avatar an upload started from how it goes, with neither address nor problem while it travels */
+/* Tells the avatar an upload started from how it goes, with neither address nor problem while it travels */
 typedef void (*ShowUpload)(GtkWidget *widget, const char *url, const char *problem);
 
 
@@ -421,36 +411,6 @@ static void choose_upload(Window *window, CrimsonNetwork *network, const char *t
 	g_list_store_append(filters, filter);
 	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
 	gtk_file_dialog_open(dialog, GTK_WINDOW(upload->window->window), NULL, finish_choosing_upload, upload);
-}
-
-
-static void show_row_upload(GtkWidget *row, const char *url, const char *problem) {
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), problem ? problem
-		: url ? TEXT_UPLOAD_PICTURE_ABOUT : TEXT_UPLOADING_PICTURE);
-}
-
-
-static void choose_row_upload(GtkWidget *row, PictureUpload *template) {
-	choose_upload(template->window, template->network, template->target, row, show_row_upload);
-}
-
-
-/* A row that sends a picture to the bouncer, for the user with "*" or for a room */
-GtkWidget *create_upload_row(Window *window, CrimsonNetwork *network, const char *target) {
-	GtkWidget *row = adw_action_row_new();
-	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), TEXT_PICTURE);
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), TEXT_UPLOAD_PICTURE_ABOUT);
-	GtkWidget *button = gtk_button_new_with_label(TEXT_CHOOSE);
-	gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
-	gtk_widget_add_css_class(button, "pill");
-	adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
-	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
-	PictureUpload *template = g_new0(PictureUpload, 1);
-	*template = (PictureUpload){window, g_object_ref(network), g_strdup(target), NULL, NULL};
-	g_object_set_data_full(G_OBJECT(row), "upload", template, (GDestroyNotify)free_picture_upload);
-	g_signal_connect_swapped(button, "clicked", G_CALLBACK(gtk_widget_activate), row);
-	g_signal_connect(row, "activated", G_CALLBACK(choose_row_upload), template);
-	return row;
 }
 
 
@@ -962,11 +922,6 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		add_row(&rows_view, TEXT_TOPIC_SET_BY, by);
 	}
 	add_row(&rows_view, TEXT_PROFILE_SERVER, room->network->name);
-	/* An operator of the room can send it a picture everyone sees, where the bouncer takes uploads */
-	g_autofree char *upload_url = can_network(room->network, "draft/metadata-2")
-		? find_avatar_upload_url(room->network) : NULL;
-	if (upload_url && is_room_operator(state, channel))
-		gtk_list_box_append(GTK_LIST_BOX(rows), create_upload_row(window, room->network, room->name));
 	gtk_box_append(GTK_BOX(box), rows);
 	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
 	gtk_widget_add_css_class(leave, "pill");

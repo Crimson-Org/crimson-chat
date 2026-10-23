@@ -13,5 +13,3 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 /* The user's own profile on a server: nickname, display name, real name and picture, each marked when the server
  * does not support it */
 void show_own_profile(Window *window, CrimsonNetwork *network);
-/* A row that sends a picture from the computer to the bouncer, for the user with "*" or for a room */
-GtkWidget *create_upload_row(Window *window, CrimsonNetwork *network, const char *target);
