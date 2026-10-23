@@ -9,7 +9,7 @@
 
 #define ROOM_AVATAR_SIZE 50
 #define SEARCH_SLIDE_MS 200
-#define LIST_SLIDE_MS 220
+#define LIST_SLIDE_MS 120
 #define CONNECTION_SPINNER_SIZE 24
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"

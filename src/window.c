@@ -807,24 +807,8 @@ static GtkWidget *create_welcome(Window *window) {
 }
 
 
-/* The narrow window's page slide lays an invisible shield over both pages until its spring settles, which swallows
- * clicks on the chat list long after it looks still, so clicks pass through everything there but the pages */
-static void let_clicks_through_slides(AdwNavigationSplitView *split) {
-	for (GtkWidget *child = gtk_widget_get_first_child(GTK_WIDGET(split)); child;
-		child = gtk_widget_get_next_sibling(child)) {
-		if (!ADW_IS_NAVIGATION_VIEW(child))
-			continue;
-		for (GtkWidget *part = gtk_widget_get_first_child(child); part; part = gtk_widget_get_next_sibling(part))
-			if (!ADW_IS_NAVIGATION_PAGE(part))
-				gtk_widget_set_can_target(part, FALSE);
-	}
-}
-
-
 static void follow_collapse(AdwNavigationSplitView *split, GParamSpec *spec, Window *window) {
 	window->is_narrow = adw_navigation_split_view_get_collapsed(split);
-	if (window->is_narrow)
-		let_clicks_through_slides(split);
 	set_conversation_narrow(window->conversation, window->is_narrow);
 	update_view(window);
 }
