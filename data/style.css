@@ -437,31 +437,96 @@ headerbar.title-bar {
 .typing-face {
 	border-radius: 9999px;
 	box-shadow: 0 0 0 2px var(--chat-wall), var(--message-shadow);
-	animation: typing-bob 1100ms ease-in-out infinite;
+	transform-origin: 50% 100%;
+	animation: typing-hop 1500ms linear infinite;
 }
 
-/* Each typing avatar bobs while its person types, the ones beside it a beat later like a wave */
-@keyframes typing-bob {
-	0%,
-	100% {
+/* Each typing avatar crouches, hops up and falls back under gravity, squashes as it lands and rebounds once before
+ * resting; the arcs are sampled densely since keyframes here cannot ease on their own */
+@keyframes typing-hop {
+	0% {
 		transform: none;
 	}
 
-	50% {
-		transform: translateY(-6px);
+	4% {
+		transform: scale(1.06, 0.92);
+	}
+
+	6% {
+		transform: scale(0.96, 1.06);
+	}
+
+	8.75% {
+		transform: translateY(-4.4px) scale(0.97, 1.04);
+	}
+
+	11.5% {
+		transform: translateY(-7.5px);
+	}
+
+	14.25% {
+		transform: translateY(-9.4px);
+	}
+
+	17% {
+		transform: translateY(-10px);
+	}
+
+	19.75% {
+		transform: translateY(-9.4px);
+	}
+
+	22.5% {
+		transform: translateY(-7.5px);
+	}
+
+	25.25% {
+		transform: translateY(-4.4px) scale(0.98, 1.03);
+	}
+
+	28% {
+		transform: none;
+	}
+
+	30% {
+		transform: scale(1.09, 0.89);
+	}
+
+	32% {
+		transform: translateY(-2.2px);
+	}
+
+	34% {
+		transform: translateY(-3px);
+	}
+
+	36% {
+		transform: translateY(-2.2px);
+	}
+
+	38% {
+		transform: none;
+	}
+
+	40% {
+		transform: scale(1.03, 0.97);
+	}
+
+	42%,
+	100% {
+		transform: none;
 	}
 }
 
+/* Each avatar hops on its own beat, so together they never settle into a wave */
 .typing-face:nth-child(2) {
-	animation-delay: 180ms;
+	animation-duration: 1730ms;
+	animation-delay: 410ms;
 }
 
 .typing-face:nth-child(3) {
-	animation-delay: 360ms;
-}
-
-.typing-face:nth-child(4) {
-	animation-delay: 540ms;
+	animation-duration: 1290ms;
+	animation-delay: 870ms;
 }
 
 .reaction-pill {

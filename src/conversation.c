@@ -22,16 +22,24 @@
 #define SHOWN_MESSAGES_PAGE 100
 #define CONTEXT_BEFORE_TARGET 10
 #define MEMBERS_WIDTH 260
+/* The member list lies over the chat instead of beside it when the chat would keep less than this, and the chat
+ * column itself never asks for more than the smallest room the window's own layout leaves it */
+#define DOCKED_MEMBERS_CONDITION "max-width: 620px"
+#define CHAT_MINIMUM_WIDTH 180
+#define CHAT_MINIMUM_HEIGHT 300
 #define MESSAGE_KEY "message"
 #define HANDLER_KEY "changed-handler"
 /* How far below the top of the chat the avatar of the person being read stays */
 #define STICKY_AVATAR_MARGIN 8
 /* How far in from the side the avatars of who types in a busy room sit, how many show and how far each lies over
- * the one before, how much of them rises into view and how fast they bob */
+ * the one before, how much of them rises into view and how fast they rise */
 #define TYPING_FACES_MARGIN 16
 #define TYPING_FACES_COUNT 3
 #define TYPING_FACES_OVERLAP 12
 #define TYPING_FACES_SHOWN 0.5
+/* Room above the avatars for their hop and its shadow, since the overlay clips them to their own box */
+#define TYPING_HOP_ROOM 16
+#define NICK_KEY "nick"
 #define TYPING_RISE_MS 260
 /* Rooms with more people than the user and one other show typing with avatars rather than only the header */
 #define TYPING_FACES_MEMBERS 3
@@ -441,7 +449,7 @@ static void place_typing_faces(Conversation *conversation, GdkRectangle *allocat
 	GtkRequisition size;
 	gtk_widget_get_preferred_size(conversation->typing_faces, NULL, &size);
 	int height = gtk_widget_get_height(conversation->message_overlay);
-	int risen = (int)(size.height * TYPING_FACES_SHOWN * conversation->typing_rise);
+	int risen = (int)((TYPING_HOP_ROOM + MESSAGE_AVATAR_SIZE * TYPING_FACES_SHOWN) * conversation->typing_rise);
 	*allocation = (GdkRectangle){TYPING_FACES_MARGIN, height - risen, size.width, size.height};
 }
 
@@ -950,6 +958,18 @@ static void follow_member_panel(AdwOverlaySplitView *split, GParamSpec *spec, Co
 }
 
 
+/* A channel shows the member list beside it while the user wants it and there is room, and only lies over the chat
+ * when opened there, so hiding it for want of room keeps the user's wish for when the chat widens again */
+static void place_member_panel(Conversation *conversation) {
+	AdwOverlaySplitView *split = ADW_OVERLAY_SPLIT_VIEW(conversation->split);
+	gboolean wants_members = conversation->wants_members;
+	CrimsonRoom *room = conversation->room;
+	adw_overlay_split_view_set_show_sidebar(split, room && room->kind == ROOM_CHANNEL && wants_members
+		&& !adw_overlay_split_view_get_collapsed(split));
+	conversation->wants_members = wants_members;
+}
+
+
 static GtkWidget *create_header(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
 	gtk_widget_add_css_class(header, "title-bar");
@@ -1013,8 +1033,18 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 	adw_overlay_split_view_set_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split),
 		create_member_panel(conversation));
 	g_signal_connect(conversation->split, "notify::show-sidebar", G_CALLBACK(follow_member_panel), conversation);
+	g_signal_connect_swapped(conversation->split, "notify::collapsed", G_CALLBACK(place_member_panel), conversation);
 	add_member_actions(conversation);
-	return conversation->split;
+	GtkWidget *bin = adw_breakpoint_bin_new();
+	gtk_widget_set_size_request(bin, CHAT_MINIMUM_WIDTH, CHAT_MINIMUM_HEIGHT);
+	adw_breakpoint_bin_set_child(ADW_BREAKPOINT_BIN(bin), conversation->split);
+	AdwBreakpoint *breakpoint = adw_breakpoint_new(adw_breakpoint_condition_parse(DOCKED_MEMBERS_CONDITION));
+	GValue collapsed = G_VALUE_INIT;
+	g_value_init(&collapsed, G_TYPE_BOOLEAN);
+	g_value_set_boolean(&collapsed, TRUE);
+	adw_breakpoint_add_setter(breakpoint, G_OBJECT(conversation->split), "collapsed", &collapsed);
+	adw_breakpoint_bin_add_breakpoint(ADW_BREAKPOINT_BIN(bin), breakpoint);
+	return bin;
 }
 
 
@@ -1171,20 +1201,33 @@ static gboolean is_busy_room(CrimsonRoom *room) {
 }
 
 
+/* The faces are only made again when who types changes, since a new face starts its hop over */
 static void fill_typing_faces(Conversation *conversation) {
-	GtkWidget *child;
+	g_autoptr(GPtrArray) nicks = g_hash_table_get_keys_as_ptr_array(conversation->room->typing);
+	g_ptr_array_sort_values(nicks, (GCompareFunc)g_strcmp0);
+	if (nicks->len > TYPING_FACES_COUNT)
+		g_ptr_array_set_size(nicks, TYPING_FACES_COUNT);
+	GtkWidget *child = gtk_widget_get_first_child(conversation->typing_faces);
+	guint shown = 0;
+	while (child && shown < nicks->len
+		&& g_strcmp0(g_object_get_data(G_OBJECT(child), NICK_KEY), g_ptr_array_index(nicks, shown)) == 0) {
+		child = gtk_widget_get_next_sibling(child);
+		shown++;
+	}
+	if (!child && shown == nicks->len)
+		return;
 	while ((child = gtk_widget_get_first_child(conversation->typing_faces)))
 		gtk_fixed_remove(GTK_FIXED(conversation->typing_faces), child);
-	g_autoptr(GPtrArray) nicks = g_hash_table_get_keys_as_ptr_array(conversation->room->typing);
-	for (guint index = 0; index < nicks->len && index < TYPING_FACES_COUNT; index++) {
+	for (guint index = 0; index < nicks->len; index++) {
 		const char *nick = g_ptr_array_index(nicks, index);
 		GtkWidget *face = adw_avatar_new(MESSAGE_AVATAR_SIZE, nick, TRUE);
+		g_object_set_data_full(G_OBJECT(face), NICK_KEY, g_strdup(nick), g_free);
 		gtk_widget_add_css_class(face, "typing-face");
 		const char *url = pick_person_picture(conversation->room, nick);
 		g_autofree char *sized = fill_image_size(url, MESSAGE_AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(face), sized);
 		gtk_fixed_put(GTK_FIXED(conversation->typing_faces), face,
-			index * (MESSAGE_AVATAR_SIZE - TYPING_FACES_OVERLAP), 0);
+			index * (MESSAGE_AVATAR_SIZE - TYPING_FACES_OVERLAP), TYPING_HOP_ROOM);
 	}
 }
 
@@ -1325,8 +1368,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (!room->has_history)
 		request_latest_history(room);
 	show_empty_note(conversation);
-	adw_overlay_split_view_set_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split),
-		room->kind == ROOM_CHANNEL && conversation->wants_members);
+	place_member_panel(conversation);
 	refresh_members_later(conversation);
 	pin_to_bottom(conversation);
 	run_after_frame(conversation->list_view, mark_read_once_shown, conversation);
@@ -1335,9 +1377,6 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow) {
 	conversation->is_narrow = is_narrow;
-	AdwOverlaySplitView *split = ADW_OVERLAY_SPLIT_VIEW(conversation->split);
-	adw_overlay_split_view_set_collapsed(split, is_narrow);
-	adw_overlay_split_view_set_show_sidebar(split, conversation->wants_members && !is_narrow);
 }
 
 
