@@ -23,3 +23,7 @@ Settings *get_settings(void);
 void load_settings(void);
 void save_settings(void);
 void apply_style(void);
+/* A copy for a settings form to change, which takes effect only once handed to use_settings */
+Settings *copy_settings(const Settings *source);
+void free_settings(Settings *copy);
+void use_settings(const Settings *chosen);

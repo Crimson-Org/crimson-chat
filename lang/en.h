@@ -328,6 +328,8 @@
 #define TEXT_UPLOAD_FAILED "The picture could not be sent"
 #define TEXT_STATUS "Status"
 #define TEXT_PRONOUNS "Pronouns"
+#define TEXT_ADD_PRONOUNS "Add pronouns"
+#define TEXT_SET_STATUS "Set a status"
 #define TEXT_HOMEPAGE "Homepage"
 #define TEXT_OPEN_HOMEPAGE "Open Homepage"
 #define TEXT_NETSPLIT "%d people left when the server lost a link"

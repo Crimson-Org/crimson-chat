@@ -2,11 +2,15 @@
 
 #include "../lang/en.h"
 #include "common/themes.h"
+#include "dialogs.h"
 #include "settings-dialog.h"
 #include "settings.h"
 #include "window.h"
 
-/* A switch bound to one field of the settings, which saves when flipped */
+#define SETTINGS_WIDTH 480
+#define SETTINGS_HEIGHT 640
+
+/* A switch bound to one field of the copy the dialog changes, kept only when the user saves */
 typedef struct {
 	const char *title, *detail;
 	gboolean *value;
@@ -15,10 +19,6 @@ typedef struct {
 
 static void change_switch(AdwSwitchRow *row, GParamSpec *spec, gboolean *value) {
 	*value = adw_switch_row_get_active(row);
-	save_settings();
-	Window *window = get_main_window();
-	if (window)
-		refresh_window_later(window);
 }
 
 
@@ -35,11 +35,9 @@ static void add_switches(GtkWidget *group, const SwitchSetting *switches, guint 
 }
 
 
-static GtkWidget *add_page(AdwPreferencesDialog *dialog, const char *title, const char *icon) {
+static GtkWidget *add_page(GtkWidget *stack, const char *title, const char *icon) {
 	GtkWidget *page = adw_preferences_page_new();
-	adw_preferences_page_set_title(ADW_PREFERENCES_PAGE(page), title);
-	adw_preferences_page_set_icon_name(ADW_PREFERENCES_PAGE(page), icon);
-	adw_preferences_dialog_add(dialog, ADW_PREFERENCES_PAGE(page));
+	adw_view_stack_add_titled_with_icon(ADW_VIEW_STACK(stack), page, NULL, title, icon);
 	return page;
 }
 
@@ -52,10 +50,8 @@ static GtkWidget *add_group(GtkWidget *page, const char *title) {
 }
 
 
-static void change_style(AdwComboRow *row, GParamSpec *spec, gpointer data) {
-	get_settings()->style = (Style)adw_combo_row_get_selected(row);
-	save_settings();
-	apply_style();
+static void change_style(AdwComboRow *row, GParamSpec *spec, Style *style) {
+	*style = (Style)adw_combo_row_get_selected(row);
 }
 
 
@@ -63,8 +59,6 @@ static void change_theme(AdwComboRow *row, GParamSpec *spec, char **theme) {
 	const char *const *ids = g_object_get_data(G_OBJECT(row), "theme-ids");
 	g_free(*theme);
 	*theme = g_strdup(ids[adw_combo_row_get_selected(row)]);
-	save_settings();
-	apply_style();
 }
 
 
@@ -92,16 +86,14 @@ static void add_theme_row(GtkWidget *group, const char *title, char **theme, con
 }
 
 
-static void change_words(AdwEntryRow *row, gpointer data) {
-	g_free(get_settings()->highlight_words);
-	get_settings()->highlight_words = g_strdup(gtk_editable_get_text(GTK_EDITABLE(row)));
-	save_settings();
+static void change_words(GtkEditable *row, char **words) {
+	g_free(*words);
+	*words = g_strdup(gtk_editable_get_text(row));
 }
 
 
-static void fill_appearance(AdwPreferencesDialog *dialog) {
-	Settings *settings = get_settings();
-	GtkWidget *page = add_page(dialog, TEXT_APPEARANCE, "applications-graphics-symbolic");
+static void fill_appearance(GtkWidget *stack, Settings *settings) {
+	GtkWidget *page = add_page(stack, TEXT_APPEARANCE, "applications-graphics-symbolic");
 	GtkWidget *look = add_group(page, TEXT_STYLE_GROUP);
 	static const char *const STYLES[] = {TEXT_FOLLOW_SYSTEM, TEXT_LIGHT, TEXT_DARK, NULL};
 	g_autoptr(GtkStringList) styles = gtk_string_list_new(STYLES);
@@ -109,7 +101,7 @@ static void fill_appearance(AdwPreferencesDialog *dialog) {
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(style), TEXT_STYLE);
 	adw_combo_row_set_model(ADW_COMBO_ROW(style), G_LIST_MODEL(styles));
 	adw_combo_row_set_selected(ADW_COMBO_ROW(style), settings->style);
-	g_signal_connect(style, "notify::selected", G_CALLBACK(change_style), NULL);
+	g_signal_connect(style, "notify::selected", G_CALLBACK(change_style), &settings->style);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(look), style);
 	add_theme_row(look, TEXT_LIGHT_THEME, &settings->light_theme, DEFAULT_LIGHT_THEME);
 	add_theme_row(look, TEXT_DARK_THEME, &settings->dark_theme, DEFAULT_DARK_THEME);
@@ -127,9 +119,8 @@ static void fill_appearance(AdwPreferencesDialog *dialog) {
 }
 
 
-static void fill_notifications(AdwPreferencesDialog *dialog) {
-	Settings *settings = get_settings();
-	GtkWidget *page = add_page(dialog, TEXT_NOTIFICATIONS, "preferences-system-notifications-symbolic");
+static void fill_notifications(GtkWidget *stack, Settings *settings) {
+	GtkWidget *page = add_page(stack, TEXT_NOTIFICATIONS, "preferences-system-notifications-symbolic");
 	GtkWidget *group = add_group(page, TEXT_NOTIFY_GROUP);
 	const SwitchSetting NOTICES[] = {
 		{TEXT_NOTIFY_MENTIONS, NULL, &settings->notifies_mentions},
@@ -139,16 +130,14 @@ static void fill_notifications(AdwPreferencesDialog *dialog) {
 	add_switches(group, NOTICES, G_N_ELEMENTS(NOTICES));
 	GtkWidget *words = adw_entry_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(words), TEXT_HIGHLIGHT_WORDS);
-	adw_entry_row_set_show_apply_button(ADW_ENTRY_ROW(words), TRUE);
 	gtk_editable_set_text(GTK_EDITABLE(words), settings->highlight_words ? settings->highlight_words : "");
-	g_signal_connect(words, "apply", G_CALLBACK(change_words), NULL);
+	g_signal_connect(words, "changed", G_CALLBACK(change_words), &settings->highlight_words);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), words);
 }
 
 
-static void fill_privacy(AdwPreferencesDialog *dialog) {
-	Settings *settings = get_settings();
-	GtkWidget *page = add_page(dialog, TEXT_PRIVACY, "security-high-symbolic");
+static void fill_privacy(GtkWidget *stack, Settings *settings) {
+	GtkWidget *page = add_page(stack, TEXT_PRIVACY, "security-high-symbolic");
 	GtkWidget *group = add_group(page, TEXT_PRIVACY_GROUP);
 	const SwitchSetting PRIVACY[] = {
 		{TEXT_SEND_TYPING, NULL, &settings->sends_typing},
@@ -163,11 +152,37 @@ static void fill_privacy(AdwPreferencesDialog *dialog) {
 }
 
 
+static void save_settings_form(GtkButton *button, AdwDialog *dialog) {
+	use_settings(g_object_get_data(G_OBJECT(dialog), "draft"));
+	Window *window = get_main_window();
+	if (window)
+		refresh_window_later(window);
+	adw_dialog_close(dialog);
+}
+
+
+/* The pages change a copy of the settings, switched between from a bar along the bottom that fits a narrow window */
 void show_settings(GtkWidget *parent) {
-	AdwDialog *dialog = adw_preferences_dialog_new();
+	Settings *draft = copy_settings(get_settings());
+	AdwDialog *dialog = adw_dialog_new();
 	adw_dialog_set_title(dialog, TEXT_SETTINGS);
-	fill_appearance(ADW_PREFERENCES_DIALOG(dialog));
-	fill_notifications(ADW_PREFERENCES_DIALOG(dialog));
-	fill_privacy(ADW_PREFERENCES_DIALOG(dialog));
+	adw_dialog_set_content_width(dialog, SETTINGS_WIDTH);
+	adw_dialog_set_content_height(dialog, SETTINGS_HEIGHT);
+	g_object_set_data_full(G_OBJECT(dialog), "draft", draft, (GDestroyNotify)free_settings);
+	GtkWidget *stack = adw_view_stack_new();
+	fill_appearance(stack, draft);
+	fill_notifications(stack, draft);
+	fill_privacy(stack, draft);
+	GtkWidget *save = NULL;
+	GtkWidget *header = create_form_header(dialog, TEXT_SAVE, &save);
+	g_signal_connect(save, "clicked", G_CALLBACK(save_settings_form), dialog);
+	GtkWidget *switcher = adw_view_switcher_bar_new();
+	adw_view_switcher_bar_set_stack(ADW_VIEW_SWITCHER_BAR(switcher), ADW_VIEW_STACK(stack));
+	adw_view_switcher_bar_set_reveal(ADW_VIEW_SWITCHER_BAR(switcher), TRUE);
+	GtkWidget *toolbar = adw_toolbar_view_new();
+	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
+	adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar), switcher);
+	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), stack);
+	adw_dialog_set_child(dialog, toolbar);
 	adw_dialog_present(dialog, parent);
 }

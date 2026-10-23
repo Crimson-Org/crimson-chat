@@ -839,6 +839,20 @@ headerbar.title-bar {
 	background-color: color-mix(in srgb, var(--warning-bg-color) 85%, white);
 }
 
+/* The pronouns and status under the user's own name read as lines of the profile until clicked into */
+.pronouns-field {
+	min-height: 28px;
+	background: none;
+	color: alpha(currentColor, 0.7);
+}
+
+.status-field {
+	min-height: 36px;
+	padding: 0 16px;
+	border-radius: 18px;
+	background-color: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
+}
+
 /* The pen beside the user's own name only shows while the name is pointed at */
 .name-editor > .name-pen {
 	opacity: 0;

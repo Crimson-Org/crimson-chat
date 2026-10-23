@@ -87,3 +87,33 @@ void apply_style(void) {
 	adw_style_manager_set_color_scheme(adw_style_manager_get_default(), SCHEMES[settings.style]);
 	use_themes(settings.light_theme, settings.dark_theme, THEME_WINDOW | THEME_TITLE_BAR);
 }
+
+
+Settings *copy_settings(const Settings *source) {
+	Settings *copy = g_new(Settings, 1);
+	*copy = *source;
+	copy->light_theme = g_strdup(source->light_theme);
+	copy->dark_theme = g_strdup(source->dark_theme);
+	copy->highlight_words = g_strdup(source->highlight_words);
+	return copy;
+}
+
+
+void free_settings(Settings *copy) {
+	g_free(copy->light_theme);
+	g_free(copy->dark_theme);
+	g_free(copy->highlight_words);
+	g_free(copy);
+}
+
+
+void use_settings(const Settings *chosen) {
+	Settings *copy = copy_settings(chosen);
+	g_free(settings.light_theme);
+	g_free(settings.dark_theme);
+	g_free(settings.highlight_words);
+	settings = *copy;
+	g_free(copy);
+	save_settings();
+	apply_style();
+}

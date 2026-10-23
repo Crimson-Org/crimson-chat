@@ -83,12 +83,7 @@ static const char *read_row(GtkWidget *row) {
 }
 
 
-/* A form dialog with Cancel and a suggested button in its header, around a preferences page */
-static AdwDialog *create_form_dialog(const char *title, const char *action, GtkWidget *page, GtkWidget **save) {
-	AdwDialog *dialog = adw_dialog_new();
-	adw_dialog_set_title(dialog, title);
-	adw_dialog_set_content_width(dialog, DIALOG_WIDTH);
-	adw_dialog_set_content_height(dialog, DIALOG_HEIGHT);
+GtkWidget *create_form_header(AdwDialog *dialog, const char *action, GtkWidget **save) {
 	GtkWidget *header = adw_header_bar_new();
 	adw_header_bar_set_show_end_title_buttons(ADW_HEADER_BAR(header), FALSE);
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
@@ -98,6 +93,17 @@ static AdwDialog *create_form_dialog(const char *title, const char *action, GtkW
 	*save = gtk_button_new_with_label(action);
 	gtk_widget_add_css_class(*save, "suggested-action");
 	adw_header_bar_pack_end(ADW_HEADER_BAR(header), *save);
+	return header;
+}
+
+
+/* A form dialog with Cancel and a suggested button in its header, around a preferences page */
+static AdwDialog *create_form_dialog(const char *title, const char *action, GtkWidget *page, GtkWidget **save) {
+	AdwDialog *dialog = adw_dialog_new();
+	adw_dialog_set_title(dialog, title);
+	adw_dialog_set_content_width(dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(dialog, DIALOG_HEIGHT);
+	GtkWidget *header = create_form_header(dialog, action, save);
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), page);

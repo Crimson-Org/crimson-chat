@@ -14,6 +14,9 @@
 /* A person's profile opens at its full height, so it does not grow when the details arrive */
 #define PROFILE_HEIGHT 620
 #define PROFILE_AVATAR_SIZE 96
+/* How many letters the pronouns and status lines under the user's own name make room for */
+#define PRONOUNS_WIDTH 16
+#define STATUS_WIDTH 28
 #define SECONDS_PER_MINUTE 60
 #define SECONDS_PER_HOUR 3600
 #define SECONDS_PER_DAY 86400
@@ -663,6 +666,8 @@ static void fit_name_width(GtkEditable *name) {
 static GtkWidget *create_name_editor(GtkWidget **name, const char *text) {
 	*name = gtk_editable_label_new(text);
 	gtk_widget_add_css_class(*name, "title-1");
+	/* Width in average letters seldom matches the name, so the text sits in the middle of the room it gets */
+	gtk_editable_set_alignment(GTK_EDITABLE(*name), 0.5);
 	fit_name_width(GTK_EDITABLE(*name));
 	g_signal_connect(*name, "changed", G_CALLBACK(fit_name_width), NULL);
 	GtkWidget *pen = gtk_button_new_from_icon_name("document-edit-symbolic");
@@ -685,6 +690,20 @@ static GtkWidget *create_name_editor(GtkWidget **name, const char *text) {
 	gtk_box_append(GTK_BOX(editor), *name);
 	gtk_box_append(GTK_BOX(editor), pen);
 	return editor;
+}
+
+
+/* A line under the name that is typed into in place, showing what to write while it is empty */
+static GtkWidget *create_line_field(const char *value, const char *placeholder, const char *look, int width) {
+	GtkWidget *entry = gtk_entry_new();
+	gtk_entry_set_has_frame(GTK_ENTRY(entry), FALSE);
+	gtk_entry_set_alignment(GTK_ENTRY(entry), 0.5);
+	gtk_entry_set_placeholder_text(GTK_ENTRY(entry), placeholder);
+	gtk_editable_set_text(GTK_EDITABLE(entry), value ? value : "");
+	gtk_editable_set_width_chars(GTK_EDITABLE(entry), width);
+	gtk_widget_add_css_class(entry, look);
+	gtk_widget_set_halign(entry, GTK_ALIGN_CENTER);
+	return entry;
 }
 
 
@@ -772,6 +791,12 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	}
 	capitalize_nick_field(own->nick);
 	g_signal_connect(own->nick, "changed", G_CALLBACK(preview_name), own);
+	/* Pronouns and status sit with the name the way others see them, which keeps the whole page in view */
+	if (has_metadata) {
+		own->pronouns = create_line_field(own->old_pronouns, TEXT_ADD_PRONOUNS, "pronouns-field", PRONOUNS_WIDTH);
+		gtk_widget_set_tooltip_text(own->pronouns, TEXT_PRONOUNS);
+		gtk_box_append(GTK_BOX(box), own->pronouns);
+	}
 	/* The real name and the account logged into sit small under the name, as on anyone's profile */
 	if (own->old_realname && nick && g_ascii_strcasecmp(own->old_realname, nick) != 0) {
 		GtkWidget *realname_line = gtk_label_new(own->old_realname);
@@ -782,17 +807,24 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	GtkWidget *account_line = create_account_line();
 	show_account_line(account_line, state ? state->account : NULL);
 	gtk_box_append(GTK_BOX(box), account_line);
+	if (has_metadata) {
+		own->status = create_line_field(own->old_status, TEXT_SET_STATUS, "status-field", STATUS_WIDTH);
+		gtk_widget_set_tooltip_text(own->status, TEXT_STATUS);
+		gtk_box_append(GTK_BOX(box), own->status);
+	}
 	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname);
 	const struct {
 		GtkWidget **row;
 		const char *title, *value;
 		gboolean is_supported;
 	} OPTIONAL_FIELDS[] = {
-		{&own->status, TEXT_STATUS, own->old_status, has_metadata},
-		{&own->pronouns, TEXT_PRONOUNS, own->old_pronouns, has_metadata},
 		{&own->homepage, TEXT_HOMEPAGE, own->old_homepage, has_metadata},
 	};
 	g_autoptr(GPtrArray) missing = g_ptr_array_new();
+	if (!has_metadata) {
+		g_ptr_array_add(missing, TEXT_STATUS);
+		g_ptr_array_add(missing, TEXT_PRONOUNS);
+	}
 	for (guint index = 0; index < G_N_ELEMENTS(OPTIONAL_FIELDS); index++) {
 		if (OPTIONAL_FIELDS[index].is_supported)
 			*OPTIONAL_FIELDS[index].row = add_field(list, OPTIONAL_FIELDS[index].title, OPTIONAL_FIELDS[index].value);
@@ -840,14 +872,10 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	}
 	gtk_list_box_append(GTK_LIST_BOX(login), own->password);
 	gtk_box_append(GTK_BOX(box), login);
-	GtkWidget *save = gtk_button_new_with_label(TEXT_SAVE);
-	gtk_widget_add_css_class(save, "pill");
-	gtk_widget_add_css_class(save, "suggested-action");
-	gtk_widget_set_halign(save, GTK_ALIGN_CENTER);
-	g_signal_connect(save, "clicked", G_CALLBACK(save_own_profile), own);
-	gtk_box_append(GTK_BOX(box), save);
 	GtkWidget *toolbar = adw_toolbar_view_new();
-	GtkWidget *header = adw_header_bar_new();
+	GtkWidget *save = NULL;
+	GtkWidget *header = create_form_header(own->dialog, TEXT_SAVE, &save);
+	g_signal_connect(save, "clicked", G_CALLBACK(save_own_profile), own);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_PROFILE));
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);

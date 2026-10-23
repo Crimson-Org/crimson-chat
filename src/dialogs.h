@@ -2,6 +2,9 @@
 
 #include "window.h"
 
+/* The header every settings dialog shares: Cancel closes it untouched, and nothing changes until the suggested
+ * button at the other end is pressed */
+GtkWidget *create_form_header(AdwDialog *dialog, const char *action, GtkWidget **save);
 /* Edits or removes the login of a bouncer */
 void show_bouncer_dialog(Window *window, Session *editing);
 /* Edits a direct server, or a network the bouncer keeps */
