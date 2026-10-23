@@ -14,6 +14,7 @@
 #include "shown-messages.h"
 
 #define FADE_DURATION_MS 160
+#define PAGE_SLIDE_MS 260
 #define ACTIVITY_SECONDS 120
 #define SECONDS_PER_MINUTE 60
 #define HEADER_AVATAR_SIZE 38
@@ -82,6 +83,8 @@ typedef struct {
 struct Conversation {
 	Window *window;
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button;
+	/* A still image of the chat a narrow window is leaving, which slides away as the next chat slides in */
+	GtkWidget *still_page;
 	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
 	GtkWidget *jump_button, *jump_icons, *jump_count;
 	/* The kept rooms' chats, of which the open room's shows, and the rooms waiting to be built ahead of time */
@@ -1325,6 +1328,11 @@ Conversation *create_conversation(Window *window) {
 	conversation->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");
+	conversation->still_page = gtk_picture_new();
+	gtk_picture_set_can_shrink(GTK_PICTURE(conversation->still_page), TRUE);
+	gtk_picture_set_content_fit(GTK_PICTURE(conversation->still_page), GTK_CONTENT_FIT_FILL);
+	gtk_stack_add_child(GTK_STACK(conversation->stack), conversation->still_page);
+	gtk_stack_set_transition_duration(GTK_STACK(conversation->stack), PAGE_SLIDE_MS);
 	watch_day_change(relabel_days, conversation);
 	return conversation;
 }
@@ -1573,9 +1581,25 @@ static void show_room_view(Conversation *conversation, RoomView *view) {
 }
 
 
+/* Puts a still image of the shown page in its place, so the page can change underneath before sliding in */
+static void freeze_shown_page(Conversation *conversation) {
+	GtkStack *stack = GTK_STACK(conversation->stack);
+	g_autoptr(GdkPaintable) page = gtk_widget_paintable_new(gtk_stack_get_visible_child(stack));
+	g_autoptr(GdkPaintable) still = gdk_paintable_get_current_image(page);
+	gtk_picture_set_paintable(GTK_PICTURE(conversation->still_page), still);
+	gtk_stack_set_transition_type(stack, GTK_STACK_TRANSITION_TYPE_NONE);
+	gtk_stack_set_visible_child(stack, conversation->still_page);
+}
+
+
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
+	/* A narrow window already showing a chat has no page slide to move the next one in, so it slides here */
+	gboolean slides_page = conversation->is_narrow && conversation->room && room
+		&& gtk_widget_get_mapped(conversation->stack);
+	if (slides_page)
+		freeze_shown_page(conversation);
 	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
@@ -1589,6 +1613,8 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	adw_animation_reset(conversation->typing_animation);
 	conversation->typing_rise = 0;
 	conversation->shows_typing_faces = FALSE;
+	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), slides_page ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
+		: GTK_STACK_TRANSITION_TYPE_NONE);
 	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
 	follow_activity(conversation, previous);
 	conversation->view = NULL;
