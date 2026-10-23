@@ -89,8 +89,9 @@ headerbar.title-bar {
 	min-height: 26px;
 	padding: 0 3px;
 	border-radius: 9999px;
-	background-color: alpha(currentColor, 0.28);
-	color: #ffffff;
+	/* A dimmed window text colour with the window's own colour on it reads in light and dark themes alike */
+	background-color: color-mix(in srgb, var(--window-fg-color) 45%, var(--window-bg-color));
+	color: var(--window-bg-color);
 	font-weight: 700;
 	font-size: 16px;
 }

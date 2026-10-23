@@ -17,6 +17,10 @@
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
+/* How many of a room's latest messages the list holds when the room opens, and how many more each time the top is
+ * reached, so a room opens as fast with thousands of lines as with a hundred */
+#define SHOWN_MESSAGES_PAGE 100
+#define CONTEXT_BEFORE_TARGET 10
 #define MEMBERS_WIDTH 260
 #define MESSAGE_KEY "message"
 #define HANDLER_KEY "changed-handler"
@@ -44,7 +48,8 @@ struct Conversation {
 	GtkWidget *member_view, *empty_note, *members_title;
 	GtkStringList *members;
 	GtkNoSelection *messages;
-	/* The room's messages without the joins and leaves the setting hides, which are kept to show again */
+	/* The room's latest messages, and those without the joins and leaves the setting hides, which are kept */
+	GtkSliceListModel *recent_messages;
 	GtkFilterListModel *shown_messages;
 	gboolean shows_events;
 	Composer *composer;
@@ -129,9 +134,21 @@ static gboolean note_user_scroll(GtkEventControllerScroll *controller, double x,
 }
 
 
+/* Older messages already in memory come back a page at a time, and only past the oldest is the server asked */
+static void reveal_older_messages(Conversation *conversation) {
+	guint offset = gtk_slice_list_model_get_offset(conversation->recent_messages);
+	if (!offset) {
+		load_older_history(conversation->room);
+		return;
+	}
+	gtk_slice_list_model_set_offset(conversation->recent_messages, offset > SHOWN_MESSAGES_PAGE
+		? offset - SHOWN_MESSAGES_PAGE : 0);
+}
+
+
 static void reach_edge(GtkScrolledWindow *scroller, GtkPositionType position, Conversation *conversation) {
 	if (position == GTK_POS_TOP && conversation->room)
-		load_older_history(conversation->room);
+		reveal_older_messages(conversation);
 	else if (position == GTK_POS_BOTTOM && conversation->has_user_scrolled)
 		pin_to_bottom(conversation);
 }
@@ -269,6 +286,12 @@ static void show_message(const char *message_id, gpointer data) {
 	Conversation *conversation = data;
 	CrimsonMessage *target = conversation->room ? find_room_message(conversation->room, message_id) : NULL;
 	guint position = 0;
+	/* A message older than the ones held comes into the list first, with a few before it for context */
+	guint index = 0;
+	if (target && g_list_store_find(conversation->room->messages, target, &index)
+		&& index < gtk_slice_list_model_get_offset(conversation->recent_messages))
+		gtk_slice_list_model_set_offset(conversation->recent_messages, index > CONTEXT_BEFORE_TARGET
+			? index - CONTEXT_BEFORE_TARGET : 0);
 	if (target && find_shown_position(conversation, target, &position)) {
 		conversation->is_pinned = FALSE;
 		conversation->has_user_scrolled = TRUE;
@@ -488,7 +511,10 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	g_signal_connect(factory, "unbind", G_CALLBACK(unbind_message), conversation);
 	conversation->shows_events = get_settings()->shows_events;
 	GtkCustomFilter *filter = gtk_custom_filter_new(is_message_shown, conversation, NULL);
-	conversation->shown_messages = gtk_filter_list_model_new(NULL, GTK_FILTER(filter));
+	/* The slice reaches to the end of the room as it grows, sized so its offset and size can never overflow */
+	conversation->recent_messages = gtk_slice_list_model_new(NULL, 0, G_MAXINT);
+	conversation->shown_messages = gtk_filter_list_model_new(G_LIST_MODEL(g_object_ref(conversation->recent_messages)),
+		GTK_FILTER(filter));
 	conversation->messages = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(conversation->shown_messages)));
 	conversation->list_view = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(conversation->messages)), factory);
 	gtk_widget_add_css_class(conversation->list_view, "messages");
@@ -1193,7 +1219,7 @@ static void follow_event_setting(Conversation *conversation) {
 		return;
 	conversation->shows_events = shows_events;
 	gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
-	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->room->messages));
+	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->recent_messages));
 	if (conversation->is_pinned)
 		scroll_to_bottom(conversation);
 }
@@ -1282,7 +1308,11 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	conversation->was_unread = room && room->unread_count > 0;
 	conversation->has_read_line = conversation->was_unread;
 	conversation->read_line = conversation->was_unread ? room->read_time : 0;
-	gtk_filter_list_model_set_model(conversation->shown_messages, room ? G_LIST_MODEL(room->messages) : NULL);
+	guint count = room ? g_list_model_get_n_items(G_LIST_MODEL(room->messages)) : 0;
+	gtk_slice_list_model_set_model(conversation->recent_messages, NULL);
+	gtk_slice_list_model_set_offset(conversation->recent_messages, count > SHOWN_MESSAGES_PAGE
+		? count - SHOWN_MESSAGES_PAGE : 0);
+	gtk_slice_list_model_set_model(conversation->recent_messages, room ? G_LIST_MODEL(room->messages) : NULL);
 	fade_to(conversation, room ? "room" : "empty");
 	follow_activity(conversation, previous);
 	if (!room)
