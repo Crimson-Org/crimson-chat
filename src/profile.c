@@ -656,9 +656,12 @@ static void start_editing_name(GtkEditableLabel *name) {
 }
 
 
-/* The name's text box asks for room for many letters by default, which would leave a gap beside a short name */
+/* The hidden text box would ask for room in average letters, which leaves a gap beside the name, so the shown name
+ * sets the width and the text box only asks for room while the user types */
 static void fit_name_width(GtkEditable *name) {
-	gtk_editable_set_width_chars(name, MAX(1, (int)g_utf8_strlen(gtk_editable_get_text(name), -1)));
+	gboolean is_editing = gtk_editable_label_get_editing(GTK_EDITABLE_LABEL(name));
+	int letters = (int)g_utf8_strlen(gtk_editable_get_text(name), -1);
+	gtk_editable_set_width_chars(name, is_editing ? MAX(1, letters) : 1);
 }
 
 
@@ -670,6 +673,7 @@ static GtkWidget *create_name_editor(GtkWidget **name, const char *text) {
 	gtk_editable_set_alignment(GTK_EDITABLE(*name), 0.5);
 	fit_name_width(GTK_EDITABLE(*name));
 	g_signal_connect(*name, "changed", G_CALLBACK(fit_name_width), NULL);
+	g_signal_connect(*name, "notify::editing", G_CALLBACK(fit_name_width), NULL);
 	GtkWidget *pen = gtk_button_new_from_icon_name("document-edit-symbolic");
 	gtk_widget_add_css_class(pen, "flat");
 	gtk_widget_add_css_class(pen, "circular");
@@ -704,6 +708,86 @@ static GtkWidget *create_line_field(const char *value, const char *placeholder, 
 	gtk_widget_add_css_class(entry, look);
 	gtk_widget_set_halign(entry, GTK_ALIGN_CENTER);
 	return entry;
+}
+
+
+/* The status bubble shows what the field holds, and its clear button only shows while there is something to clear */
+static void show_status(GtkEditable *field) {
+	const char *text = gtk_editable_get_text(field);
+	gboolean is_set = *text != '\0';
+	GtkWidget *label = g_object_get_data(G_OBJECT(field), "status-label");
+	gtk_label_set_text(GTK_LABEL(label), is_set ? text : TEXT_SET_STATUS);
+	if (is_set)
+		gtk_widget_remove_css_class(label, "dim-label");
+	else
+		gtk_widget_add_css_class(label, "dim-label");
+	gtk_widget_set_visible(g_object_get_data(G_OBJECT(field), "status-clear"), is_set);
+}
+
+
+static void clear_status(GtkEditable *field) {
+	gtk_editable_set_text(field, "");
+}
+
+
+static void pick_status(GtkButton *button, GtkEditable *field) {
+	gtk_editable_set_text(field, gtk_button_get_label(button));
+	gtk_popover_popdown(GTK_POPOVER(g_object_get_data(G_OBJECT(field), "status-menu")));
+}
+
+
+static void close_status_menu(GtkEditable *field) {
+	gtk_popover_popdown(GTK_POPOVER(g_object_get_data(G_OBJECT(field), "status-menu")));
+}
+
+
+/* A bubble under the name that opens a menu to write a status with emoji or pick a ready one, and clears with one
+ * click; the field it returns holds the status for saving */
+static GtkWidget *create_status_field(GtkWidget **field, const char *value) {
+	static const char *const PRESETS[] = {TEXT_STATUS_MEETING, TEXT_STATUS_WORKING, TEXT_STATUS_LUNCH, TEXT_STATUS_GAMING,
+		TEXT_STATUS_SICK, TEXT_STATUS_HOLIDAY};
+	*field = gtk_entry_new();
+	gtk_entry_set_placeholder_text(GTK_ENTRY(*field), TEXT_STATUS_PROMPT);
+	g_object_set(*field, "show-emoji-icon", TRUE, NULL);
+	gtk_editable_set_text(GTK_EDITABLE(*field), value ? value : "");
+	gtk_editable_set_width_chars(GTK_EDITABLE(*field), STATUS_WIDTH);
+	g_signal_connect(*field, "activate", G_CALLBACK(close_status_menu), NULL);
+	GtkWidget *menu = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+	gtk_widget_add_css_class(menu, "status-menu");
+	gtk_box_append(GTK_BOX(menu), *field);
+	for (guint index = 0; index < G_N_ELEMENTS(PRESETS); index++) {
+		GtkWidget *preset = gtk_button_new_with_label(PRESETS[index]);
+		gtk_widget_add_css_class(preset, "flat");
+		gtk_label_set_xalign(GTK_LABEL(gtk_button_get_child(GTK_BUTTON(preset))), 0);
+		g_signal_connect(preset, "clicked", G_CALLBACK(pick_status), *field);
+		gtk_box_append(GTK_BOX(menu), preset);
+	}
+	GtkWidget *popover = gtk_popover_new();
+	gtk_popover_set_child(GTK_POPOVER(popover), menu);
+	GtkWidget *label = gtk_label_new(NULL);
+	gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+	gtk_label_set_max_width_chars(GTK_LABEL(label), STATUS_WIDTH);
+	GtkWidget *opener = gtk_menu_button_new();
+	gtk_menu_button_set_child(GTK_MENU_BUTTON(opener), label);
+	gtk_menu_button_set_popover(GTK_MENU_BUTTON(opener), popover);
+	gtk_widget_set_tooltip_text(opener, TEXT_STATUS);
+	GtkWidget *clear = gtk_button_new_from_icon_name("window-close-symbolic");
+	gtk_widget_add_css_class(clear, "flat");
+	gtk_widget_add_css_class(clear, "circular");
+	gtk_widget_set_valign(clear, GTK_ALIGN_CENTER);
+	gtk_widget_set_tooltip_text(clear, TEXT_CLEAR_STATUS);
+	g_signal_connect_swapped(clear, "clicked", G_CALLBACK(clear_status), *field);
+	GtkWidget *bubble = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(bubble, "status-bubble");
+	gtk_widget_set_halign(bubble, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(bubble), opener);
+	gtk_box_append(GTK_BOX(bubble), clear);
+	g_object_set_data(G_OBJECT(*field), "status-label", label);
+	g_object_set_data(G_OBJECT(*field), "status-clear", clear);
+	g_object_set_data(G_OBJECT(*field), "status-menu", popover);
+	g_signal_connect(*field, "changed", G_CALLBACK(show_status), NULL);
+	show_status(GTK_EDITABLE(*field));
+	return bubble;
 }
 
 
@@ -807,11 +891,8 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	GtkWidget *account_line = create_account_line();
 	show_account_line(account_line, state ? state->account : NULL);
 	gtk_box_append(GTK_BOX(box), account_line);
-	if (has_metadata) {
-		own->status = create_line_field(own->old_status, TEXT_SET_STATUS, "status-field", STATUS_WIDTH);
-		gtk_widget_set_tooltip_text(own->status, TEXT_STATUS);
-		gtk_box_append(GTK_BOX(box), own->status);
-	}
+	if (has_metadata)
+		gtk_box_append(GTK_BOX(box), create_status_field(&own->status, own->old_status));
 	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname);
 	const struct {
 		GtkWidget **row;

@@ -839,18 +839,28 @@ headerbar.title-bar {
 	background-color: color-mix(in srgb, var(--warning-bg-color) 85%, white);
 }
 
-/* The pronouns and status under the user's own name read as lines of the profile until clicked into */
+/* The pronouns under the user's own name read as a line of the profile until clicked into, and the status as a
+ * bubble that opens its menu */
 .pronouns-field {
 	min-height: 28px;
 	background: none;
 	color: alpha(currentColor, 0.7);
 }
 
-.status-field {
-	min-height: 36px;
-	padding: 0 16px;
-	border-radius: 18px;
+.status-bubble {
+	padding: 0 4px;
+	border-radius: 9999px;
 	background-color: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
+}
+
+.status-bubble > menubutton > button {
+	min-height: 36px;
+	padding: 0 12px;
+	background: none;
+}
+
+.status-menu {
+	padding: 4px;
 }
 
 /* The pen beside the user's own name only shows while the name is pointed at */
