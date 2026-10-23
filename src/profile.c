@@ -7,6 +7,7 @@
 #include "room-look.h"
 #include "wizards.h"
 #include "pictures.h"
+#include "uploads.h"
 
 #define PROFILE_WIDTH 400
 /* A person's profile opens at its full height, so it does not grow when the details arrive */
@@ -246,6 +247,99 @@ static const char *read_field(GtkWidget *row) {
 }
 
 
+/* Operators, admins and owners of a room may change what the room shows everyone */
+static gboolean is_room_operator(IrcState *state, IrcChannel *channel) {
+	if (!state || !channel || !state->nick)
+		return FALSE;
+	g_autofree char *folded = fold_state_name(state, state->nick);
+	const char *symbols = g_hash_table_lookup(channel->members, folded);
+	return symbols && (strchr(symbols, '@') || strchr(symbols, '&') || strchr(symbols, '~'));
+}
+
+
+/* Where an uploaded picture is going, kept while the file dialog is open and the picture travels */
+typedef struct {
+	Window *window;
+	CrimsonNetwork *network;
+	char *target;
+	GtkWidget *row;
+} PictureUpload;
+
+
+static void free_picture_upload(PictureUpload *upload) {
+	g_object_unref(upload->network);
+	g_free(upload->target);
+	g_clear_object(&upload->row);
+	g_free(upload);
+}
+
+
+static void finish_picture_upload(const char *url, const char *problem, gpointer data) {
+	PictureUpload *upload = data;
+	gtk_widget_set_sensitive(upload->row, TRUE);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(upload->row), problem ? problem : TEXT_UPLOAD_PICTURE_ABOUT);
+	if (url && g_str_equal(upload->target, "*")) {
+		/* The address is kept like a typed one, so the app sets it again on each connection */
+		g_autofree char *display_name = NULL, *picture = NULL;
+		load_network_profile(upload->network->key, &display_name, &picture);
+		save_network_profile(upload->network->key, display_name ? display_name : "", url);
+	}
+	show_toast(upload->window, url ? TEXT_PICTURE_UPLOADED : problem);
+	free_picture_upload(upload);
+}
+
+
+static void finish_choosing_upload(GObject *source, GAsyncResult *result, gpointer data) {
+	PictureUpload *upload = data;
+	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+	if (!file) {
+		free_picture_upload(upload);
+		return;
+	}
+	gtk_widget_set_sensitive(upload->row, FALSE);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(upload->row), TEXT_UPLOADING_PICTURE);
+	upload_avatar(upload->network, upload->target, file, finish_picture_upload, upload);
+}
+
+
+static void choose_upload(GtkWidget *row, PictureUpload *template) {
+	PictureUpload *upload = g_new0(PictureUpload, 1);
+	*upload = (PictureUpload){template->window, g_object_ref(template->network), g_strdup(template->target),
+		g_object_ref(row)};
+	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_PICTURE_TITLE);
+	g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
+	gtk_file_filter_set_name(filter, TEXT_PICTURES);
+	gtk_file_filter_add_mime_type(filter, "image/png");
+	gtk_file_filter_add_mime_type(filter, "image/jpeg");
+	gtk_file_filter_add_mime_type(filter, "image/webp");
+	gtk_file_filter_add_mime_type(filter, "image/gif");
+	g_autoptr(GListStore) filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+	g_list_store_append(filters, filter);
+	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+	gtk_file_dialog_open(dialog, GTK_WINDOW(upload->window->window), NULL, finish_choosing_upload, upload);
+}
+
+
+/* A row that sends a picture to the bouncer, for the user with "*" or for a room */
+GtkWidget *create_upload_row(Window *window, CrimsonNetwork *network, const char *target) {
+	GtkWidget *row = adw_action_row_new();
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), TEXT_PICTURE);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), TEXT_UPLOAD_PICTURE_ABOUT);
+	GtkWidget *button = gtk_button_new_with_label(TEXT_CHOOSE);
+	gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+	gtk_widget_add_css_class(button, "pill");
+	adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
+	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
+	PictureUpload *template = g_new0(PictureUpload, 1);
+	*template = (PictureUpload){window, g_object_ref(network), g_strdup(target), NULL};
+	g_object_set_data_full(G_OBJECT(row), "upload", template, (GDestroyNotify)free_picture_upload);
+	g_signal_connect_swapped(button, "clicked", G_CALLBACK(gtk_widget_activate), row);
+	g_signal_connect(row, "activated", G_CALLBACK(choose_upload), template);
+	return row;
+}
+
+
 static gboolean has_changed(GtkWidget *row, const char *old) {
 	return row && g_strcmp0(read_field(row), old ? old : "") != 0;
 }
@@ -398,9 +492,15 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	g_signal_connect(own->nick, "changed", G_CALLBACK(preview_name), own);
 	own->display_name = add_field(list, TEXT_DISPLAY_NAME, own->old_display_name, has_metadata);
 	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname, can_network(network, "setname"));
-	own->picture = add_field(list, TEXT_PICTURE_ADDRESS, own->old_picture, has_metadata);
-	if (own->picture)
-		g_signal_connect(own->picture, "changed", G_CALLBACK(preview_picture), own);
+	/* A bouncer that takes uploads replaces the address with a button that sends a picture from the computer */
+	g_autofree char *upload_url = has_metadata ? find_avatar_upload_url(network) : NULL;
+	if (upload_url) {
+		gtk_list_box_append(GTK_LIST_BOX(list), create_upload_row(window, network, "*"));
+	} else {
+		own->picture = add_field(list, TEXT_PICTURE_ADDRESS, own->old_picture, has_metadata);
+		if (own->picture)
+			g_signal_connect(own->picture, "changed", G_CALLBACK(preview_picture), own);
+	}
 	gtk_box_append(GTK_BOX(box), list);
 	/* The login to the server's account services, which a bouncer keeps without sending the password back */
 	GtkWidget *login_title = gtk_label_new(TEXT_SASL_LOGIN);
@@ -529,6 +629,11 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		add_row(&rows_view, TEXT_TOPIC_SET_BY, by);
 	}
 	add_row(&rows_view, TEXT_PROFILE_SERVER, room->network->name);
+	/* An operator of the room can send it a picture everyone sees, where the bouncer takes uploads */
+	g_autofree char *upload_url = can_network(room->network, "draft/metadata-2")
+		? find_avatar_upload_url(room->network) : NULL;
+	if (upload_url && is_room_operator(state, channel))
+		gtk_list_box_append(GTK_LIST_BOX(rows), create_upload_row(window, room->network, room->name));
 	gtk_box_append(GTK_BOX(box), rows);
 	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
 	gtk_widget_add_css_class(leave, "pill");

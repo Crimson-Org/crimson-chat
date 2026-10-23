@@ -11,6 +11,7 @@
 #define DEFAULT_HTTPS_PORT "443"
 #define SHORTEST_PASSWORD 8
 #define COOKIE_NAME "crimson_session"
+#define UPLOAD_LINE_START "POST /avatar"
 #define DOWNLOAD_ADDRESS "https://github.com/Crimson-Org/crimson-chat/releases/latest"
 #define APPLICATION_LINK "crimson-chat://bouncer"
 
@@ -50,6 +51,8 @@ typedef struct {
 	guint timeout_source;
 	char *method, *path, *host;
 	GHashTable *headers, *query, *form;
+	/* The raw body, which an uploaded picture arrives as */
+	GBytes *body;
 } WebRequest;
 
 /* A signed in browser and when its sign in runs out */
@@ -63,6 +66,10 @@ typedef struct {
 	GString *body;
 	char *location, *cookie;
 	gboolean is_delayed;
+	/* A picture answers with its own type and bytes in place of a page, and may be kept by browsers */
+	const char *content_type;
+	GBytes *bytes;
+	gboolean is_lasting;
 } WebAnswer;
 
 static void read_more(WebRequest *request);
@@ -78,6 +85,7 @@ static void free_request(WebRequest *request) {
 	g_clear_pointer(&request->headers, g_hash_table_unref);
 	g_clear_pointer(&request->query, g_hash_table_unref);
 	g_clear_pointer(&request->form, g_hash_table_unref);
+	g_clear_pointer(&request->body, g_bytes_unref);
 	g_free(request);
 }
 
@@ -98,9 +106,14 @@ static void finish_writing(GObject *source, GAsyncResult *result, gpointer data)
 static const char *describe_status(int status) {
 	switch (status) {
 	case 200: return "OK";
+	case 201: return "Created";
 	case 303: return "See Other";
 	case 400: return "Bad Request";
+	case 401: return "Unauthorized";
 	case 404: return "Not Found";
+	case 409: return "Conflict";
+	case 413: return "Content Too Large";
+	case 415: return "Unsupported Media Type";
 	default: return "Error";
 	}
 }
@@ -109,15 +122,20 @@ static const char *describe_status(int status) {
 static void send_answer(WebRequest *request, WebAnswer *answer) {
 	GString *response = g_string_new(NULL);
 	g_string_append_printf(response, "HTTP/1.1 %d %s\r\n", answer->status, describe_status(answer->status));
-	g_string_append(response, "Content-Type: text/html; charset=utf-8\r\nConnection: close\r\nCache-Control: no-store\r\n"
-		"X-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\n"
+	g_string_append_printf(response, "Content-Type: %s\r\nConnection: close\r\nCache-Control: %s\r\n",
+		answer->content_type ? answer->content_type : "text/html; charset=utf-8",
+		answer->is_lasting ? "public, max-age=31536000, immutable" : "no-store");
+	g_string_append(response, "X-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nX-Content-Type-Options: nosniff\r\n"
 		"Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'\r\n");
 	if (answer->location)
 		g_string_append_printf(response, "Location: %s\r\n", answer->location);
 	if (answer->cookie)
 		g_string_append_printf(response, "Set-Cookie: %s\r\n", answer->cookie);
-	g_string_append_printf(response, "Content-Length: %zu\r\n\r\n", answer->body ? answer->body->len : 0);
-	if (answer->body && !g_str_equal(request->method, "HEAD"))
+	gsize body_length = answer->bytes ? g_bytes_get_size(answer->bytes) : answer->body ? answer->body->len : 0;
+	g_string_append_printf(response, "Content-Length: %zu\r\n\r\n", body_length);
+	if (answer->bytes && !g_str_equal(request->method, "HEAD"))
+		g_string_append_len(response, g_bytes_get_data(answer->bytes, NULL), (gssize)body_length);
+	else if (answer->body && !g_str_equal(request->method, "HEAD"))
 		g_string_append_len(response, answer->body->str, (gssize)answer->body->len);
 	gsize length = response->len;
 	GBytes *bytes = g_string_free_to_bytes(response);
@@ -132,6 +150,7 @@ static void clear_answer(WebAnswer *answer) {
 		g_string_free(answer->body, TRUE);
 	g_free(answer->location);
 	g_free(answer->cookie);
+	g_clear_pointer(&answer->bytes, g_bytes_unref);
 }
 
 
@@ -370,11 +389,97 @@ static void sign_out(WebAnswer *answer, WebRequest *request) {
 }
 
 
+static void answer_plainly(WebAnswer *answer, int status, const char *text) {
+	answer->status = status;
+	answer->content_type = "text/plain; charset=utf-8";
+	answer->body = g_string_new(text);
+}
+
+
+/* An app logs in with the user's bouncer name and password, as it does over IRC */
+static BouncerUser *read_basic_login(WebRequest *request) {
+	const char *header = g_hash_table_lookup(request->headers, "authorization");
+	if (!header || g_ascii_strncasecmp(header, "Basic ", 6) != 0)
+		return NULL;
+	gsize length = 0;
+	g_autofree guchar *decoded = g_base64_decode(header + 6, &length);
+	g_autofree char *text = g_strndup((const char *)decoded, length);
+	char *colon = strchr(text, ':');
+	if (!colon)
+		return NULL;
+	*colon = '\0';
+	return log_in_user(request->bouncer, text, colon + 1);
+}
+
+
+/* The address pictures are served from: the configured public one, or the address the app reached the bouncer by */
+static char *describe_base_url(WebRequest *request) {
+	if (request->bouncer->avatars.public_url)
+		return g_strdup(request->bouncer->avatars.public_url);
+	return g_strdup_printf("https://%s", request->host ? request->host : "localhost");
+}
+
+
+/* A picture for the user, or for a room they run, on one of their networks */
+static void upload_avatar(WebAnswer *answer, WebRequest *request) {
+	if (!request->bouncer->avatars.is_enabled) {
+		answer_plainly(answer, 404, "This bouncer does not take pictures");
+		return;
+	}
+	BouncerUser *user = read_basic_login(request);
+	if (!user) {
+		answer->is_delayed = TRUE;
+		answer_plainly(answer, 401, "The bouncer login was not accepted");
+		return;
+	}
+	const char *network = request->query ? g_hash_table_lookup(request->query, "network") : NULL;
+	const char *target = request->query ? g_hash_table_lookup(request->query, "target") : NULL;
+	Upstream *upstream = find_upstream(user, network);
+	if (!upstream || get_irc_client_status(upstream->client) != IRC_CLIENT_REGISTERED) {
+		answer_plainly(answer, 409, "That server is not connected right now");
+		return;
+	}
+	if (!has_irc_cap(get_irc_client_state(upstream->client), "draft/metadata-2")) {
+		answer_plainly(answer, 409, "That server does not support pictures");
+		return;
+	}
+	g_autoptr(GError) error = NULL;
+	g_autofree char *base = describe_base_url(request);
+	g_autofree char *url = store_avatar(request->bouncer, user, upstream, target && *target ? target : "*",
+		request->body, g_hash_table_lookup(request->headers, "content-type"), base, &error);
+	if (!url) {
+		gboolean is_large = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE);
+		answer_plainly(answer, is_large ? 413 : 415, error->message);
+		return;
+	}
+	answer_plainly(answer, 201, url);
+	answer->location = g_strdup(url);
+}
+
+
+static void serve_avatar(WebAnswer *answer, WebRequest *request, const char *name) {
+	const char *content_type = NULL;
+	GBytes *bytes = load_avatar(request->bouncer, name, &content_type);
+	if (!bytes) {
+		answer_plainly(answer, 404, "No such picture");
+		return;
+	}
+	answer->status = 200;
+	answer->content_type = content_type;
+	answer->bytes = bytes;
+	answer->is_lasting = TRUE;
+}
+
+
 static void route_request(WebAnswer *answer, WebRequest *request) {
 	BouncerUser *user = find_signed_in_user(request);
 	gboolean is_post = g_str_equal(request->method, "POST");
 	const char *path = request->path;
-	if (g_str_equal(path, "/invite") && !is_post) {
+	if (g_str_equal(path, "/avatar") && is_post) {
+		upload_avatar(answer, request);
+	} else if (g_str_has_prefix(path, "/avatars/") && !is_post) {
+		serve_avatar(answer, request, path + strlen("/avatars/"));
+	} else if (g_str_equal(path, "/invite") && !is_post) {
 		const char *token = request->query ? g_hash_table_lookup(request->query, "token") : NULL;
 		show_invite(answer, request, token ? token : "", NULL);
 	} else if (g_str_equal(path, "/invite") && is_post) {
@@ -448,7 +553,10 @@ static gboolean parse_request(WebRequest *request, gsize header_length) {
 	request->host = g_strdup(g_hash_table_lookup(request->headers, "host"));
 	const char *body = (const char *)request->data->data + header_length + 4;
 	gsize body_length = request->data->len - header_length - 4;
-	if (body_length)
+	request->body = g_bytes_new(body, body_length);
+	const char *type = g_hash_table_lookup(request->headers, "content-type");
+	gboolean is_form = !type || g_str_has_prefix(type, "application/x-www-form-urlencoded");
+	if (body_length && is_form)
 		request->form = g_uri_parse_params(body, (gssize)body_length, "&", G_URI_PARAMS_WWW_FORM, NULL);
 	return TRUE;
 }
@@ -492,11 +600,20 @@ static gboolean has_whole_request(WebRequest *request, gsize *header_length) {
 }
 
 
+/* Uploads of pictures may be larger than pages and forms, up to what the settings allow */
+static gsize find_largest_request(WebRequest *request) {
+	gboolean is_upload = request->data->len >= strlen(UPLOAD_LINE_START) && memcmp(request->data->data,
+		UPLOAD_LINE_START, strlen(UPLOAD_LINE_START)) == 0;
+	return is_upload && request->bouncer->avatars.is_enabled ? request->bouncer->avatars.largest_bytes
+		+ LARGEST_REQUEST_BYTES : LARGEST_REQUEST_BYTES;
+}
+
+
 static void check_request(WebRequest *request) {
 	gsize header_length = 0;
 	if (has_whole_request(request, &header_length))
 		answer_request(request, header_length);
-	else if (request->data->len > LARGEST_REQUEST_BYTES)
+	else if (request->data->len > find_largest_request(request))
 		g_io_stream_close_async(request->connection, G_PRIORITY_DEFAULT, NULL, finish_closing, request);
 	else
 		read_more(request);

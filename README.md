@@ -77,4 +77,6 @@ Clone it with `git clone --recurse-submodules` so the shared Crimson Core code c
 `sh .crimson-build/install.sh` installs both programs and `sh .crimson-build/uninstall.sh` removes them.\
 `sh .crimson-build/run.sh` builds and starts Crimson Chat, and `sh .crimson-build/archive.sh` writes a tar.gz to `dist/`.\
 `sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, SQLite and GnuTLS but no graphical libraries.\
-`crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.
+`crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.\
+People can upload pictures for themselves and for rooms they run, which the bouncer scales, keeps and sets as their avatar on servers with IRCv3 metadata.\
+Its settings file holds `avatars`, `avatar-format`, `avatar-quality`, `avatar-size`, `avatar-largest-mb` and `public-url`, the address pictures are served from, which needs a certificate other people's apps trust.

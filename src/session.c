@@ -232,9 +232,9 @@ static void watch_private_rooms(CrimsonNetwork *network) {
 static void restore_own_profile(CrimsonNetwork *network) {
 	g_autofree char *display_name = NULL, *picture = NULL;
 	load_network_profile(network->key, &display_name, &picture);
-	if (display_name)
+	if (display_name && *display_name)
 		send_irc_client_command(network->client, "METADATA", "*", "SET", "display-name", display_name, NULL);
-	if (picture)
+	if (picture && *picture)
 		send_irc_client_command(network->client, "METADATA", "*", "SET", "avatar", picture, NULL);
 }
 

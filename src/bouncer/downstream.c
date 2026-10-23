@@ -213,6 +213,12 @@ static GPtrArray *list_support_tokens(Downstream *downstream) {
 			g_ptr_array_add(tokens, format_support_token(name, value));
 	}
 	g_ptr_array_add(tokens, g_strdup_printf("BOUNCER_NETID=%" G_GINT64_FORMAT, downstream->upstream->record.id));
+	/* Where the server keeps pictures, the bouncer takes uploads for them: at its public address, or else at its
+	 * website's port on whatever address the app reached it by */
+	AvatarSettings *avatars = &downstream->bouncer->avatars;
+	if (avatars->is_enabled && has_irc_cap(get_irc_client_state(downstream->upstream->client), "draft/metadata-2"))
+		g_ptr_array_add(tokens, avatars->public_url ? g_strdup_printf("crimson-chat/AVATARS=%s/avatar",
+			avatars->public_url) : g_strdup_printf("crimson-chat/AVATARS=%s", downstream->bouncer->web_port));
 	g_ptr_array_add(tokens, g_strdup_printf("CHATHISTORY=%d", HISTORY_PAGE_LIMIT));
 	g_ptr_array_add(tokens, g_strdup("MSGREFTYPES=timestamp,msgid"));
 	return tokens;

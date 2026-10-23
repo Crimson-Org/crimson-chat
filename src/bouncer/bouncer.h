@@ -17,8 +17,19 @@ typedef struct Upstream Upstream;
 typedef struct Downstream Downstream;
 
 /* The running bouncer, with everyone who may log in and every client connected */
+/* How the bouncer takes pictures people upload for themselves or their rooms: whether it does, the address the
+ * pictures are served from when set, their format, quality from 0 to 100, size in pixels, the largest upload and
+ * where they are kept */
+typedef struct {
+	gboolean is_enabled;
+	char *public_url, *format, *folder;
+	int quality, size;
+	gsize largest_bytes;
+} AvatarSettings;
+
 struct Bouncer {
 	Database *database;
+	AvatarSettings avatars;
 	GTlsCertificate *certificate;
 	GSocketService *irc_service, *web_service;
 	char *irc_port, *web_port;
@@ -107,6 +118,14 @@ void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *addr
 
 /* Website */
 void serve_web(Bouncer *bouncer, GIOStream *connection);
+
+/* Avatars */
+/* Shapes an uploaded picture, keeps it, sets it as the avatar of the user or room on the network, and returns its
+ * address under the base address */
+char *store_avatar(Bouncer *bouncer, BouncerUser *user, Upstream *upstream, const char *target, GBytes *data,
+	const char *content_type, const char *base_url, GError **error);
+/* A kept picture by its name, or NULL */
+GBytes *load_avatar(Bouncer *bouncer, const char *name, const char **content_type);
 /* Creates an invite and returns its token */
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses);
 void close_downstream(Downstream *downstream);
