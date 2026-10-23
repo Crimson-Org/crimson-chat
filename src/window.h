@@ -121,6 +121,8 @@ CrimsonRoom *step_listed_room(RoomList *list, int step);
 Conversation *create_conversation(Window *window);
 GtkWidget *get_conversation_widget(Conversation *conversation);
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room);
+/* Builds the chats of the server's rooms with the latest activity in quiet moments, so they show at once */
+void build_rooms_ahead(Conversation *conversation, CrimsonNetwork *network);
 CrimsonRoom *get_conversation_room(Conversation *conversation);
 void refresh_conversation(Conversation *conversation);
 /* The open room's card, whose members button opens the members beside it, or the profile of the person a private

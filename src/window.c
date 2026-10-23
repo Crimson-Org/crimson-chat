@@ -590,6 +590,8 @@ static gboolean refresh_now(gpointer data) {
 	update_view(window);
 	resort_room_list(window->room_list);
 	refresh_conversation(window->conversation);
+	if (window->network)
+		build_rooms_ahead(window->conversation, window->network);
 	show_room_list_banner(window->room_list, pick_account_banner(window), window->network ? window->network->key
 		: NULL);
 	return G_SOURCE_REMOVE;
@@ -665,22 +667,6 @@ gboolean is_room_in_view(Window *window, CrimsonRoom *room) {
 }
 
 
-/* The narrow window's chat comes in under a still of the list, which slides away once the chat is built, so the
- * split view's own slide is skipped, and the navigation view it keeps while narrow is where that is set */
-static void show_content_at_once(Window *window) {
-	AdwNavigationView *pages = NULL;
-	for (GtkWidget *child = gtk_widget_get_first_child(GTK_WIDGET(window->split)); child && !pages;
-		child = gtk_widget_get_next_sibling(child))
-		pages = ADW_IS_NAVIGATION_VIEW(child) ? ADW_NAVIGATION_VIEW(child) : NULL;
-	gboolean animates = pages && adw_navigation_view_get_animate_transitions(pages);
-	if (pages)
-		adw_navigation_view_set_animate_transitions(pages, FALSE);
-	adw_navigation_split_view_set_show_content(window->split, TRUE);
-	if (pages)
-		adw_navigation_view_set_animate_transitions(pages, animates);
-}
-
-
 void open_room(Window *window, CrimsonRoom *room) {
 	if (!room)
 		return;
@@ -688,7 +674,7 @@ void open_room(Window *window, CrimsonRoom *room) {
 		choose_network(window, room->network);
 	select_listed_room(window->room_list, room);
 	show_conversation_room(window->conversation, room);
-	show_content_at_once(window);
+	adw_navigation_split_view_set_show_content(window->split, TRUE);
 	save_window_choice(room->network->key, room);
 	focus_composer(window->conversation);
 }
