@@ -140,11 +140,18 @@ static GtkWidget *create_menu_button(const char *label, const char *icon, const 
 static GtkWidget *create_reaction_strip(RowContext *context) {
 	GtkWidget *strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 2);
 	gtk_widget_add_css_class(strip, "reaction-strip");
+	/* The reactions already given stand out, since picking one again takes it back */
+	CrimsonRoom *room = g_object_get_data(G_OBJECT(context->bubble), "room");
+	IrcState *state = room ? get_network_state(room->network) : NULL;
 	for (int index = 0; QUICK_REACTIONS[index]; index++) {
 		GtkWidget *button = gtk_button_new_with_label(QUICK_REACTIONS[index]);
 		gtk_widget_add_css_class(button, "flat");
 		gtk_widget_add_css_class(button, "circular");
 		gtk_widget_add_css_class(button, "quick-reaction");
+		if (state && state->nick && has_reacted(context->message, QUICK_REACTIONS[index], state->nick)) {
+			gtk_widget_add_css_class(button, "mine");
+			gtk_widget_set_tooltip_text(button, TEXT_TAKE_BACK_REACTION);
+		}
 		g_object_set_data(G_OBJECT(button), "reaction", (gpointer)QUICK_REACTIONS[index]);
 		g_signal_connect(button, "clicked", G_CALLBACK(pick_reaction), context);
 		gtk_box_append(GTK_BOX(strip), button);
@@ -232,18 +239,50 @@ static void show_replied_message(GtkGestureClick *gesture, int presses, double x
 }
 
 
-static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room, RowContext *context) {
-	CrimsonMessage *original = find_room_message(room, message->reply_to);
+/* Where a server strips reply tags, a reply starts with >"Name: the start of their message" and its own text, which
+ * shows as the same quote a tagged reply gets */
+typedef struct {
+	char *sender, *excerpt;
+	const char *rest;
+} TextQuote;
+
+
+static gboolean read_text_quote(const char *text, TextQuote *quote) {
+	if (!text || !g_str_has_prefix(text, ">\""))
+		return FALSE;
+	const char *start = text + 2;
+	const char *colon = strstr(start, ": ");
+	const char *close = colon ? strstr(colon + 2, "\" ") : NULL;
+	if (!colon || !close || colon == start || memchr(start, ' ', (size_t)(colon - start)))
+		return FALSE;
+	quote->sender = g_strndup(start, (gsize)(colon - start));
+	quote->excerpt = g_strndup(colon + 2, (gsize)(close - colon - 2));
+	quote->rest = close + 2;
+	return TRUE;
+}
+
+
+static void clear_text_quote(TextQuote *quote) {
+	g_free(quote->sender);
+	g_free(quote->excerpt);
+}
+
+
+static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room, RowContext *context,
+	TextQuote *text_quote) {
+	CrimsonMessage *original = message->reply_to ? find_room_message(room, message->reply_to) : NULL;
+	const char *sender = text_quote ? text_quote->sender : original ? original->sender : NULL;
 	GtkWidget *quote = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(quote, "reply-quote");
-	GtkWidget *name = gtk_label_new(original && original->sender ? original->sender : TEXT_EARLIER_MESSAGE);
+	GtkWidget *name = gtk_label_new(sender ? sender : TEXT_EARLIER_MESSAGE);
 	gtk_label_set_xalign(GTK_LABEL(name), 0);
 	gtk_widget_add_css_class(name, "reply-name");
-	if (original && original->sender) {
-		g_autofree char *color = g_strdup_printf("name-color-%d", pick_name_color(original->sender));
+	if (sender) {
+		g_autofree char *color = g_strdup_printf("name-color-%d", pick_name_color(sender));
 		gtk_widget_add_css_class(quote, color);
 	}
-	g_autofree char *plain = original ? strip_irc_formatting(original->text) : g_strdup(TEXT_NOT_LOADED);
+	g_autofree char *plain = original ? strip_irc_formatting(original->text) : text_quote
+		? g_strdup(text_quote->excerpt) : g_strdup(TEXT_NOT_LOADED);
 	GtkWidget *snippet = gtk_label_new(plain);
 	gtk_label_set_xalign(GTK_LABEL(snippet), 0);
 	gtk_label_set_ellipsize(GTK_LABEL(snippet), PANGO_ELLIPSIZE_END);
@@ -252,6 +291,8 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 	gtk_widget_add_css_class(snippet, "reply-snippet");
 	gtk_box_append(GTK_BOX(quote), name);
 	gtk_box_append(GTK_BOX(quote), snippet);
+	if (!message->reply_to)
+		return quote;
 	GtkGesture *click = gtk_gesture_click_new();
 	g_signal_connect(click, "released", G_CALLBACK(show_replied_message), context);
 	gtk_widget_add_controller(quote, GTK_EVENT_CONTROLLER(click));
@@ -260,10 +301,10 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 }
 
 
-static char *build_body_markup(CrimsonMessage *message) {
+static char *build_body_markup(CrimsonMessage *message, const char *text) {
 	if (message->is_redacted)
 		return g_markup_printf_escaped("<i>%s</i>", TEXT_MESSAGE_DELETED);
-	g_autofree char *markup = format_irc_markup(message->text);
+	g_autofree char *markup = format_irc_markup(text);
 	if (message->kind != MESSAGE_ACTION)
 		return g_steal_pointer(&markup);
 	g_autofree char *sender = g_markup_escape_text(message->sender ? message->sender : "", -1);
@@ -445,9 +486,15 @@ static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboo
 		&& message->kind != MESSAGE_ACTION;
 	if (shows_name)
 		gtk_box_append(GTK_BOX(bubble), create_sender_label(message, context));
-	if (message->reply_to)
-		gtk_box_append(GTK_BOX(bubble), create_reply_quote(message, room, context));
-	g_autofree char *markup = build_body_markup(message);
+	TextQuote text_quote = {0};
+	gboolean has_text_quote = message->kind == MESSAGE_TEXT && read_text_quote(message->text, &text_quote);
+	if (message->reply_to || has_text_quote)
+		gtk_box_append(GTK_BOX(bubble), create_reply_quote(message, room, context, has_text_quote ? &text_quote
+			: NULL));
+	g_autofree char *text = g_strdup(has_text_quote ? text_quote.rest : message->text ? message->text : "");
+	if (has_text_quote)
+		clear_text_quote(&text_quote);
+	g_autofree char *markup = build_body_markup(message, text);
 	GtkWidget *body = gtk_label_new(NULL);
 	gtk_label_set_markup(GTK_LABEL(body), markup);
 	gtk_label_set_wrap(GTK_LABEL(body), TRUE);
@@ -458,7 +505,6 @@ static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboo
 	gtk_widget_set_focusable(body, FALSE);
 	gtk_widget_add_css_class(body, message->is_redacted ? "redacted" : "body");
 	/* A short line keeps its time beside it, as in Telegram, while longer text and pictures put it underneath */
-	const char *text = message->text ? message->text : "";
 	gboolean is_short = !strchr(text, '\n') && g_utf8_strlen(text, -1) <= INLINE_TIME_CHARS && !strstr(text, "://");
 	if (is_short) {
 		GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
