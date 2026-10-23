@@ -49,3 +49,17 @@ void load_window_choice(char **network_key, char **room_network, char **room_nam
 	*room_network = g_key_file_get_string(file, GROUP, "room-network", NULL);
 	*room_name = g_key_file_get_string(file, GROUP, "room", NULL);
 }
+
+
+void save_sidebar_width(int width) {
+	g_autoptr(GKeyFile) file = load_state();
+	g_key_file_set_integer(file, GROUP, "sidebar-width", width);
+	save_state(file);
+}
+
+
+int load_sidebar_width(int fallback) {
+	g_autoptr(GKeyFile) file = load_state();
+	int width = g_key_file_get_integer(file, GROUP, "sidebar-width", NULL);
+	return width > 0 ? width : fallback;
+}

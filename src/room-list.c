@@ -439,10 +439,9 @@ static GtkWidget *create_list_view(RoomList *list) {
 	list->connection_note = gtk_revealer_new();
 	gtk_revealer_set_transition_type(GTK_REVEALER(list->connection_note), GTK_REVEALER_TRANSITION_TYPE_SLIDE_RIGHT);
 	list->connection_fix = gtk_button_new();
-	gtk_widget_add_css_class(list->connection_fix, "pill");
 	gtk_widget_add_css_class(list->connection_fix, "suggested-action");
 	gtk_widget_add_css_class(list->connection_fix, "connection-fix");
-	gtk_widget_set_halign(list->connection_fix, GTK_ALIGN_START);
+	gtk_widget_set_halign(list->connection_fix, GTK_ALIGN_CENTER);
 	GtkWidget *note_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 	gtk_widget_add_css_class(note_box, "connection-note-box");
 	gtk_box_append(GTK_BOX(note_box), list->connection_label);

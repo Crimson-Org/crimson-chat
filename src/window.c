@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "common/sidebar-width.h"
 #include "common/startup.h"
 #include "dialogs.h"
 #include "images.h"
@@ -13,9 +14,9 @@
 
 #define NARROW_CONDITION "max-width: 640sp"
 #define RAIL_AVATAR_SIZE 48
-#define SIDEBAR_FRACTION 0.36
-#define SIDEBAR_MINIMUM 340
-#define SIDEBAR_MAXIMUM 440
+#define SIDEBAR_WIDTH 388
+#define SIDEBAR_MINIMUM 300
+#define SIDEBAR_MAXIMUM 640
 #define BADGE_LIMIT 999
 #define NETWORK_KEY "network"
 #define CONNECTION_DELAY_MS 1500
@@ -874,6 +875,11 @@ void restore_window_choice(Window *window) {
 }
 
 
+static void remember_sidebar_width(int width, gpointer data) {
+	save_sidebar_width(width);
+}
+
+
 Window *create_window(GtkApplication *application, Chat *chat) {
 	Window *window = g_new0(Window, 1);
 	main_window = window;
@@ -888,9 +894,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	watch_room_list_focus(window->room_list, GTK_WIDGET(window->window));
 	window->conversation = create_conversation(window);
 	window->split = ADW_NAVIGATION_SPLIT_VIEW(adw_navigation_split_view_new());
-	adw_navigation_split_view_set_sidebar_width_fraction(window->split, SIDEBAR_FRACTION);
-	adw_navigation_split_view_set_min_sidebar_width(window->split, SIDEBAR_MINIMUM);
-	adw_navigation_split_view_set_max_sidebar_width(window->split, SIDEBAR_MAXIMUM);
 	AdwNavigationPage *sidebar = adw_navigation_page_new(create_sidebar(window), TEXT_CHATS);
 	AdwNavigationPage *content = adw_navigation_page_new(get_conversation_widget(window->conversation),
 		TEXT_CONVERSATION);
@@ -898,7 +901,10 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	adw_navigation_split_view_set_content(window->split, content);
 	g_signal_connect(window->split, "notify::collapsed", G_CALLBACK(follow_collapse), window);
 	window->pages = gtk_stack_new();
-	gtk_stack_add_named(GTK_STACK(window->pages), GTK_WIDGET(window->split), "chats");
+	/* The side panel's edge drags it wider or narrower, and the width is kept for the next launch */
+	GtkWidget *chats = add_navigation_sidebar_handle(window->split, load_sidebar_width(SIDEBAR_WIDTH),
+		SIDEBAR_MINIMUM, SIDEBAR_MAXIMUM, remember_sidebar_width, NULL);
+	gtk_stack_add_named(GTK_STACK(window->pages), chats, "chats");
 	gtk_stack_add_named(GTK_STACK(window->pages), create_welcome(window), "welcome");
 	g_signal_connect(chat->networks, "items-changed", G_CALLBACK(follow_networks), window);
 	g_signal_connect(chat->accounts, "items-changed", G_CALLBACK(follow_accounts), window);

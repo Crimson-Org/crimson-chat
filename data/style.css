@@ -540,3 +540,10 @@ headerbar.top-bar menubutton > button {
 	background-color: color-mix(in srgb, var(--window-fg-color) 12%, var(--window-bg-color));
 	color: var(--window-fg-color);
 }
+
+/* The fix in a connection note is a small button under its words */
+.connection-fix {
+	min-height: 28px;
+	padding: 2px 16px;
+	border-radius: 9999px;
+}
