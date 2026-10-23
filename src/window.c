@@ -133,9 +133,11 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	GtkWidget *state = g_object_get_data(G_OBJECT(row), "state");
 	gtk_widget_set_visible(state, network->state != NETWORK_CONNECTED);
 	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
-	/* A connected server only names itself, and one that is not also says so */
+	/* A connected server only names itself, and one that is not says what the corner of the list says about it */
+	const char *state_text = network->state == NETWORK_CONNECTING ? TEXT_CONNECTING
+		: needs_user(network->error) ? network->error : TEXT_RECONNECTING;
 	g_autofree char *tooltip = network->state == NETWORK_CONNECTED ? g_strdup(network->name)
-		: g_strdup_printf("%s\n%s", network->name, describe_state(network->state));
+		: g_strdup_printf("%s\n%s", network->name, state_text);
 	gtk_widget_set_tooltip_text(row, tooltip);
 }
 
