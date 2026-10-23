@@ -65,6 +65,11 @@ headerbar.title-bar {
 	box-shadow: 0 0 6px color-mix(in srgb, var(--accent-bg-color) 40%, transparent);
 }
 
+/* A faint shadow lifts the chosen server's picture off its circle */
+.rail-list > row:selected avatar {
+	box-shadow: 0 0 4px alpha(black, 0.45);
+}
+
 /* Switching servers is instant, so only the dimming of a server still connecting fades */
 .rail-list > row avatar {
 	transition: opacity 400ms ease-out;
