@@ -169,13 +169,10 @@ static void open_room_action(GSimpleAction *action, GVariant *parameter, gpointe
 }
 
 
+/* The window is never destroyed, since connections closing queue work for it that would then find it gone */
 static void finish_quitting(gpointer application) {
-	Window *window = get_main_window();
 	stop_chat(chat);
-	if (window)
-		gtk_window_close(GTK_WINDOW(window->window));
-	else
-		g_application_quit(application);
+	g_application_quit(application);
 }
 
 

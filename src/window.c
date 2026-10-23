@@ -833,15 +833,17 @@ void withdraw_window(Window *window) {
 }
 
 
-/* Closing keeps the chats connected in the tray, and only quitting really closes the window */
+/* Closing keeps the chats connected in the tray, and otherwise quits, which never destroys the window */
 static gboolean close_window(GtkWindow *gtk_window, Window *window) {
 	if (window->is_quitting)
-		return FALSE;
+		return TRUE;
+	gboolean has_tray = window->tray && is_tray_shown(window->tray);
+	if (!get_settings()->closes_to_tray || !has_tray) {
+		g_action_group_activate_action(G_ACTION_GROUP(g_application_get_default()), "quit", NULL);
+		return TRUE;
+	}
 	read_window_geometry(gtk_window, &window->geometry);
 	save_window_geometry_state(&window->geometry);
-	gboolean has_tray = window->tray && is_tray_shown(window->tray);
-	if (!get_settings()->closes_to_tray || !has_tray)
-		return FALSE;
 	gtk_widget_set_visible(GTK_WIDGET(gtk_window), FALSE);
 	return TRUE;
 }

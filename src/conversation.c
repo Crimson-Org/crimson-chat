@@ -57,6 +57,7 @@ struct Conversation {
 	gulong room_handler;
 	/* The view follows the newest message until the user scrolls away from it */
 	gboolean is_pinned, has_user_scrolled;
+	gulong layout_handler;
 	/* Whether the user opened the member list, which the split view would otherwise change when it resizes */
 	gboolean wants_members;
 	guint member_source;
@@ -85,13 +86,27 @@ static GtkAdjustment *get_scroll(Conversation *conversation) {
 }
 
 
-/* The list only knows its true length once its last rows are measured, so it is asked to show the last row */
-static void scroll_to_bottom(Conversation *conversation) {
-	guint count = g_list_model_get_n_items(G_LIST_MODEL(conversation->messages));
-	if (count)
-		gtk_list_view_scroll_to(GTK_LIST_VIEW(conversation->list_view), count - 1, GTK_LIST_SCROLL_NONE, NULL);
+/* A pinned list is moved to its bottom right after each layout pass and before it is drawn, which anchors it to its
+ * last row so it stays there as rows measure themselves. The list sets its scroll range inside its own layout pass,
+ * where scrolling it would add rows that pass never measures and that then draw on top of each other */
+static void keep_at_bottom(GdkFrameClock *clock, Conversation *conversation) {
+	if (!conversation->is_pinned || !gtk_widget_get_mapped(conversation->list_view))
+		return;
 	GtkAdjustment *scroll = get_scroll(conversation);
-	gtk_adjustment_set_value(scroll, gtk_adjustment_get_upper(scroll) - gtk_adjustment_get_page_size(scroll));
+	double bottom = gtk_adjustment_get_upper(scroll) - gtk_adjustment_get_page_size(scroll);
+	if (gtk_adjustment_get_value(scroll) < bottom)
+		gtk_adjustment_set_value(scroll, bottom);
+}
+
+
+static void follow_frames(GtkWidget *list_view, Conversation *conversation) {
+	conversation->layout_handler = g_signal_connect(gtk_widget_get_frame_clock(list_view), "layout",
+		G_CALLBACK(keep_at_bottom), conversation);
+}
+
+
+static void forget_frames(GtkWidget *list_view, Conversation *conversation) {
+	g_clear_signal_handler(&conversation->layout_handler, gtk_widget_get_frame_clock(list_view));
 }
 
 
@@ -105,7 +120,7 @@ static void pin_to_bottom(Conversation *conversation) {
 	conversation->is_pinned = TRUE;
 	conversation->has_user_scrolled = FALSE;
 	gtk_widget_set_visible(conversation->jump_button, FALSE);
-	scroll_to_bottom(conversation);
+	gtk_widget_queue_allocate(conversation->list_view);
 }
 
 
@@ -117,13 +132,6 @@ static void follow_scroll(GtkAdjustment *scroll, Conversation *conversation) {
 		gtk_widget_set_visible(conversation->jump_button, !conversation->is_pinned);
 	}
 	mark_read_when_seen(conversation);
-}
-
-
-/* New lines keep the view at the bottom when it was there, and leave it alone while reading back */
-static void follow_growth(GtkAdjustment *scroll, GParamSpec *spec, Conversation *conversation) {
-	if (conversation->is_pinned)
-		scroll_to_bottom(conversation);
 }
 
 
@@ -526,8 +534,8 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	g_signal_connect(conversation->scroller, "edge-reached", G_CALLBACK(reach_edge), conversation);
 	GtkAdjustment *scroll = get_scroll(conversation);
 	g_signal_connect(scroll, "value-changed", G_CALLBACK(follow_scroll), conversation);
-	g_signal_connect(scroll, "notify::upper", G_CALLBACK(follow_growth), conversation);
-	g_signal_connect(scroll, "notify::page-size", G_CALLBACK(follow_growth), conversation);
+	g_signal_connect(conversation->list_view, "realize", G_CALLBACK(follow_frames), conversation);
+	g_signal_connect(conversation->list_view, "unrealize", G_CALLBACK(forget_frames), conversation);
 	GtkEventController *wheel = gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
 	gtk_event_controller_set_propagation_phase(wheel, GTK_PHASE_CAPTURE);
 	g_signal_connect(wheel, "scroll", G_CALLBACK(note_user_scroll), conversation);
@@ -1220,8 +1228,6 @@ static void follow_event_setting(Conversation *conversation) {
 	conversation->shows_events = shows_events;
 	gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
 	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->recent_messages));
-	if (conversation->is_pinned)
-		scroll_to_bottom(conversation);
 }
 
 
@@ -1278,14 +1284,9 @@ static void follow_room(CrimsonRoom *room, Conversation *conversation) {
 }
 
 
-/* A newly opened room starts at its latest message, once the list has measured its rows */
-static gboolean settle_at_bottom(gpointer data) {
-	Conversation *conversation = data;
-	guint count = g_list_model_get_n_items(G_LIST_MODEL(conversation->messages));
-	if (count)
-		gtk_list_view_scroll_to(GTK_LIST_VIEW(conversation->list_view), count - 1, GTK_LIST_SCROLL_NONE, NULL);
-	pin_to_bottom(conversation);
-	mark_read_when_seen(conversation);
+/* A newly opened room counts as read once it has been on screen */
+static gboolean mark_read_once_shown(gpointer data) {
+	mark_read_when_seen(data);
 	return G_SOURCE_REMOVE;
 }
 
@@ -1328,7 +1329,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 		room->kind == ROOM_CHANNEL && conversation->wants_members);
 	refresh_members_later(conversation);
 	pin_to_bottom(conversation);
-	run_after_frame(conversation->list_view, settle_at_bottom, conversation);
+	run_after_frame(conversation->list_view, mark_read_once_shown, conversation);
 }
 
 
