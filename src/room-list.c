@@ -9,6 +9,7 @@
 
 #define ROOM_AVATAR_SIZE 50
 #define SEARCH_SLIDE_MS 200
+#define CONNECTION_SPINNER_SIZE 24
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
@@ -18,7 +19,7 @@ struct RoomList {
 	GtkWidget *box, *header, *search, *menu_button;
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
-	GtkWidget *add_button, *add_revealer;
+	GtkWidget *add_button, *add_revealer, *connection;
 	/* Whether the press now going on started on the list's empty space */
 	gboolean is_space_pressed;
 	GtkWidget *stack, *list_view;
@@ -400,6 +401,20 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_set_halign(list->add_revealer, GTK_ALIGN_END);
 	gtk_widget_set_valign(list->add_revealer, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_revealer);
+	/* A spinner in the other corner while a connection is down, saying which when pointed at */
+	list->connection = gtk_button_new();
+	GtkWidget *spinner = adw_spinner_new();
+	gtk_widget_set_size_request(spinner, CONNECTION_SPINNER_SIZE, CONNECTION_SPINNER_SIZE);
+	gtk_widget_set_halign(spinner, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(spinner, GTK_ALIGN_CENTER);
+	gtk_button_set_child(GTK_BUTTON(list->connection), spinner);
+	gtk_widget_add_css_class(list->connection, "circular");
+	gtk_widget_add_css_class(list->connection, "connection-spinner");
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection), "win.retry-connection");
+	gtk_widget_set_halign(list->connection, GTK_ALIGN_START);
+	gtk_widget_set_valign(list->connection, GTK_ALIGN_END);
+	gtk_widget_set_visible(list->connection, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->connection);
 	GtkGesture *space = gtk_gesture_click_new();
 	g_signal_connect(space, "pressed", G_CALLBACK(press_list_space), list);
 	g_signal_connect(space, "released", G_CALLBACK(click_list_space), list);
@@ -454,8 +469,8 @@ void refresh_room_list_header(RoomList *list) {
 	gtk_stack_set_visible_child_name(GTK_STACK(list->stack), has_rooms || is_searching
 		|| !list->window->chat->has_started ? "list" : "no-rooms");
 	gtk_widget_set_visible(list->add_revealer, has_rooms || is_searching);
-	/* The header names the server, and the banner under it says when it is not connected */
-	gtk_label_set_text(GTK_LABEL(list->title), list->network ? list->network->name : "");
+	/* The header names the app, the search field the server, and a spinner in the corner says when it is down */
+	gtk_label_set_text(GTK_LABEL(list->title), TEXT_APPLICATION_NAME);
 	g_autofree char *placeholder = list->network ? g_strdup_printf(TEXT_SEARCH_IN, list->network->name)
 		: g_strdup(TEXT_SEARCH);
 	gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(list->search), placeholder);
@@ -511,4 +526,14 @@ CrimsonRoom *step_listed_room(RoomList *list, int step) {
 	CrimsonRoom *room = g_list_model_get_item(model, (guint)position);
 	g_object_unref(room);
 	return room;
+}
+
+
+void show_room_list_connection(RoomList *list, const char *message) {
+	gtk_widget_set_visible(list->connection, message != NULL);
+	gtk_widget_set_tooltip_text(list->connection, message);
+	if (message)
+		gtk_widget_add_css_class(list->list_view, "is-offline");
+	else
+		gtk_widget_remove_css_class(list->list_view, "is-offline");
 }

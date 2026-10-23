@@ -16,7 +16,7 @@
 #define SIDEBAR_MAXIMUM 440
 #define BADGE_LIMIT 999
 #define NETWORK_KEY "network"
-#define BANNER_DELAY_MS 1500
+#define CONNECTION_DELAY_MS 1500
 #define MOUSE_BACK_BUTTON 8
 #define MINIMUM_WIDTH 452
 #define MINIMUM_HEIGHT 660
@@ -206,40 +206,48 @@ static const char *find_lost_connection(Window *window, gboolean *was_connected,
 }
 
 
-static gboolean reveal_banner(gpointer data) {
+static gboolean reveal_connection(gpointer data) {
 	Window *window = data;
-	window->banner_source = 0;
-	adw_banner_set_revealed(window->banner, TRUE);
+	window->connection_source = 0;
+	window->is_connection_shown = TRUE;
+	show_room_list_connection(window->room_list, window->lost_message);
 	return G_SOURCE_REMOVE;
 }
 
 
-/* A lost connection shows until it is back, and coming back says so once */
-static void refresh_banner(Window *window) {
+/* A lost connection shows as a spinner until it is back, and coming back says so once */
+static void refresh_connection(Window *window) {
 	gboolean was_connected = FALSE, can_retry = FALSE;
 	const char *lost = window->chat->has_started ? find_lost_connection(window, &was_connected, &can_retry) : NULL;
 	if (!lost) {
-		g_clear_handle_id(&window->banner_source, g_source_remove);
-		if (adw_banner_get_revealed(window->banner) && window->lost_name) {
+		g_clear_handle_id(&window->connection_source, g_source_remove);
+		if (window->is_connection_shown && window->lost_name) {
 			g_autofree char *text = g_strdup_printf(TEXT_RECONNECTED_TO, window->lost_name);
 			show_toast(window, text);
 		}
-		adw_banner_set_revealed(window->banner, FALSE);
+		window->is_connection_shown = FALSE;
+		show_room_list_connection(window->room_list, NULL);
 		g_clear_pointer(&window->lost_name, g_free);
+		g_clear_pointer(&window->lost_message, g_free);
 		return;
 	}
-	g_autofree char *title = g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS,
-		lost);
-	adw_banner_set_title(window->banner, title);
-	adw_banner_set_button_label(window->banner, can_retry ? TEXT_RETRY : NULL);
+	g_free(window->lost_message);
+	window->lost_message = g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS, lost);
+	window->can_retry = can_retry;
 	g_free(window->lost_name);
 	window->lost_name = was_connected ? g_strdup(lost) : NULL;
-	if (!adw_banner_get_revealed(window->banner) && !window->banner_source)
-		window->banner_source = g_timeout_add(BANNER_DELAY_MS, reveal_banner, window);
+	if (window->is_connection_shown)
+		show_room_list_connection(window->room_list, window->lost_message);
+	else if (!window->connection_source)
+		window->connection_source = g_timeout_add(CONNECTION_DELAY_MS, reveal_connection, window);
 }
 
 
-static void retry_now(AdwBanner *banner, Window *window) {
+/* Clicking the spinner tries again at once, where the app itself is the one waiting to retry */
+static void retry_connection_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	if (!window->can_retry)
+		return;
 	Session *bouncer = find_bouncer(window->chat);
 	if (bouncer && read_account_state(bouncer) != NETWORK_CONNECTED)
 		connect_session(bouncer);
@@ -268,7 +276,7 @@ static void update_view(Window *window) {
 		choose_network(window, first);
 	}
 	refresh_room_list_header(window->room_list);
-	refresh_banner(window);
+	refresh_connection(window);
 }
 
 
@@ -671,6 +679,7 @@ static void add_window_actions(Window *window) {
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
+		{"retry-connection", retry_connection_action, NULL, NULL, NULL, {0}},
 		{"invite-people", invite_action, NULL, NULL, NULL, {0}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(window->window), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
@@ -736,13 +745,8 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	load_window_geometry_state(&window->geometry);
 	apply_window_geometry(GTK_WINDOW(window->window), &window->geometry);
 	gtk_widget_set_size_request(GTK_WIDGET(window->window), MINIMUM_WIDTH, MINIMUM_HEIGHT);
-	window->banner = ADW_BANNER(adw_banner_new(""));
-	g_signal_connect(window->banner, "button-clicked", G_CALLBACK(retry_now), window);
 	window->room_list = create_room_list(window);
 	watch_room_list_focus(window->room_list, GTK_WIDGET(window->window));
-	/* The banner sits in the chat list under its search field, next to the server it is about */
-	GtkWidget *list = get_room_list_widget(window->room_list);
-	gtk_box_insert_child_after(GTK_BOX(list), GTK_WIDGET(window->banner), gtk_widget_get_first_child(list));
 	window->conversation = create_conversation(window);
 	window->split = ADW_NAVIGATION_SPLIT_VIEW(adw_navigation_split_view_new());
 	adw_navigation_split_view_set_sidebar_width_fraction(window->split, SIDEBAR_FRACTION);

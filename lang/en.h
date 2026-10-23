@@ -204,7 +204,6 @@
 #define TEXT_DISCONNECT_BOUNCER_BODY "Your servers stay on the bouncer."
 #define TEXT_SEARCH_IN "Search %s"
 #define TEXT_RECONNECTING "Reconnecting…"
-#define TEXT_RETRY "Retry"
 #define TEXT_LEAVE_ROOM "Leave Room"
 #define TEXT_DELETE_CHAT "Delete Chat"
 #define TEXT_RECONNECTING_TO "Reconnecting to %s…"

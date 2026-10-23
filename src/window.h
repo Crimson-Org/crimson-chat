@@ -17,10 +17,12 @@ struct Window {
 	Chat *chat;
 	AdwToastOverlay *toasts;
 	GtkWidget *pages, *welcome, *welcome_bouncer, *welcome_server;
-	/* Says what is connecting or reconnecting, shown after a moment so a quick connection does not flash */
-	AdwBanner *banner;
-	guint banner_source;
-	char *lost_name;
+	/* Whether the chat list shows its connection spinner, which waits a moment so a quick connection does not
+	 * flash, and the connection it is about */
+	gboolean is_connection_shown;
+	guint connection_source;
+	char *lost_name, *lost_message;
+	gboolean can_retry;
 	AdwNavigationSplitView *split;
 	GtkWidget *rail, *rail_list;
 	RoomList *room_list;
@@ -67,6 +69,8 @@ void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
 /* Lets the room list follow whether the window has focus, for its + button */
 void watch_room_list_focus(RoomList *list, GtkWidget *window);
+/* Shows a spinner in the list's corner with the message as its tooltip and dims the chats, or hides it with NULL */
+void show_room_list_connection(RoomList *list, const char *message);
 /* The room above or below the chosen one in the list, for keyboard stepping */
 CrimsonRoom *step_listed_room(RoomList *list, int step);
 

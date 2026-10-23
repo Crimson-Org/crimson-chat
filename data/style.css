@@ -491,3 +491,14 @@ headerbar.top-bar menubutton > button {
 .room-card-leave label {
 	color: var(--destructive-color);
 }
+
+/* While a connection is down the chats dim but stay usable, with a spinner in the corner */
+.room-list.is-offline {
+	opacity: 0.5;
+}
+
+.connection-spinner {
+	margin: 16px;
+	min-width: 48px;
+	min-height: 48px;
+}
