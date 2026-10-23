@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "dialogs.h"
 #include "formatting.h"
 #include "images.h"
 #include "message-row.h"
@@ -9,13 +10,15 @@
 #include "settings.h"
 #include "pictures.h"
 
-#define AVATAR_SIZE 34
 #define GROUP_GAP_MICROSECONDS (5 * 60 * G_USEC_PER_SEC)
 #define TEXT_WIDTH_CHARS 62
 #define PREVIEW_WIDTH 320
 #define PREVIEW_HEIGHT 220
 #define REPLY_SNIPPET_CHARS 80
 #define PERSON_KEY "person"
+#define AVATAR_SLOT_KEY "avatar-slot"
+#define DAY_PILL_KEY "day-pill"
+#define DAY_TIME_KEY "day-time"
 /* Lines up to this long keep their time on the same line */
 #define INLINE_TIME_CHARS 40
 
@@ -43,8 +46,8 @@ static void clear_children(GtkWidget *box) {
 }
 
 
-static gboolean starts_group(CrimsonMessage *message, CrimsonMessage *previous) {
-	if (!previous || previous->kind == MESSAGE_EVENT || previous->kind == MESSAGE_STATUS)
+gboolean starts_message_group(CrimsonMessage *message, CrimsonMessage *previous, gboolean starts_unread) {
+	if (starts_unread || !previous || previous->kind == MESSAGE_EVENT || previous->kind == MESSAGE_STATUS)
 		return TRUE;
 	if (g_strcmp0(previous->sender, message->sender) != 0 || message->time - previous->time > GROUP_GAP_MICROSECONDS)
 		return TRUE;
@@ -63,12 +66,34 @@ static GtkWidget *create_pill(const char *text, const char *css_class) {
 }
 
 
-static void add_note(GtkWidget *row, CrimsonMessage *message) {
-	g_autofree char *plain = strip_irc_formatting(message->text);
+/* A thin line with a dim label between the messages already read and the new ones */
+static GtkWidget *create_read_line(void) {
+	GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	gtk_widget_add_css_class(line, "read-line");
+	GtkWidget *before = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	gtk_widget_set_hexpand(before, TRUE);
+	gtk_widget_set_valign(before, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(line), before);
+	GtkWidget *label = gtk_label_new(TEXT_LAST_READ);
+	gtk_widget_add_css_class(label, "dim-label");
+	gtk_box_append(GTK_BOX(line), label);
+	GtkWidget *after = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+	gtk_widget_set_hexpand(after, TRUE);
+	gtk_widget_set_valign(after, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(line), after);
+	return line;
+}
+
+
+static void add_note(GtkWidget *row, CrimsonMessage *message, const char *notes) {
 	if (message->kind == MESSAGE_EVENT) {
-		gtk_box_append(GTK_BOX(row), create_pill(plain, "event-pill"));
+		GtkWidget *pill = create_pill(notes, "event-pill");
+		if (strchr(notes, '\n'))
+			gtk_widget_add_css_class(pill, "merged");
+		gtk_box_append(GTK_BOX(row), pill);
 		return;
 	}
+	g_autofree char *plain = strip_irc_formatting(message->text);
 	g_autofree char *time = format_clock_time(message->time);
 	g_autofree char *line = g_strdup_printf("%s  %s", time, plain);
 	GtkWidget *label = gtk_label_new(line);
@@ -301,9 +326,7 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 }
 
 
-static char *build_body_markup(CrimsonMessage *message, const char *text) {
-	if (message->is_redacted)
-		return g_markup_printf_escaped("<i>%s</i>", TEXT_MESSAGE_DELETED);
+static char *build_text_markup(CrimsonMessage *message, const char *text) {
 	/* Markdown stars and underscores from other apps show as the emphasis they stand for */
 	g_autofree char *emphasised = convert_markdown(text);
 	g_autofree char *markup = format_irc_markup(emphasised);
@@ -314,15 +337,50 @@ static char *build_body_markup(CrimsonMessage *message, const char *text) {
 }
 
 
+static char *build_body_markup(CrimsonMessage *message, const char *text) {
+	if (message->is_redacted)
+		return g_markup_printf_escaped("<i>%s</i>", TEXT_MESSAGE_DELETED);
+	return build_text_markup(message, text);
+}
+
+
+static void toggle_deleted_text(GtkToggleButton *button, GtkLabel *body) {
+	gboolean is_shown = gtk_toggle_button_get_active(button);
+	gtk_label_set_markup(body, g_object_get_data(G_OBJECT(button), is_shown ? "original" : "note"));
+	gtk_button_set_icon_name(GTK_BUTTON(button), is_shown ? "view-conceal-symbolic" : "view-reveal-symbolic");
+	gtk_widget_set_tooltip_text(GTK_WIDGET(button), is_shown ? TEXT_HIDE_DELETED : TEXT_SHOW_DELETED);
+}
+
+
+/* Deleting only marks a message, and both the chat and the bouncer keep its text, so an eye beside the note shows
+ * what it said */
+static GtkWidget *add_deleted_reveal(GtkWidget *body, CrimsonMessage *message, const char *text) {
+	if (!message->is_redacted || !*text)
+		return body;
+	GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	GtkWidget *button = gtk_toggle_button_new();
+	gtk_button_set_icon_name(GTK_BUTTON(button), "view-reveal-symbolic");
+	gtk_widget_set_tooltip_text(button, TEXT_SHOW_DELETED);
+	gtk_widget_add_css_class(button, "flat");
+	gtk_widget_add_css_class(button, "circular");
+	gtk_widget_add_css_class(button, "reveal-button");
+	gtk_widget_set_valign(button, GTK_ALIGN_START);
+	g_object_set_data_full(G_OBJECT(button), "original", build_text_markup(message, text), g_free);
+	g_object_set_data_full(G_OBJECT(button), "note", build_body_markup(message, text), g_free);
+	g_signal_connect(button, "toggled", G_CALLBACK(toggle_deleted_text), body);
+	gtk_box_append(GTK_BOX(line), body);
+	gtk_box_append(GTK_BOX(line), button);
+	return line;
+}
+
+
 static void free_link(gpointer url, GClosure *closure) {
 	g_free(url);
 }
 
 
 static void open_preview(GtkGestureClick *gesture, int presses, double x, double y, gpointer url) {
-	GtkWidget *widget = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-	g_autoptr(GtkUriLauncher) launcher = gtk_uri_launcher_new(url);
-	gtk_uri_launcher_launch(launcher, GTK_WINDOW(gtk_widget_get_root(widget)), NULL, NULL, NULL);
+	confirm_open_link(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)), url);
 }
 
 
@@ -467,21 +525,23 @@ static GtkWidget *create_sender_label(CrimsonMessage *message, RowContext *conte
 }
 
 
+/* A mention in a channel is marked in the accent colour along the bubble's side, tail included */
+static gboolean is_marked_mention(CrimsonMessage *message, CrimsonRoom *room) {
+	return message->is_highlight && room->kind == ROOM_CHANNEL;
+}
+
+
 static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboolean is_first, RowContext *context) {
 	GtkWidget *bubble = gtk_box_new(GTK_ORIENTATION_VERTICAL, 3);
 	gtk_widget_add_css_class(bubble, "bubble");
 	if (message->is_own)
 		gtk_widget_add_css_class(bubble, "own");
-	if (message->is_highlight && room->kind == ROOM_CHANNEL)
+	if (is_marked_mention(message, room))
 		gtk_widget_add_css_class(bubble, "mention");
 	if (message->kind == MESSAGE_NOTICE)
 		gtk_widget_add_css_class(bubble, "notice");
 	if (is_first)
 		gtk_widget_add_css_class(bubble, "first");
-	if (message->is_fresh) {
-		gtk_widget_add_css_class(bubble, "fresh");
-		message->is_fresh = FALSE;
-	}
 	g_object_set_data(G_OBJECT(bubble), "room", room);
 	context->bubble = bubble;
 	gboolean shows_name = is_first && !message->is_own && message->sender && room->kind == ROOM_CHANNEL
@@ -499,6 +559,7 @@ static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboo
 	g_autofree char *markup = build_body_markup(message, text);
 	GtkWidget *body = gtk_label_new(NULL);
 	gtk_label_set_markup(GTK_LABEL(body), markup);
+	ask_before_label_links(body);
 	gtk_label_set_wrap(GTK_LABEL(body), TRUE);
 	gtk_label_set_wrap_mode(GTK_LABEL(body), PANGO_WRAP_WORD_CHAR);
 	gtk_label_set_xalign(GTK_LABEL(body), 0);
@@ -506,23 +567,39 @@ static GtkWidget *create_bubble(CrimsonMessage *message, CrimsonRoom *room, gboo
 	gtk_label_set_selectable(GTK_LABEL(body), TRUE);
 	gtk_widget_set_focusable(body, FALSE);
 	gtk_widget_add_css_class(body, message->is_redacted ? "redacted" : "body");
+	GtkWidget *content = add_deleted_reveal(body, message, text);
 	/* A short line keeps its time beside it, as in Telegram, while longer text and pictures put it underneath */
 	gboolean is_short = !strchr(text, '\n') && g_utf8_strlen(text, -1) <= INLINE_TIME_CHARS && !strstr(text, "://");
 	if (is_short) {
 		GtkWidget *line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-		gtk_box_append(GTK_BOX(line), body);
+		gtk_box_append(GTK_BOX(line), content);
 		GtkWidget *footer = create_footer(message);
 		gtk_widget_set_valign(footer, GTK_ALIGN_END);
 		gtk_widget_set_hexpand(footer, TRUE);
 		gtk_box_append(GTK_BOX(line), footer);
 		gtk_box_append(GTK_BOX(bubble), line);
 	} else {
-		gtk_box_append(GTK_BOX(bubble), body);
+		gtk_box_append(GTK_BOX(bubble), content);
 		add_previews(bubble, message);
 		gtk_box_append(GTK_BOX(bubble), create_footer(message));
 	}
 	add_menu_gestures(bubble, context);
 	return bubble;
+}
+
+
+/* The tail lies over the bubble's edge rather than beside it, so the bubble's shadow never falls across it */
+static GtkWidget *create_tail(CrimsonMessage *message, CrimsonRoom *room) {
+	GtkWidget *tail = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(tail, "bubble-tail");
+	if (message->is_own)
+		gtk_widget_add_css_class(tail, "own");
+	if (is_marked_mention(message, room))
+		gtk_widget_add_css_class(tail, "mention");
+	gtk_widget_set_halign(tail, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
+	gtk_widget_set_valign(tail, GTK_ALIGN_START);
+	gtk_widget_set_can_target(tail, FALSE);
+	return tail;
 }
 
 
@@ -533,20 +610,32 @@ static GtkWidget *create_message_line(CrimsonMessage *message, CrimsonRoom *room
 	gtk_widget_set_halign(line, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
 	gboolean has_avatars = room->kind == ROOM_CHANNEL && !message->is_own;
 	if (has_avatars && is_first && message->sender) {
-		GtkWidget *avatar = adw_avatar_new(AVATAR_SIZE, message->sender, TRUE);
+		GtkWidget *avatar = adw_avatar_new(MESSAGE_AVATAR_SIZE, message->sender, TRUE);
 		gtk_widget_set_valign(avatar, GTK_ALIGN_START);
 		const char *url = pick_person_picture(room, message->sender);
-		g_autofree char *sized = fill_image_size(url, AVATAR_SIZE * 2);
+		g_autofree char *sized = fill_image_size(url, MESSAGE_AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
+		gtk_widget_set_tooltip_text(avatar, message->sender);
+		gtk_widget_add_css_class(avatar, "message-avatar");
 		make_person_target(avatar, context);
 		gtk_box_append(GTK_BOX(line), avatar);
+		g_object_set_data(G_OBJECT(line), AVATAR_SLOT_KEY, avatar);
 	} else if (has_avatars) {
 		GtkWidget *spacer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-		gtk_widget_set_size_request(spacer, AVATAR_SIZE, -1);
+		gtk_widget_set_size_request(spacer, MESSAGE_AVATAR_SIZE, -1);
 		gtk_box_append(GTK_BOX(line), spacer);
+		g_object_set_data(G_OBJECT(line), AVATAR_SLOT_KEY, spacer);
 	}
 	GtkWidget *column = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
-	gtk_box_append(GTK_BOX(column), create_bubble(message, room, is_first, context));
+	GtkWidget *tailed = gtk_overlay_new();
+	gtk_widget_set_halign(tailed, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
+	/* A message arriving while its chat is open rises in with its tail */
+	if (is_message_arriving(message))
+		gtk_widget_add_css_class(tailed, "fresh-message");
+	gtk_overlay_set_child(GTK_OVERLAY(tailed), create_bubble(message, room, is_first, context));
+	if (is_first)
+		gtk_overlay_add_overlay(GTK_OVERLAY(tailed), create_tail(message, room));
+	gtk_box_append(GTK_BOX(column), tailed);
 	if (message->reaction_order->len) {
 		GtkWidget *reactions = create_reactions(message, room, context);
 		gtk_widget_set_halign(reactions, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
@@ -557,26 +646,79 @@ static GtkWidget *create_message_line(CrimsonMessage *message, CrimsonRoom *room
 }
 
 
-void fill_message_row(GtkWidget *row, CrimsonMessage *message, CrimsonMessage *previous, CrimsonRoom *room,
+gboolean continues_note_run(CrimsonMessage *message, CrimsonMessage *previous, gboolean starts_unread) {
+	return message->kind == MESSAGE_EVENT && previous && previous->kind == MESSAGE_EVENT && !starts_unread
+		&& is_same_day(previous->time, message->time);
+}
+
+
+void fill_message_row(GtkWidget *row, CrimsonMessage *message, const RowPlace *place, CrimsonRoom *room,
 	const MessageActions *actions) {
+	CrimsonMessage *previous = place->previous;
+	gboolean starts_unread = place->starts_unread;
 	clear_children(row);
+	g_object_set_data(G_OBJECT(row), DAY_PILL_KEY, NULL);
+	gtk_widget_remove_css_class(row, "day-start");
+	g_object_set_data(G_OBJECT(row), AVATAR_SLOT_KEY, NULL);
+	/* An event inside a run is already a line of the pill on the run's first row */
+	gboolean is_folded = message->kind == MESSAGE_EVENT && !place->notes;
+	if (is_folded)
+		gtk_widget_add_css_class(row, "folded-note");
+	else
+		gtk_widget_remove_css_class(row, "folded-note");
+	if (is_folded)
+		return;
 	gboolean is_new_day = !previous || !is_same_day(previous->time, message->time);
-	if (is_new_day && message->kind != MESSAGE_STATUS) {
+	gboolean shows_day = is_new_day && message->kind != MESSAGE_STATUS;
+	if (shows_day) {
 		g_autofree char *day = format_day_heading(message->time);
-		gtk_box_append(GTK_BOX(row), create_pill(day, "day-pill"));
+		GtkWidget *pill = create_pill(day, "day-pill");
+		/* The pill keeps its moment, so a new day only changes its words rather than the whole row */
+		g_object_set_data_full(G_OBJECT(pill), DAY_TIME_KEY, g_memdup2(&message->time, sizeof message->time), g_free);
+		g_object_set_data(G_OBJECT(row), DAY_PILL_KEY, pill);
+		gtk_box_append(GTK_BOX(row), pill);
+		gtk_widget_add_css_class(row, "day-start");
 	}
+	if (starts_unread)
+		gtk_box_append(GTK_BOX(row), create_read_line());
 	if (message->kind == MESSAGE_EVENT || message->kind == MESSAGE_STATUS) {
-		add_note(row, message);
+		add_note(row, message, place->notes);
 		return;
 	}
 	RowContext *context = g_new0(RowContext, 1);
 	context->message = g_object_ref(message);
 	context->actions = actions;
 	g_object_set_data_full(G_OBJECT(row), "context", context, free_context);
-	gboolean is_first = starts_group(message, previous);
+	/* The new messages start a group of their own, so the first one shows who wrote it again */
+	gboolean is_first = starts_message_group(message, previous, starts_unread);
 	if (is_first)
 		gtk_widget_add_css_class(row, "group-start");
 	else
 		gtk_widget_remove_css_class(row, "group-start");
-	gtk_box_append(GTK_BOX(row), create_message_line(message, room, is_first, context));
+	GtkWidget *line = create_message_line(message, room, is_first, context);
+	g_object_set_data(G_OBJECT(row), AVATAR_SLOT_KEY, g_object_get_data(G_OBJECT(line), AVATAR_SLOT_KEY));
+	gtk_box_append(GTK_BOX(row), line);
+	/* Only a group's last bubble rounds its lower corner on the avatar's side */
+	if (place->ends_group)
+		gtk_widget_add_css_class(context->bubble, "group-end");
+}
+
+
+GtkWidget *find_avatar_slot(GtkWidget *row) {
+	return g_object_get_data(G_OBJECT(row), AVATAR_SLOT_KEY);
+}
+
+
+void refresh_day_heading(GtkWidget *row) {
+	GtkWidget *pill = g_object_get_data(G_OBJECT(row), DAY_PILL_KEY);
+	const gint64 *time = pill ? g_object_get_data(G_OBJECT(pill), DAY_TIME_KEY) : NULL;
+	if (!time)
+		return;
+	g_autofree char *day = format_day_heading(*time);
+	gtk_label_set_text(GTK_LABEL(pill), day);
+}
+
+
+gboolean is_group_start(GtkWidget *row) {
+	return gtk_widget_has_css_class(row, "group-start");
 }

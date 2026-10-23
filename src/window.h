@@ -73,6 +73,8 @@ void show_after_wait(GtkWidget *widget, GCallback shown, gpointer data);
 GtkWidget *create_spinner(void);
 /* Hides the window in the tray when there is one, so the chats stay connected */
 void hide_window(Window *window);
+/* Takes the window and tray icon away at once as the program quits */
+void withdraw_window(Window *window);
 gboolean is_room_in_view(Window *window, CrimsonRoom *room);
 /* Chooses the server from the last run, once the chats from the last run are back */
 void restore_window_choice(Window *window);
@@ -98,8 +100,6 @@ void show_room_list_banner(RoomList *list, AccountBanner banner, const char *net
 GtkWidget *get_room_list_header(RoomList *list);
 void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
-/* Lets the room list follow whether the window has focus, for its + button */
-void watch_room_list_focus(RoomList *list, GtkWidget *window);
 /* What the chat list's corner says about a connection that is down, and what clicking it does */
 typedef struct {
 	const char *message;

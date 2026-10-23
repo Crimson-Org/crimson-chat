@@ -121,6 +121,14 @@ typedef struct {
 	gpointer registration_data;
 	char *registering_account, *registering_password, *code_command;
 	gboolean is_nickserv_registration;
+	/* Who the user last sent something to and when, since only a refusal of that is the user's to hear about */
+	char *user_target;
+	gint64 user_target_time;
+	/* People and rooms the server said it cannot reach, by folded name, to the moment requests the app makes on its
+	 * own may try them again */
+	GHashTable *refused_targets;
+	/* Recent WHOIS answers by folded nick, so opening a profile again soon asks the server nothing */
+	GHashTable *profiles;
 } NetworkWork;
 
 /* Frees what a network collects while a history batch arrives */
@@ -141,6 +149,12 @@ void save_chat_accounts(Chat *chat);
 /* Saves the room list soon, so many changes in a row write the file once */
 void save_chat_cache_later(Chat *chat);
 NetworkWork *get_network_work(CrimsonNetwork *network);
+/* Remembers what the user just sent something to */
+void note_user_target(CrimsonNetwork *network, const char *target);
+/* Notes that the server cannot reach a person or room, and says whether the user had just sent them something */
+gboolean refuse_target(CrimsonNetwork *network, const char *target);
+/* Whether requests the app makes on its own, such as typing notices, should leave a target alone for now */
+gboolean is_target_refused(CrimsonNetwork *network, const char *target);
 /* The one bouncer the user is connected to, if any */
 Session *find_bouncer(Chat *chat);
 /* Asks the server for its channels, the busy ones only when it can filter them */

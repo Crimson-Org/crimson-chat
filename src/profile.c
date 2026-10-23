@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "dialogs.h"
 #include "formatting.h"
 #include "images.h"
 #include "profile.h"
@@ -24,6 +25,8 @@ typedef struct {
 	GtkWidget *stack, *rows, *realname;
 	/* The name shown large, the nick and pronouns under it, the status the person set and whether it is a bot */
 	GtkWidget *name, *identity, *status, *bot;
+	/* The services account the person is logged into, small under the real name */
+	GtkWidget *account;
 	char *nick;
 } ProfileView;
 
@@ -76,9 +79,7 @@ static void add_row(ProfileView *view, const char *title, const char *value) {
 
 /* A homepage opens in the browser from its row */
 static void open_homepage(GtkButton *button, ProfileView *view) {
-	const char *url = g_object_get_data(G_OBJECT(button), "url");
-	g_autoptr(GtkUriLauncher) launcher = gtk_uri_launcher_new(url);
-	gtk_uri_launcher_launch(launcher, GTK_WINDOW(view->window->window), NULL, NULL, NULL);
+	confirm_open_link(GTK_WIDGET(button), g_object_get_data(G_OBJECT(button), "url"));
 }
 
 
@@ -124,6 +125,22 @@ static void fill_person_metadata(ProfileView *view) {
 }
 
 
+static GtkWidget *create_account_line(void) {
+	GtkWidget *line = gtk_label_new(NULL);
+	gtk_widget_add_css_class(line, "dim-label");
+	gtk_widget_add_css_class(line, "caption");
+	gtk_widget_set_visible(line, FALSE);
+	return line;
+}
+
+
+static void show_account_line(GtkWidget *line, const char *account) {
+	g_autofree char *text = account && *account ? g_strdup_printf(TEXT_LOGGED_IN_AS, account) : NULL;
+	gtk_label_set_text(GTK_LABEL(line), text ? text : "");
+	gtk_widget_set_visible(line, text != NULL);
+}
+
+
 static void show_details(Profile *profile, gpointer data) {
 	ProfileView *view = data;
 	if (!profile) {
@@ -140,8 +157,8 @@ static void show_details(Profile *profile, gpointer data) {
 	gboolean has_name = profile->realname && g_ascii_strcasecmp(profile->realname, profile->nick) != 0;
 	gtk_label_set_text(GTK_LABEL(view->realname), has_name ? profile->realname : "");
 	gtk_widget_set_visible(view->realname, has_name);
+	show_account_line(view->account, profile->account);
 	add_row(view, TEXT_PROFILE_AWAY, profile->away);
-	add_row(view, TEXT_PROFILE_ACCOUNT, profile->account);
 	g_autofree char *idle = profile->idle_seconds > 0 || profile->server ? describe_idle(profile->idle_seconds) : NULL;
 	add_row(view, TEXT_PROFILE_IDLE, idle);
 	g_autofree char *rooms = list_rooms(profile->channels);
@@ -206,6 +223,8 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	gtk_label_set_wrap(GTK_LABEL(view->realname), TRUE);
 	gtk_widget_add_css_class(view->realname, "dim-label");
 	gtk_box_append(GTK_BOX(box), view->realname);
+	view->account = create_account_line();
+	gtk_box_append(GTK_BOX(box), view->account);
 	GtkWidget *message = gtk_button_new_with_label(TEXT_SEND_MESSAGE);
 	gtk_widget_add_css_class(message, "pill");
 	gtk_widget_add_css_class(message, "suggested-action");
@@ -247,9 +266,11 @@ typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
 	AdwDialog *dialog;
-	GtkWidget *avatar, *nick, *display_name, *realname, *picture, *account, *password;
+	GtkWidget *avatar, *nick, *display_name, *realname, *account, *password;
 	/* What the fields held when the dialog opened, so only changes are sent */
 	char *old_nick, *old_display_name, *old_realname, *old_picture, *old_account, *old_password;
+	/* The picture address given through the avatar, sent on saving */
+	char *picture;
 	/* The registry's status, pronouns and homepage keys, and what they held when the dialog opened */
 	GtkWidget *status, *pronouns, *homepage;
 	char *old_status, *old_pronouns, *old_homepage;
@@ -311,6 +332,7 @@ static void free_own_profile(OwnProfile *own) {
 	g_free(own->old_display_name);
 	g_free(own->old_realname);
 	g_free(own->old_picture);
+	g_free(own->picture);
 	g_free(own->old_status);
 	g_free(own->old_pronouns);
 	g_free(own->old_homepage);
@@ -335,27 +357,32 @@ static gboolean is_room_operator(IrcState *state, IrcChannel *channel) {
 }
 
 
+/* Tells the row or avatar an upload started from how it goes, with neither address nor problem while it travels */
+typedef void (*ShowUpload)(GtkWidget *widget, const char *url, const char *problem);
+
+
 /* Where an uploaded picture is going, kept while the file dialog is open and the picture travels */
 typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
 	char *target;
-	GtkWidget *row;
+	GtkWidget *widget;
+	ShowUpload show;
 } PictureUpload;
 
 
 static void free_picture_upload(PictureUpload *upload) {
 	g_object_unref(upload->network);
 	g_free(upload->target);
-	g_clear_object(&upload->row);
+	g_clear_object(&upload->widget);
 	g_free(upload);
 }
 
 
 static void finish_picture_upload(const char *url, const char *problem, gpointer data) {
 	PictureUpload *upload = data;
-	gtk_widget_set_sensitive(upload->row, TRUE);
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(upload->row), problem ? problem : TEXT_UPLOAD_PICTURE_ABOUT);
+	gtk_widget_set_sensitive(upload->widget, TRUE);
+	upload->show(upload->widget, url, problem);
 	if (url && g_str_equal(upload->target, "*")) {
 		/* The address is kept like a typed one, so the app sets it again on each connection */
 		save_profile_value(upload->network->key, "avatar", url);
@@ -372,16 +399,16 @@ static void finish_choosing_upload(GObject *source, GAsyncResult *result, gpoint
 		free_picture_upload(upload);
 		return;
 	}
-	gtk_widget_set_sensitive(upload->row, FALSE);
-	adw_action_row_set_subtitle(ADW_ACTION_ROW(upload->row), TEXT_UPLOADING_PICTURE);
+	gtk_widget_set_sensitive(upload->widget, FALSE);
+	upload->show(upload->widget, NULL, NULL);
 	upload_avatar(upload->network, upload->target, file, finish_picture_upload, upload);
 }
 
 
-static void choose_upload(GtkWidget *row, PictureUpload *template) {
+static void choose_upload(Window *window, CrimsonNetwork *network, const char *target, GtkWidget *widget,
+	ShowUpload show) {
 	PictureUpload *upload = g_new0(PictureUpload, 1);
-	*upload = (PictureUpload){template->window, g_object_ref(template->network), g_strdup(template->target),
-		g_object_ref(row)};
+	*upload = (PictureUpload){window, g_object_ref(network), g_strdup(target), g_object_ref(widget), show};
 	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
 	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_PICTURE_TITLE);
 	g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
@@ -397,6 +424,17 @@ static void choose_upload(GtkWidget *row, PictureUpload *template) {
 }
 
 
+static void show_row_upload(GtkWidget *row, const char *url, const char *problem) {
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), problem ? problem
+		: url ? TEXT_UPLOAD_PICTURE_ABOUT : TEXT_UPLOADING_PICTURE);
+}
+
+
+static void choose_row_upload(GtkWidget *row, PictureUpload *template) {
+	choose_upload(template->window, template->network, template->target, row, show_row_upload);
+}
+
+
 /* A row that sends a picture to the bouncer, for the user with "*" or for a room */
 GtkWidget *create_upload_row(Window *window, CrimsonNetwork *network, const char *target) {
 	GtkWidget *row = adw_action_row_new();
@@ -408,10 +446,10 @@ GtkWidget *create_upload_row(Window *window, CrimsonNetwork *network, const char
 	adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
 	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
 	PictureUpload *template = g_new0(PictureUpload, 1);
-	*template = (PictureUpload){window, g_object_ref(network), g_strdup(target), NULL};
+	*template = (PictureUpload){window, g_object_ref(network), g_strdup(target), NULL, NULL};
 	g_object_set_data_full(G_OBJECT(row), "upload", template, (GDestroyNotify)free_picture_upload);
 	g_signal_connect_swapped(button, "clicked", G_CALLBACK(gtk_widget_activate), row);
-	g_signal_connect(row, "activated", G_CALLBACK(choose_upload), template);
+	g_signal_connect(row, "activated", G_CALLBACK(choose_row_upload), template);
 	return row;
 }
 
@@ -429,6 +467,31 @@ static void set_metadata(CrimsonNetwork *network, const char *key, const char *v
 }
 
 
+/* The big name shows the nickname while no display name is set, so showing a nickname there means having none */
+static const char *read_display_name(OwnProfile *own) {
+	const char *shown = read_field(own->display_name);
+	gboolean is_nick = g_strcmp0(shown, own->old_nick) == 0 || g_strcmp0(shown, read_field(own->nick)) == 0;
+	return is_nick ? "" : shown;
+}
+
+
+static void finish_reconnect_question(AdwAlertDialog *alert, const char *response, CrimsonNetwork *network) {
+	if (g_strcmp0(response, "reconnect") == 0)
+		reconnect_network(network);
+}
+
+
+static void ask_to_reconnect(Window *window, CrimsonNetwork *network) {
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_RECONNECT_NEEDED, TEXT_RECONNECT_NEEDED_BODY);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "later", TEXT_LATER, "reconnect", TEXT_RECONNECT, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "reconnect", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "reconnect");
+	adw_alert_dialog_set_close_response(ADW_ALERT_DIALOG(alert), "later");
+	g_signal_connect_object(alert, "response", G_CALLBACK(finish_reconnect_question), network, G_CONNECT_DEFAULT);
+	adw_dialog_present(alert, GTK_WIDGET(window->window));
+}
+
+
 static void save_own_profile(GtkButton *button, OwnProfile *own) {
 	CrimsonNetwork *network = own->network;
 	AccountRecord *record = network->session->record;
@@ -440,42 +503,53 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 			record->nick = g_strdup(read_field(own->nick));
 		}
 	}
-	if (network->client && has_changed(own->realname, own->old_realname)) {
-		send_irc_client_command(network->client, "SETNAME", read_field(own->realname), NULL);
-		if (is_direct) {
-			g_free(record->realname);
-			record->realname = g_strdup(read_field(own->realname));
-		}
+	/* A server without SETNAME only takes a new real name when the app connects again */
+	gboolean has_new_realname = has_changed(own->realname, own->old_realname);
+	gboolean can_rename = can_network(network, "setname");
+	if (has_new_realname && is_direct) {
+		if (network->client && can_rename)
+			send_irc_client_command(network->client, "SETNAME", read_field(own->realname), NULL);
+		g_free(record->realname);
+		record->realname = g_strdup(read_field(own->realname));
 	}
-	if (network->client && has_changed(own->display_name, own->old_display_name))
-		set_metadata(network, "display-name", read_field(own->display_name));
-	if (network->client && has_changed(own->picture, own->old_picture))
-		set_metadata(network, "avatar", read_field(own->picture));
 	/* Each profile key is kept, so the app sets it again on every connection */
 	const struct {
 		GtkWidget *row;
-		const char *old, *key;
+		const char *value, *old, *key;
 	} FIELDS[] = {
-		{own->display_name, own->old_display_name, "display-name"}, {own->picture, own->old_picture, "avatar"},
-		{own->status, own->old_status, "status"}, {own->pronouns, own->old_pronouns, "pronouns"},
-		{own->homepage, own->old_homepage, "homepage"},
+		{own->display_name, read_display_name(own), own->old_display_name, "display-name"},
+		{own->status, read_field(own->status), own->old_status, "status"},
+		{own->pronouns, read_field(own->pronouns), own->old_pronouns, "pronouns"},
+		{own->homepage, read_field(own->homepage), own->old_homepage, "homepage"},
 	};
 	for (guint index = 0; index < G_N_ELEMENTS(FIELDS); index++) {
 		if (!FIELDS[index].row)
 			continue;
-		if (network->client && index >= 2 && has_changed(FIELDS[index].row, FIELDS[index].old))
-			set_metadata(network, FIELDS[index].key, read_field(FIELDS[index].row));
-		save_profile_value(network->key, FIELDS[index].key, read_field(FIELDS[index].row));
+		const char *old = FIELDS[index].old ? FIELDS[index].old : "";
+		if (network->client && g_strcmp0(FIELDS[index].value, old) != 0)
+			set_metadata(network, FIELDS[index].key, FIELDS[index].value);
+		save_profile_value(network->key, FIELDS[index].key, FIELDS[index].value);
+	}
+	/* An uploaded picture is set by the bouncer, so only a given address is sent from here */
+	if (g_strcmp0(own->picture, own->old_picture ? own->old_picture : "") != 0) {
+		if (network->client)
+			set_metadata(network, "avatar", own->picture);
+		save_profile_value(network->key, "avatar", own->picture);
 	}
 	/* A new login only counts on the next connection, so changing it reconnects */
 	gboolean has_new_login = has_changed(own->account, own->old_account)
 		|| g_strcmp0(read_password(own), own->old_password ? own->old_password : "") != 0;
-	if (has_new_login && !is_direct) {
+	/* The bouncer keeps the real name for its own connections and passes it on to a network with SETNAME */
+	if (!is_direct) {
 		g_autoptr(GHashTable) attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
-		g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(read_field(own->account)));
-		if (*read_password(own))
+		if (has_new_login)
+			g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(read_field(own->account)));
+		if (has_new_login && *read_password(own))
 			g_hash_table_insert(attributes, g_strdup("sasl-password"), g_strdup(read_password(own)));
-		change_bouncer_network(network, attributes);
+		if (has_new_realname)
+			g_hash_table_insert(attributes, g_strdup("realname"), g_strdup(read_field(own->realname)));
+		if (g_hash_table_size(attributes))
+			change_bouncer_network(network, attributes);
 	} else if (has_new_login) {
 		AccountRecord *changed = copy_account_record(record);
 		g_free(changed->sasl_username);
@@ -487,7 +561,11 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 	} else if (is_direct) {
 		save_chat_accounts(network->session->chat);
 	}
+	Window *window = own->window;
 	adw_dialog_close(own->dialog);
+	/* A new login reconnects anyway, which brings the real name along */
+	if (has_new_realname && !can_rename && !has_new_login)
+		ask_to_reconnect(window, network);
 }
 
 
@@ -501,14 +579,42 @@ static void refresh_own_field(GtkWidget *row, char **old, const char *current) {
 }
 
 
+static void show_own_picture(OwnProfile *own) {
+	g_autofree char *sized = fill_image_size(*own->picture ? own->picture : NULL, PROFILE_AVATAR_SIZE * 2);
+	show_avatar_image(ADW_AVATAR(own->avatar), sized);
+}
+
+
+/* The picture the server announces shows unless the user gave another address since the dialog opened */
+static void refresh_own_picture(OwnProfile *own, const char *current) {
+	if (!current || g_strcmp0(current, own->old_picture) == 0
+		|| g_strcmp0(own->picture, own->old_picture ? own->old_picture : "") != 0)
+		return;
+	g_free(own->old_picture);
+	own->old_picture = g_strdup(current);
+	g_free(own->picture);
+	own->picture = g_strdup(current);
+	show_own_picture(own);
+}
+
+
+static void refresh_display_name(OwnProfile *own, const char *current) {
+	const char *old = own->old_display_name ? own->old_display_name : "";
+	if (!own->display_name || !current || g_strcmp0(current, old) == 0 || g_strcmp0(read_display_name(own), old) != 0)
+		return;
+	g_free(own->old_display_name);
+	own->old_display_name = g_strdup(current);
+	gtk_editable_set_text(GTK_EDITABLE(own->display_name), *current ? current : read_field(own->nick));
+}
+
+
 static void refresh_own_profile(CrimsonNetwork *network, AdwDialog *dialog) {
 	OwnProfile *own = g_object_get_data(G_OBJECT(dialog), "own");
 	IrcState *state = get_network_state(network);
 	if (!own || !state || !state->nick)
 		return;
-	refresh_own_field(own->display_name, &own->old_display_name, find_metadata(network->server_room, state->nick,
-		"display-name"));
-	refresh_own_field(own->picture, &own->old_picture, find_metadata(network->server_room, state->nick, "avatar"));
+	refresh_display_name(own, find_metadata(network->server_room, state->nick, "display-name"));
+	refresh_own_picture(own, find_metadata(network->server_room, state->nick, "avatar"));
 	refresh_own_field(own->status, &own->old_status, find_metadata(network->server_room, state->nick, "status"));
 	refresh_own_field(own->pronouns, &own->old_pronouns, find_metadata(network->server_room, state->nick,
 		"pronouns"));
@@ -517,33 +623,128 @@ static void refresh_own_profile(CrimsonNetwork *network, AdwDialog *dialog) {
 }
 
 
-static void preview_picture(GtkEditable *editable, OwnProfile *own) {
-	const char *url = gtk_editable_get_text(editable);
-	g_autofree char *sized = fill_image_size(*url ? url : NULL, PROFILE_AVATAR_SIZE * 2);
-	show_avatar_image(ADW_AVATAR(own->avatar), sized);
+static void show_avatar_upload(GtkWidget *avatar, const char *url, const char *problem) {
+	if (!url)
+		return;
+	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
+	show_avatar_image(ADW_AVATAR(avatar), sized);
+}
+
+
+static void finish_picture_address(AdwAlertDialog *alert, const char *response, AdwDialog *dialog) {
+	OwnProfile *own = g_object_get_data(G_OBJECT(dialog), "own");
+	if (g_strcmp0(response, "use") != 0 || !own)
+		return;
+	GtkWidget *entry = adw_alert_dialog_get_extra_child(alert);
+	g_free(own->picture);
+	own->picture = g_strstrip(g_strdup(gtk_editable_get_text(GTK_EDITABLE(entry))));
+	show_own_picture(own);
+}
+
+
+/* Servers keep only an address for a picture, so without a bouncer to send one to the user gives its address */
+static void ask_picture_address(OwnProfile *own) {
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_PICTURE_ADDRESS, TEXT_PICTURE_ADDRESS_ABOUT);
+	GtkWidget *entry = gtk_entry_new();
+	gtk_editable_set_text(GTK_EDITABLE(entry), own->picture);
+	gtk_entry_set_input_purpose(GTK_ENTRY(entry), GTK_INPUT_PURPOSE_URL);
+	gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), entry);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "use", TEXT_USE, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "use", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "use");
+	g_signal_connect_object(alert, "response", G_CALLBACK(finish_picture_address), own->dialog, G_CONNECT_DEFAULT);
+	adw_dialog_present(alert, GTK_WIDGET(own->window->window));
+	gtk_widget_grab_focus(entry);
+}
+
+
+/* A bouncer that takes uploads gets a picture from the computer, and any other server an address */
+static void change_own_picture(OwnProfile *own) {
+	g_autofree char *upload_url = find_avatar_upload_url(own->network);
+	if (upload_url)
+		choose_upload(own->window, own->network, "*", own->avatar, show_avatar_upload);
+	else
+		ask_picture_address(own);
 }
 
 
 static void preview_name(GtkEditable *editable, OwnProfile *own) {
 	adw_avatar_set_text(ADW_AVATAR(own->avatar), gtk_editable_get_text(editable));
+	if (own->display_name && !*read_display_name(own))
+		gtk_editable_set_text(GTK_EDITABLE(own->display_name), gtk_editable_get_text(editable));
 }
 
 
-/* A field the server supports can be edited, and one it does not support says so instead */
-static GtkWidget *add_field(GtkWidget *list, const char *title, const char *value, gboolean is_supported) {
-	if (!is_supported) {
-		GtkWidget *row = adw_action_row_new();
-		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-		adw_action_row_set_subtitle(ADW_ACTION_ROW(row), TEXT_NOT_SUPPORTED);
-		gtk_widget_set_sensitive(row, FALSE);
-		gtk_list_box_append(GTK_LIST_BOX(list), row);
-		return NULL;
-	}
+static void start_editing_name(GtkEditableLabel *name) {
+	gtk_editable_label_start_editing(name);
+	gtk_widget_grab_focus(GTK_WIDGET(name));
+}
+
+
+/* The name's text box asks for room for many letters by default, which would leave a gap beside a short name */
+static void fit_name_width(GtkEditable *name) {
+	gtk_editable_set_width_chars(name, MAX(1, (int)g_utf8_strlen(gtk_editable_get_text(name), -1)));
+}
+
+
+/* The name chats show the user by, large, with a pen beside it while pointed at that edits it in place */
+static GtkWidget *create_name_editor(GtkWidget **name, const char *text) {
+	*name = gtk_editable_label_new(text);
+	gtk_widget_add_css_class(*name, "title-1");
+	fit_name_width(GTK_EDITABLE(*name));
+	g_signal_connect(*name, "changed", G_CALLBACK(fit_name_width), NULL);
+	GtkWidget *pen = gtk_button_new_from_icon_name("document-edit-symbolic");
+	gtk_widget_add_css_class(pen, "flat");
+	gtk_widget_add_css_class(pen, "circular");
+	gtk_widget_add_css_class(pen, "name-pen");
+	gtk_widget_set_valign(pen, GTK_ALIGN_CENTER);
+	gtk_widget_set_tooltip_text(pen, TEXT_CHANGE_NAME);
+	g_signal_connect_swapped(pen, "clicked", G_CALLBACK(start_editing_name), *name);
+	/* An empty space as wide as the pen on the other side keeps the name itself in the middle */
+	GtkWidget *balance = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	GtkSizeGroup *widths = gtk_size_group_new(GTK_SIZE_GROUP_HORIZONTAL);
+	gtk_size_group_add_widget(widths, balance);
+	gtk_size_group_add_widget(widths, pen);
+	g_object_unref(widths);
+	GtkWidget *editor = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_widget_add_css_class(editor, "name-editor");
+	gtk_widget_set_halign(editor, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(editor), balance);
+	gtk_box_append(GTK_BOX(editor), *name);
+	gtk_box_append(GTK_BOX(editor), pen);
+	return editor;
+}
+
+
+static GtkWidget *add_field(GtkWidget *list, const char *title, const char *value) {
 	GtkWidget *row = adw_entry_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
 	gtk_editable_set_text(GTK_EDITABLE(row), value ? value : "");
 	gtk_list_box_append(GTK_LIST_BOX(list), row);
 	return row;
+}
+
+
+/* What the server does not support is left out, and a dim line under the list says so with a button naming it */
+static GtkWidget *create_unsupported_note(GPtrArray *missing) {
+	g_autoptr(GString) names = g_string_new(NULL);
+	for (guint index = 0; index < missing->len; index++) {
+		const char *joiner = index == 0 ? "" : index + 1 == missing->len ? TEXT_LIST_LAST : ", ";
+		g_string_append_printf(names, "%s%s", joiner, (const char *)missing->pdata[index]);
+	}
+	g_autofree char *help = g_strdup_printf(TEXT_UNSUPPORTED_FIELDS, names->str);
+	GtkWidget *note = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+	gtk_widget_set_halign(note, GTK_ALIGN_CENTER);
+	GtkWidget *label = gtk_label_new(TEXT_SOME_UNSUPPORTED);
+	gtk_widget_add_css_class(label, "dim-label");
+	gtk_box_append(GTK_BOX(note), label);
+	GtkWidget *button = create_help_button(help);
+	gtk_widget_add_css_class(button, "flat");
+	gtk_widget_add_css_class(button, "circular");
+	gtk_widget_add_css_class(button, "dim-label");
+	gtk_box_append(GTK_BOX(note), button);
+	return note;
 }
 
 
@@ -565,6 +766,7 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	own->old_nick = g_strdup(nick);
 	own->old_display_name = read_own_value(network, nick, "display-name");
 	own->old_picture = read_own_value(network, nick, "avatar");
+	own->picture = g_strdup(own->old_picture ? own->old_picture : "");
 	own->old_status = read_own_value(network, nick, "status");
 	own->old_pronouns = read_own_value(network, nick, "pronouns");
 	own->old_homepage = read_own_value(network, nick, "homepage");
@@ -581,31 +783,57 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_add_css_class(box, "profile");
 	own->avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, nick, TRUE);
-	gtk_widget_set_halign(own->avatar, GTK_ALIGN_CENTER);
-	g_autofree char *sized = fill_image_size(own->old_picture, PROFILE_AVATAR_SIZE * 2);
-	show_avatar_image(ADW_AVATAR(own->avatar), sized);
-	gtk_box_append(GTK_BOX(box), own->avatar);
+	show_own_picture(own);
+	GtkWidget *picture = has_metadata ? offer_picture_change(own->avatar, G_CALLBACK(change_own_picture), own)
+		: own->avatar;
+	gtk_widget_set_halign(picture, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), picture);
+	/* Chats show the display name where the server has them, and the nickname otherwise, as the big name does */
 	GtkWidget *list = gtk_list_box_new();
 	gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
 	gtk_widget_add_css_class(list, "boxed-list");
-	own->nick = add_field(list, TEXT_NICKNAME, nick, TRUE);
+	if (has_metadata) {
+		const char *shown = own->old_display_name && *own->old_display_name ? own->old_display_name : nick;
+		gtk_box_append(GTK_BOX(box), create_name_editor(&own->display_name, shown));
+		own->nick = add_field(list, TEXT_NICKNAME, nick);
+	} else {
+		gtk_box_append(GTK_BOX(box), create_name_editor(&own->nick, nick));
+	}
 	capitalize_nick_field(own->nick);
 	g_signal_connect(own->nick, "changed", G_CALLBACK(preview_name), own);
-	own->display_name = add_field(list, TEXT_DISPLAY_NAME, own->old_display_name, has_metadata);
-	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname, can_network(network, "setname"));
-	own->status = add_field(list, TEXT_STATUS, own->old_status, has_metadata);
-	own->pronouns = add_field(list, TEXT_PRONOUNS, own->old_pronouns, has_metadata);
-	own->homepage = add_field(list, TEXT_HOMEPAGE, own->old_homepage, has_metadata);
-	/* A bouncer that takes uploads replaces the address with a button that sends a picture from the computer */
-	g_autofree char *upload_url = has_metadata ? find_avatar_upload_url(network) : NULL;
-	if (upload_url) {
-		gtk_list_box_append(GTK_LIST_BOX(list), create_upload_row(window, network, "*"));
-	} else {
-		own->picture = add_field(list, TEXT_PICTURE_ADDRESS, own->old_picture, has_metadata);
-		if (own->picture)
-			g_signal_connect(own->picture, "changed", G_CALLBACK(preview_picture), own);
+	/* The real name and the account logged into sit small under the name, as on anyone's profile */
+	if (own->old_realname && nick && g_ascii_strcasecmp(own->old_realname, nick) != 0) {
+		GtkWidget *realname_line = gtk_label_new(own->old_realname);
+		gtk_label_set_wrap(GTK_LABEL(realname_line), TRUE);
+		gtk_widget_add_css_class(realname_line, "dim-label");
+		gtk_box_append(GTK_BOX(box), realname_line);
 	}
+	GtkWidget *account_line = create_account_line();
+	show_account_line(account_line, state ? state->account : NULL);
+	gtk_box_append(GTK_BOX(box), account_line);
+	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname);
+	const struct {
+		GtkWidget **row;
+		const char *title, *value;
+		gboolean is_supported;
+	} OPTIONAL_FIELDS[] = {
+		{&own->status, TEXT_STATUS, own->old_status, has_metadata},
+		{&own->pronouns, TEXT_PRONOUNS, own->old_pronouns, has_metadata},
+		{&own->homepage, TEXT_HOMEPAGE, own->old_homepage, has_metadata},
+	};
+	g_autoptr(GPtrArray) missing = g_ptr_array_new();
+	for (guint index = 0; index < G_N_ELEMENTS(OPTIONAL_FIELDS); index++) {
+		if (OPTIONAL_FIELDS[index].is_supported)
+			*OPTIONAL_FIELDS[index].row = add_field(list, OPTIONAL_FIELDS[index].title, OPTIONAL_FIELDS[index].value);
+		else
+			g_ptr_array_add(missing, (gpointer)OPTIONAL_FIELDS[index].title);
+	}
+	/* Pictures travel as a profile key too, so a server without the registry has no pictures either */
+	if (!has_metadata)
+		g_ptr_array_add(missing, TEXT_PICTURE);
 	gtk_box_append(GTK_BOX(box), list);
+	if (missing->len)
+		gtk_box_append(GTK_BOX(box), create_unsupported_note(missing));
 	/* The login to the server's account services, which a bouncer keeps without sending the password back */
 	GtkWidget *login_title = gtk_label_new(TEXT_SASL_LOGIN);
 	gtk_label_set_xalign(GTK_LABEL(login_title), 0);
@@ -619,7 +847,7 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	own->old_account = g_strdup(network->bouncer_id ? g_hash_table_lookup(network->attributes, "sasl-username")
 		: record->sasl_username);
 	own->old_password = g_strdup(network->bouncer_id ? NULL : record->sasl_password);
-	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account, TRUE);
+	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account);
 	/* Asked to log in for a registered nickname, the account is most likely named after it */
 	const char *wanted = network->bouncer_id ? g_hash_table_lookup(network->attributes, "nickname") : record->nick;
 	if (network->wants_login && (!own->old_account || !*own->old_account) && wanted)
@@ -709,6 +937,7 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		g_autofree char *markup = format_irc_markup(lines);
 		GtkWidget *text = gtk_label_new(NULL);
 		gtk_label_set_markup(GTK_LABEL(text), markup);
+		ask_before_label_links(text);
 		gtk_label_set_wrap(GTK_LABEL(text), TRUE);
 		gtk_label_set_justify(GTK_LABEL(text), GTK_JUSTIFY_CENTER);
 		gtk_widget_set_margin_top(text, 6);

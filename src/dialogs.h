@@ -12,3 +12,7 @@ void confirm_network_removal(Window *window, CrimsonNetwork *network);
 /* Forgets the bouncer login, leaving its servers on the bouncer */
 void confirm_bouncer_disconnect(Window *window, Session *session);
 void forget_network_in_window(Window *window, CrimsonNetwork *network);
+/* Every link the user clicks shows its address and opens in the browser only once they agree */
+void confirm_open_link(GtkWidget *source, const char *url);
+/* Makes the links in a label with markup ask first */
+void ask_before_label_links(GtkWidget *label);

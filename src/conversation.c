@@ -7,6 +7,7 @@
 #include "images.h"
 #include "message-row.h"
 #include "room-look.h"
+#include "sounds.h"
 #include "window.h"
 #include "pictures.h"
 
@@ -19,10 +20,23 @@
 #define MEMBERS_WIDTH 260
 #define MESSAGE_KEY "message"
 #define HANDLER_KEY "changed-handler"
+/* How far below the top of the chat the avatar of the person being read stays */
+#define STICKY_AVATAR_MARGIN 8
+/* How far in from the side the avatars of who types in a busy room sit, how many show and how far each lies over
+ * the one before, how much of them rises into view and how fast they bob */
+#define TYPING_FACES_MARGIN 16
+#define TYPING_FACES_COUNT 3
+#define TYPING_FACES_OVERLAP 12
+#define TYPING_FACES_SHOWN 0.5
+#define TYPING_RISE_MS 260
+/* Rooms with more people than the user and one other show typing with avatars rather than only the header */
+#define TYPING_FACES_MEMBERS 3
 
 struct Conversation {
 	Window *window;
-	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller, *jump_button;
+	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller;
+	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
+	GtkWidget *jump_button, *jump_icons, *jump_count;
 	/* A still image of the chat that is leaving, which slides away while the real view already holds the next */
 	GtkWidget *still;
 	/* A narrow window slides whole pages itself, so the chat view does not slide on top of that */
@@ -30,6 +44,9 @@ struct Conversation {
 	GtkWidget *member_view, *empty_note, *members_title;
 	GtkStringList *members;
 	GtkNoSelection *messages;
+	/* The room's messages without the joins and leaves the setting hides, which are kept to show again */
+	GtkFilterListModel *shown_messages;
+	gboolean shows_events;
 	Composer *composer;
 	CrimsonRoom *room;
 	gulong room_handler;
@@ -40,6 +57,20 @@ struct Conversation {
 	guint member_source;
 	/* Asks the server every couple of minutes when the person in a private chat was last active */
 	guint activity_source;
+	/* The avatar of the person whose messages are read at the top, kept in view while the first row of their group
+	 * has scrolled away, with that row's own avatar hidden so the two never show at once */
+	GtkWidget *message_overlay, *sticky_avatar, *hidden_avatar;
+	char *sticky_nick, *wanted_nick;
+	guint sticky_source;
+	/* The last moment read when new messages started coming in unseen, which a line in the chat marks until the
+	 * user leaves the room */
+	gint64 read_line;
+	gboolean has_read_line, was_unread;
+	/* The avatars of who types in a busy room, partly out of sight at the bottom and rising while they type */
+	GtkWidget *typing_faces;
+	AdwAnimation *typing_animation;
+	double typing_rise;
+	gboolean shows_typing_faces;
 	MessageActions actions;
 };
 
@@ -111,12 +142,54 @@ static void jump_down(GtkButton *button, Conversation *conversation) {
 }
 
 
-static CrimsonMessage *get_previous_message(Conversation *conversation, guint position) {
-	if (!position)
-		return NULL;
-	CrimsonMessage *previous = g_list_model_get_item(G_LIST_MODEL(conversation->messages), position - 1);
-	g_object_unref(previous);
-	return previous;
+/* The model keeps its messages, so the borrowed one stays valid while the list holds it */
+static CrimsonMessage *get_message_at(Conversation *conversation, guint position) {
+	CrimsonMessage *message = g_list_model_get_item(G_LIST_MODEL(conversation->messages), position);
+	if (message)
+		g_object_unref(message);
+	return message;
+}
+
+
+static gboolean starts_unread(Conversation *conversation, CrimsonMessage *message, CrimsonMessage *previous) {
+	gint64 line = conversation->read_line;
+	return conversation->has_read_line && message->time > line && (!previous || previous->time <= line);
+}
+
+
+static gboolean ends_group_at(Conversation *conversation, guint position, CrimsonMessage *message) {
+	CrimsonMessage *next = get_message_at(conversation, position + 1);
+	return !next || starts_message_group(next, message, starts_unread(conversation, next, message));
+}
+
+
+/* The first event of a run gathers the events below it, one per line */
+static char *gather_notes(Conversation *conversation, guint position, CrimsonMessage *message) {
+	GString *notes = g_string_new(NULL);
+	CrimsonMessage *current = message;
+	for (guint index = position;; index++) {
+		g_autofree char *plain = strip_irc_formatting(current->text);
+		g_string_append_printf(notes, "%s%s", notes->len ? "\n" : "", plain);
+		CrimsonMessage *next = get_message_at(conversation, index + 1);
+		if (!next || !continues_note_run(next, current, starts_unread(conversation, next, current)))
+			break;
+		current = next;
+	}
+	return g_string_free(notes, FALSE);
+}
+
+
+static void fill_row(Conversation *conversation, GtkListItem *item) {
+	CrimsonMessage *message = gtk_list_item_get_item(item);
+	guint position = gtk_list_item_get_position(item);
+	CrimsonMessage *previous = position ? get_message_at(conversation, position - 1) : NULL;
+	RowPlace place = {previous, starts_unread(conversation, message, previous),
+		ends_group_at(conversation, position, message), NULL};
+	g_autofree char *notes = NULL;
+	if (message->kind == MESSAGE_EVENT && !continues_note_run(message, previous, place.starts_unread))
+		notes = gather_notes(conversation, position, message);
+	place.notes = notes;
+	fill_message_row(gtk_list_item_get_child(item), message, &place, conversation->room, &conversation->actions);
 }
 
 
@@ -124,8 +197,7 @@ static void refill_row(CrimsonMessage *message, gpointer item) {
 	GtkWidget *row = gtk_list_item_get_child(item);
 	Conversation *conversation = g_object_get_data(G_OBJECT(row), "conversation");
 	if (conversation->room)
-		fill_message_row(row, message, get_previous_message(conversation, gtk_list_item_get_position(item)),
-			conversation->room, &conversation->actions);
+		fill_row(conversation, item);
 }
 
 
@@ -141,8 +213,7 @@ static void set_up_message(GtkSignalListItemFactory *factory, GtkListItem *item,
 static void bind_message(GtkSignalListItemFactory *factory, GtkListItem *item, Conversation *conversation) {
 	CrimsonMessage *message = gtk_list_item_get_item(item);
 	GtkWidget *row = gtk_list_item_get_child(item);
-	fill_message_row(row, message, get_previous_message(conversation, gtk_list_item_get_position(item)),
-		conversation->room, &conversation->actions);
+	fill_row(conversation, item);
 	gulong handler = g_signal_connect(message, "changed", G_CALLBACK(refill_row), item);
 	g_object_set_data(G_OBJECT(row), HANDLER_KEY, GSIZE_TO_POINTER(handler));
 	g_object_set_data(G_OBJECT(row), MESSAGE_KEY, message);
@@ -180,11 +251,24 @@ static void remove_message(CrimsonMessage *message, gpointer data) {
 }
 
 
+static gboolean find_shown_position(Conversation *conversation, CrimsonMessage *target, guint *position) {
+	GListModel *shown = G_LIST_MODEL(conversation->messages);
+	for (guint index = g_list_model_get_n_items(shown); index > 0; index--) {
+		g_autoptr(CrimsonMessage) message = g_list_model_get_item(shown, index - 1);
+		if (message == target) {
+			*position = index - 1;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+
 static void show_message(const char *message_id, gpointer data) {
 	Conversation *conversation = data;
 	CrimsonMessage *target = conversation->room ? find_room_message(conversation->room, message_id) : NULL;
 	guint position = 0;
-	if (target && g_list_store_find(conversation->room->messages, target, &position)) {
+	if (target && find_shown_position(conversation, target, &position)) {
 		conversation->is_pinned = FALSE;
 		conversation->has_user_scrolled = TRUE;
 		gtk_widget_set_visible(conversation->jump_button, TRUE);
@@ -210,12 +294,201 @@ static void show_empty_note(Conversation *conversation) {
 }
 
 
+/* The rows on screen from top to bottom with their places in the chat area */
+typedef struct {
+	GtkWidget *row;
+	graphene_rect_t bounds;
+} PlacedRow;
+
+
+static int compare_placed_rows(gconstpointer first, gconstpointer second) {
+	float difference = ((const PlacedRow *)first)->bounds.origin.y - ((const PlacedRow *)second)->bounds.origin.y;
+	return (difference > 0) - (difference < 0);
+}
+
+
+static GArray *list_placed_rows(Conversation *conversation) {
+	GArray *rows = g_array_new(FALSE, FALSE, sizeof(PlacedRow));
+	for (GtkWidget *item = gtk_widget_get_first_child(conversation->list_view); item;
+		item = gtk_widget_get_next_sibling(item)) {
+		GtkWidget *row = gtk_widget_get_first_child(item);
+		PlacedRow placed = {row, {{0, 0}, {0, 0}}};
+		if (!row || !gtk_widget_get_child_visible(item) || !g_object_get_data(G_OBJECT(row), MESSAGE_KEY)
+			|| !gtk_widget_compute_bounds(row, conversation->message_overlay, &placed.bounds))
+			continue;
+		g_array_append_val(rows, placed);
+	}
+	g_array_sort(rows, compare_placed_rows);
+	return rows;
+}
+
+
+static void show_hidden_avatar(Conversation *conversation, GtkWidget *avatar) {
+	if (conversation->hidden_avatar == avatar)
+		return;
+	if (conversation->hidden_avatar)
+		gtk_widget_set_opacity(conversation->hidden_avatar, 1);
+	g_set_weak_pointer(&conversation->hidden_avatar, avatar);
+	if (avatar)
+		gtk_widget_set_opacity(avatar, 0);
+}
+
+
+/* Changing the picture inside the layout pass is not allowed, so it changes right after and the layout runs again */
+static gboolean change_sticky_person(gpointer data) {
+	Conversation *conversation = data;
+	conversation->sticky_source = 0;
+	g_free(conversation->sticky_nick);
+	conversation->sticky_nick = g_strdup(conversation->wanted_nick);
+	AdwAvatar *avatar = ADW_AVATAR(conversation->sticky_avatar);
+	adw_avatar_set_text(avatar, conversation->sticky_nick);
+	gtk_widget_set_tooltip_text(conversation->sticky_avatar, conversation->sticky_nick);
+	const char *url = conversation->room && conversation->sticky_nick
+		? pick_person_picture(conversation->room, conversation->sticky_nick) : NULL;
+	g_autofree char *sized = fill_image_size(url, MESSAGE_AVATAR_SIZE * 2);
+	show_avatar_image(avatar, sized);
+	gtk_widget_queue_allocate(conversation->message_overlay);
+	return G_SOURCE_REMOVE;
+}
+
+
+static void hide_sticky_avatar(Conversation *conversation) {
+	gtk_widget_set_opacity(conversation->sticky_avatar, 0);
+	gtk_widget_set_can_target(conversation->sticky_avatar, FALSE);
+	show_hidden_avatar(conversation, NULL);
+}
+
+
+/* The row crossing the top margin belongs to a group, and its avatar follows the top down to the group's last row */
+static void place_sticky_avatar(Conversation *conversation, GArray *rows, GdkRectangle *allocation) {
+	guint top = 0;
+	while (top < rows->len) {
+		graphene_rect_t *bounds = &g_array_index(rows, PlacedRow, top).bounds;
+		if (bounds->origin.y + bounds->size.height > STICKY_AVATAR_MARGIN)
+			break;
+		top++;
+	}
+	GtkWidget *row = top < rows->len ? g_array_index(rows, PlacedRow, top).row : NULL;
+	GtkWidget *slot = row ? find_avatar_slot(row) : NULL;
+	graphene_rect_t slot_bounds;
+	if (!slot || !gtk_widget_compute_bounds(slot, conversation->message_overlay, &slot_bounds)) {
+		hide_sticky_avatar(conversation);
+		return;
+	}
+	/* A group's first row still showing its avatar in full needs no stand in */
+	gboolean is_start = is_group_start(row);
+	if (is_start && slot_bounds.origin.y >= STICKY_AVATAR_MARGIN) {
+		hide_sticky_avatar(conversation);
+		return;
+	}
+	guint last = top;
+	while (last + 1 < rows->len && find_avatar_slot(g_array_index(rows, PlacedRow, last + 1).row)
+		&& !is_group_start(g_array_index(rows, PlacedRow, last + 1).row))
+		last++;
+	graphene_rect_t *end = &g_array_index(rows, PlacedRow, last).bounds;
+	float bottom = end->origin.y + end->size.height;
+	allocation->x = (int)slot_bounds.origin.x;
+	allocation->y = (int)MIN(STICKY_AVATAR_MARGIN, bottom - MESSAGE_AVATAR_SIZE);
+	CrimsonMessage *message = g_object_get_data(G_OBJECT(row), MESSAGE_KEY);
+	if (g_strcmp0(message->sender, conversation->sticky_nick) != 0) {
+		g_free(conversation->wanted_nick);
+		conversation->wanted_nick = g_strdup(message->sender);
+		if (!conversation->sticky_source)
+			conversation->sticky_source = g_idle_add(change_sticky_person, conversation);
+		hide_sticky_avatar(conversation);
+		return;
+	}
+	gtk_widget_set_opacity(conversation->sticky_avatar, 1);
+	gtk_widget_set_can_target(conversation->sticky_avatar, TRUE);
+	show_hidden_avatar(conversation, is_start ? slot : NULL);
+}
+
+
+/* Most of the avatars show once risen, and the rest stays below the edge of the chat */
+static void place_typing_faces(Conversation *conversation, GdkRectangle *allocation) {
+	GtkRequisition size;
+	gtk_widget_get_preferred_size(conversation->typing_faces, NULL, &size);
+	int height = gtk_widget_get_height(conversation->message_overlay);
+	int risen = (int)(size.height * TYPING_FACES_SHOWN * conversation->typing_rise);
+	*allocation = (GdkRectangle){TYPING_FACES_MARGIN, height - risen, size.width, size.height};
+}
+
+
+static gboolean position_overlay_child(GtkOverlay *overlay, GtkWidget *widget, GdkRectangle *allocation,
+	Conversation *conversation) {
+	if (widget == conversation->typing_faces) {
+		place_typing_faces(conversation, allocation);
+		return TRUE;
+	}
+	if (widget != conversation->sticky_avatar)
+		return FALSE;
+	*allocation = (GdkRectangle){0, 0, MESSAGE_AVATAR_SIZE, MESSAGE_AVATAR_SIZE};
+	g_autoptr(GArray) rows = list_placed_rows(conversation);
+	place_sticky_avatar(conversation, rows, allocation);
+	return TRUE;
+}
+
+
+/* The rows only take their new places when the list is laid out, so the avatar is placed in the same pass */
+static void replace_sticky_avatar(Conversation *conversation) {
+	gtk_widget_queue_allocate(conversation->message_overlay);
+}
+
+
+static void rise_typing_faces(double value, gpointer data) {
+	Conversation *conversation = data;
+	conversation->typing_rise = value;
+	gtk_widget_queue_allocate(conversation->message_overlay);
+}
+
+
+static void create_typing_faces(Conversation *conversation, GtkWidget *overlay) {
+	conversation->typing_faces = gtk_fixed_new();
+	gtk_widget_set_can_target(conversation->typing_faces, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->typing_faces);
+	gtk_overlay_set_clip_overlay(GTK_OVERLAY(overlay), conversation->typing_faces, TRUE);
+	AdwAnimationTarget *target = adw_callback_animation_target_new(rise_typing_faces, conversation, NULL);
+	conversation->typing_animation = adw_timed_animation_new(conversation->typing_faces, 0, 1, TYPING_RISE_MS,
+		target);
+}
+
+
+static void click_sticky_avatar(GtkGestureClick *gesture, int presses, double x, double y,
+	Conversation *conversation) {
+	if (conversation->sticky_nick)
+		conversation->actions.show_person(conversation->sticky_nick, conversation->actions.data);
+}
+
+
+/* Someone else's message arriving in the open chat makes a short sound, with or without the window in focus,
+ * while the messages already there when a chat opens make none */
+static void sound_new_message(GListModel *messages, guint position, guint removed, guint added,
+	Conversation *conversation) {
+	guint count = g_list_model_get_n_items(messages);
+	if (!added || position + added != count)
+		return;
+	g_autoptr(CrimsonMessage) message = g_list_model_get_item(messages, count - 1);
+	gboolean is_spoken = message->kind != MESSAGE_EVENT && message->kind != MESSAGE_STATUS;
+	if (is_message_arriving(message) && !message->is_own && is_spoken)
+		play_sound(SOUND_MESSAGE);
+}
+
+
+static gboolean is_message_shown(gpointer item, gpointer data) {
+	Conversation *conversation = data;
+	return !CRIMSON_MESSAGE(item)->is_membership || conversation->shows_events;
+}
+
+
 static GtkWidget *create_message_list(Conversation *conversation) {
 	GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
 	g_signal_connect(factory, "setup", G_CALLBACK(set_up_message), conversation);
 	g_signal_connect(factory, "bind", G_CALLBACK(bind_message), conversation);
 	g_signal_connect(factory, "unbind", G_CALLBACK(unbind_message), conversation);
-	conversation->messages = gtk_no_selection_new(NULL);
+	conversation->shows_events = get_settings()->shows_events;
+	GtkCustomFilter *filter = gtk_custom_filter_new(is_message_shown, conversation, NULL);
+	conversation->shown_messages = gtk_filter_list_model_new(NULL, GTK_FILTER(filter));
+	conversation->messages = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(conversation->shown_messages)));
 	conversation->list_view = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(conversation->messages)), factory);
 	gtk_widget_add_css_class(conversation->list_view, "messages");
 	conversation->scroller = gtk_scrolled_window_new();
@@ -232,7 +505,14 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	gtk_event_controller_set_propagation_phase(wheel, GTK_PHASE_CAPTURE);
 	g_signal_connect(wheel, "scroll", G_CALLBACK(note_user_scroll), conversation);
 	gtk_widget_add_controller(conversation->scroller, wheel);
-	conversation->jump_button = gtk_button_new_from_icon_name("go-down-symbolic");
+	conversation->jump_icons = gtk_stack_new();
+	gtk_stack_add_named(GTK_STACK(conversation->jump_icons), gtk_image_new_from_icon_name("go-down-symbolic"),
+		"arrow");
+	conversation->jump_count = gtk_label_new(NULL);
+	gtk_widget_add_css_class(conversation->jump_count, "unread-badge");
+	gtk_stack_add_named(GTK_STACK(conversation->jump_icons), conversation->jump_count, "count");
+	conversation->jump_button = gtk_button_new();
+	gtk_button_set_child(GTK_BUTTON(conversation->jump_button), conversation->jump_icons);
 	gtk_widget_set_tooltip_text(conversation->jump_button, TEXT_JUMP_TO_LATEST);
 	gtk_widget_add_css_class(conversation->jump_button, "circular");
 	gtk_widget_add_css_class(conversation->jump_button, "osd");
@@ -247,8 +527,25 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	gtk_widget_set_valign(conversation->empty_note, GTK_ALIGN_CENTER);
 	gtk_widget_set_can_target(conversation->empty_note, FALSE);
 	g_signal_connect_swapped(conversation->messages, "items-changed", G_CALLBACK(show_empty_note), conversation);
+	g_signal_connect(conversation->messages, "items-changed", G_CALLBACK(sound_new_message), conversation);
 	GtkWidget *overlay = gtk_overlay_new();
+	conversation->message_overlay = overlay;
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), conversation->scroller);
+	conversation->sticky_avatar = adw_avatar_new(MESSAGE_AVATAR_SIZE, NULL, TRUE);
+	gtk_widget_add_css_class(conversation->sticky_avatar, "message-avatar");
+	gtk_widget_set_opacity(conversation->sticky_avatar, 0);
+	gtk_widget_set_can_target(conversation->sticky_avatar, FALSE);
+	gtk_widget_set_cursor_from_name(conversation->sticky_avatar, "pointer");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect(click, "released", G_CALLBACK(click_sticky_avatar), conversation);
+	gtk_widget_add_controller(conversation->sticky_avatar, GTK_EVENT_CONTROLLER(click));
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->sticky_avatar);
+	create_typing_faces(conversation, overlay);
+	g_signal_connect(overlay, "get-child-position", G_CALLBACK(position_overlay_child), conversation);
+	g_signal_connect_swapped(scroll, "value-changed", G_CALLBACK(replace_sticky_avatar), conversation);
+	g_signal_connect_swapped(scroll, "notify::upper", G_CALLBACK(replace_sticky_avatar), conversation);
+	g_signal_connect_swapped(conversation->messages, "items-changed", G_CALLBACK(replace_sticky_avatar),
+		conversation);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->empty_note);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->jump_button);
 	gtk_widget_add_css_class(overlay, "chat-background");
@@ -551,7 +848,7 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(panel, "member-panel");
 	GtkWidget *header = adw_header_bar_new();
-	gtk_widget_add_css_class(header, "top-bar");
+	gtk_widget_add_css_class(header, "title-bar");
 	conversation->members_title = adw_window_title_new(TEXT_MEMBERS_TITLE, NULL);
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), conversation->members_title);
 	/* The panel sits at the window's right edge, so its header carries the window buttons there, and it never
@@ -620,7 +917,7 @@ static void follow_member_panel(AdwOverlaySplitView *split, GParamSpec *spec, Co
 
 static GtkWidget *create_header(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
-	gtk_widget_add_css_class(header, "top-bar");
+	gtk_widget_add_css_class(header, "title-bar");
 	GtkWidget *title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	conversation->avatar = adw_avatar_new(HEADER_AVATAR_SIZE, NULL, TRUE);
 	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -656,7 +953,7 @@ static GtkWidget *create_empty_page(void) {
 	GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(page, "chat-background");
 	GtkWidget *header = adw_header_bar_new();
-	gtk_widget_add_css_class(header, "top-bar");
+	gtk_widget_add_css_class(header, "title-bar");
 	gtk_widget_add_css_class(header, "flat");
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
 	gtk_box_append(GTK_BOX(page), header);
@@ -666,11 +963,12 @@ static GtkWidget *create_empty_page(void) {
 
 static GtkWidget *create_room_page(Conversation *conversation) {
 	GtkWidget *toolbar = adw_toolbar_view_new();
+	gtk_widget_add_css_class(toolbar, "title-bar");
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), create_header(conversation));
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), create_message_list(conversation));
 	conversation->composer = create_composer();
 	adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar), get_composer_widget(conversation->composer));
-	adw_toolbar_view_set_bottom_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_RAISED_BORDER);
+	adw_toolbar_view_set_bottom_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_FLAT);
 	conversation->split = adw_overlay_split_view_new();
 	adw_overlay_split_view_set_sidebar_position(ADW_OVERLAY_SPLIT_VIEW(conversation->split), GTK_PACK_END);
 	adw_overlay_split_view_set_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split), FALSE);
@@ -715,12 +1013,25 @@ static void forget_still(GtkStack *stack, GParamSpec *spec, Conversation *conver
 }
 
 
+/* Only the rows on screen hold day headings, and the rest are written fresh when they show */
+static void relabel_days(gpointer data) {
+	Conversation *conversation = data;
+	for (GtkWidget *item = gtk_widget_get_first_child(conversation->list_view); item;
+		item = gtk_widget_get_next_sibling(item)) {
+		GtkWidget *row = gtk_widget_get_first_child(item);
+		if (row)
+			refresh_day_heading(row);
+	}
+}
+
+
 Conversation *create_conversation(Window *window) {
 	Conversation *conversation = g_new0(Conversation, 1);
 	conversation->window = window;
 	conversation->is_pinned = TRUE;
 	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, show_person,
 		show_person_menu, conversation};
+	watch_day_change(relabel_days, conversation);
 	/* Coming back to the window counts as seeing the open chat, so what arrived meanwhile is read */
 	g_signal_connect_swapped(window->window, "notify::is-active", G_CALLBACK(mark_read_when_seen), conversation);
 	conversation->stack = gtk_stack_new();
@@ -771,7 +1082,8 @@ static gboolean poll_activity(gpointer data) {
 		return G_SOURCE_CONTINUE;
 	fill_header(conversation);
 	gboolean is_stale = g_get_real_time() - room->activity_checked >= ACTIVITY_SECONDS * G_USEC_PER_SEC;
-	if (is_stale && room->network->state == NETWORK_CONNECTED && !get_network_work(room->network)->profile)
+	if (is_stale && room->network->state == NETWORK_CONNECTED && !get_network_work(room->network)->profile
+		&& !is_target_refused(room->network, room->name))
 		request_profile(room->network, room->name, show_activity, conversation);
 	return G_SOURCE_CONTINUE;
 }
@@ -801,14 +1113,10 @@ static void fill_header(Conversation *conversation) {
 	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : activity ? g_strdup(activity)
 		: describe_room_subtitle(room);
 	gtk_label_set_text(GTK_LABEL(conversation->title), title);
-	gtk_label_set_text(GTK_LABEL(conversation->subtitle), subtitle);
+	show_room_line(conversation->subtitle, subtitle, is_typing);
 	/* Without anything to say under it, the name sits in the middle of the header */
 	gtk_widget_set_visible(conversation->subtitle, subtitle && *subtitle);
 	gtk_widget_set_tooltip_text(conversation->subtitle, shows_topic ? topic : NULL);
-	if (is_room_typing(room))
-		gtk_widget_add_css_class(conversation->subtitle, "typing");
-	else
-		gtk_widget_remove_css_class(conversation->subtitle, "typing");
 	fill_room_avatar(ADW_AVATAR(conversation->avatar), room, HEADER_AVATAR_SIZE);
 	gtk_widget_set_visible(conversation->members_button, room->kind == ROOM_CHANNEL);
 }
@@ -821,18 +1129,124 @@ static void follow_connection(Conversation *conversation) {
 }
 
 
+static gboolean is_busy_room(CrimsonRoom *room) {
+	IrcState *state = get_network_state(room->network);
+	IrcChannel *channel = state ? find_irc_channel(state, room->name) : NULL;
+	return channel && g_hash_table_size(channel->members) >= TYPING_FACES_MEMBERS;
+}
+
+
+static void fill_typing_faces(Conversation *conversation) {
+	GtkWidget *child;
+	while ((child = gtk_widget_get_first_child(conversation->typing_faces)))
+		gtk_fixed_remove(GTK_FIXED(conversation->typing_faces), child);
+	g_autoptr(GPtrArray) nicks = g_hash_table_get_keys_as_ptr_array(conversation->room->typing);
+	for (guint index = 0; index < nicks->len && index < TYPING_FACES_COUNT; index++) {
+		const char *nick = g_ptr_array_index(nicks, index);
+		GtkWidget *face = adw_avatar_new(MESSAGE_AVATAR_SIZE, nick, TRUE);
+		gtk_widget_add_css_class(face, "typing-face");
+		const char *url = pick_person_picture(conversation->room, nick);
+		g_autofree char *sized = fill_image_size(url, MESSAGE_AVATAR_SIZE * 2);
+		show_avatar_image(ADW_AVATAR(face), sized);
+		gtk_fixed_put(GTK_FIXED(conversation->typing_faces), face,
+			index * (MESSAGE_AVATAR_SIZE - TYPING_FACES_OVERLAP), 0);
+	}
+}
+
+
+/* The avatars of who types bob up with a little overshoot as someone starts typing in a busy room, and sink once
+ * nobody does, keeping the last faces while they sink */
+static void show_typing_faces(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	gboolean wants = room && room->kind == ROOM_CHANNEL && get_settings()->shows_typing && is_room_typing(room)
+		&& is_busy_room(room);
+	if (wants)
+		fill_typing_faces(conversation);
+	if (wants == conversation->shows_typing_faces)
+		return;
+	conversation->shows_typing_faces = wants;
+	/* Resetting moves the avatars back to where the last bob started, so where they are now is read first */
+	double rise = conversation->typing_rise;
+	AdwTimedAnimation *animation = ADW_TIMED_ANIMATION(conversation->typing_animation);
+	adw_animation_reset(conversation->typing_animation);
+	adw_timed_animation_set_value_from(animation, rise);
+	adw_timed_animation_set_value_to(animation, wants ? 1 : 0);
+	adw_timed_animation_set_easing(animation, wants ? ADW_EASE_OUT_BACK : ADW_EASE_IN_CUBIC);
+	adw_animation_play(conversation->typing_animation);
+}
+
+
+/* The room counts as read only while its bottom is in view, so its unread messages are the ones waiting below,
+ * and the jump button shows their number in place of its arrow */
+static void show_waiting_count(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	style_unread_badge(conversation->jump_count, room->unread_count, room->has_mention);
+	gtk_stack_set_visible_child_name(GTK_STACK(conversation->jump_icons), room->unread_count ? "count" : "arrow");
+}
+
+
+/* Turning joins and leaves on or off fills the list again, since every group and day line may change */
+static void follow_event_setting(Conversation *conversation) {
+	gboolean shows_events = get_settings()->shows_events;
+	if (shows_events == conversation->shows_events)
+		return;
+	conversation->shows_events = shows_events;
+	gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
+	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->room->messages));
+	if (conversation->is_pinned)
+		scroll_to_bottom(conversation);
+}
+
+
 void refresh_conversation(Conversation *conversation) {
 	if (!conversation->room)
 		return;
+	follow_event_setting(conversation);
+	show_waiting_count(conversation);
 	follow_connection(conversation);
 	fill_header(conversation);
+	show_typing_faces(conversation);
 	show_empty_note(conversation);
 	refresh_members_later(conversation);
 	mark_read_when_seen(conversation);
 }
 
 
+/* The first shown message after a moment, whose row shows the line */
+static CrimsonMessage *find_message_after(Conversation *conversation, gint64 time) {
+	GListModel *messages = G_LIST_MODEL(conversation->messages);
+	CrimsonMessage *found = NULL;
+	for (guint index = g_list_model_get_n_items(messages); index > 0; index--) {
+		g_autoptr(CrimsonMessage) message = g_list_model_get_item(messages, index - 1);
+		if (message->time <= time)
+			break;
+		found = message;
+	}
+	return found;
+}
+
+
+/* The rows on either side of the line draw again, which their messages' change signal does */
+static void move_read_line(Conversation *conversation, gint64 time) {
+	CrimsonMessage *old = conversation->has_read_line
+		? find_message_after(conversation, conversation->read_line) : NULL;
+	conversation->read_line = time;
+	conversation->has_read_line = TRUE;
+	CrimsonMessage *new = find_message_after(conversation, time);
+	if (old && old != new)
+		g_signal_emit_by_name(old, "changed");
+	if (new)
+		g_signal_emit_by_name(new, "changed");
+}
+
+
 static void follow_room(CrimsonRoom *room, Conversation *conversation) {
+	/* Messages arriving while the user reads along are read at once, so only unseen ones start a line */
+	gboolean is_unread = room->unread_count > 0;
+	gboolean is_seen = conversation->is_pinned && is_room_in_view(conversation->window, room);
+	if (is_unread && !conversation->was_unread && !is_seen)
+		move_read_line(conversation, room->read_time);
+	conversation->was_unread = is_unread;
 	refresh_conversation(conversation);
 }
 
@@ -858,7 +1272,16 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
-	gtk_no_selection_set_model(conversation->messages, room ? G_LIST_MODEL(room->messages) : NULL);
+	/* The same nick in another room can have another picture, so the floating avatar is filled again */
+	g_clear_pointer(&conversation->sticky_nick, g_free);
+	/* Another room starts with the typing avatars out of sight rather than sinking from the last one */
+	adw_animation_reset(conversation->typing_animation);
+	conversation->typing_rise = 0;
+	conversation->shows_typing_faces = FALSE;
+	conversation->was_unread = room && room->unread_count > 0;
+	conversation->has_read_line = conversation->was_unread;
+	conversation->read_line = conversation->was_unread ? room->read_time : 0;
+	gtk_filter_list_model_set_model(conversation->shown_messages, room ? G_LIST_MODEL(room->messages) : NULL);
 	fade_to(conversation, room ? "room" : "empty");
 	follow_activity(conversation, previous);
 	if (!room)

@@ -593,3 +593,44 @@ void confirm_network_removal(Window *window, CrimsonNetwork *network) {
 	g_signal_connect_object(alert, "response", G_CALLBACK(finish_removal), network, 0);
 	adw_dialog_present(alert, GTK_WIDGET(window->window));
 }
+
+
+static void finish_link_question(AdwAlertDialog *alert, const char *response, gpointer data) {
+	if (g_strcmp0(response, "open") != 0)
+		return;
+	const char *url = g_object_get_data(G_OBJECT(alert), "url");
+	GtkRoot *root = gtk_widget_get_root(GTK_WIDGET(alert));
+	g_autoptr(GtkUriLauncher) launcher = gtk_uri_launcher_new(url);
+	gtk_uri_launcher_launch(launcher, GTK_IS_WINDOW(root) ? GTK_WINDOW(root) : NULL, NULL, NULL, NULL);
+}
+
+
+void confirm_open_link(GtkWidget *source, const char *url) {
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_OPEN_LINK_TITLE, NULL);
+	/* A long address has no spaces to break at, so it may break anywhere */
+	GtkWidget *address = gtk_label_new(url);
+	gtk_label_set_wrap(GTK_LABEL(address), TRUE);
+	gtk_label_set_wrap_mode(GTK_LABEL(address), PANGO_WRAP_WORD_CHAR);
+	gtk_label_set_selectable(GTK_LABEL(address), TRUE);
+	/* Taking focus would select the whole address, so focus starts on the buttons and a drag still selects it */
+	gtk_widget_set_focusable(address, FALSE);
+	gtk_label_set_justify(GTK_LABEL(address), GTK_JUSTIFY_CENTER);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), address);
+	g_object_set_data_full(G_OBJECT(alert), "url", g_strdup(url), g_free);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "open", TEXT_OPEN_LINK, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "open", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "open");
+	g_signal_connect(alert, "response", G_CALLBACK(finish_link_question), NULL);
+	adw_dialog_present(alert, source);
+}
+
+
+static gboolean ask_about_link(GtkLabel *label, const char *uri, gpointer data) {
+	confirm_open_link(GTK_WIDGET(label), uri);
+	return TRUE;
+}
+
+
+void ask_before_label_links(GtkWidget *label) {
+	g_signal_connect(label, "activate-link", G_CALLBACK(ask_about_link), NULL);
+}

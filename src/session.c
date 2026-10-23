@@ -6,6 +6,10 @@
 
 #define CACHE_DELAY_SECONDS 2
 #define WORK_KEY "work"
+/* How long what the server said about a person or room is trusted before the app asks again, both that it cannot
+ * reach them and what their profile holds, and how recent a message the user sent must be for a refusal to answer it */
+#define ANSWER_KEEP_SECONDS 120
+#define USER_TARGET_SECONDS 30
 #define NICKSERV "NickServ"
 /* The bouncer's word on whether it reconnects a network by itself */
 #define RETRY_ATTRIBUTE "crimson-chat/retrying"
@@ -28,7 +32,7 @@ static const char *const CLIENT_CAPS[] = {
 /* The managing connection to a bouncer only needs the network list and its notifications */
 static const char *const CONTROL_CAPS[] = {
 	"sasl", "batch", "message-tags", "server-time", "cap-notify", "soju.im/bouncer-networks",
-	"soju.im/bouncer-networks-notify", "crimson-chat/invites", NULL,
+	"soju.im/bouncer-networks-notify", "crimson-chat/invites", "crimson-chat/reconnect", NULL,
 };
 
 static void connect_network(CrimsonNetwork *network);
@@ -38,6 +42,22 @@ static void free_listed_room(ListedRoom *room) {
 	g_free(room->name);
 	g_free(room->topic);
 	g_free(room);
+}
+
+
+/* A WHOIS answer and when it came */
+typedef struct {
+	Profile *profile;
+	gint64 time;
+} KeptProfile;
+
+
+static void free_profile(Profile *profile);
+
+
+static void free_kept_profile(KeptProfile *kept) {
+	free_profile(kept->profile);
+	g_free(kept);
 }
 
 
@@ -66,6 +86,9 @@ static void free_network_work(NetworkWork *work) {
 	g_hash_table_unref(work->multiline);
 	g_hash_table_unref(work->pending);
 	g_hash_table_unref(work->splits);
+	g_hash_table_unref(work->refused_targets);
+	g_hash_table_unref(work->profiles);
+	g_free(work->user_target);
 	g_free(work->opening_room);
 	g_clear_handle_id(&work->typing_source, g_source_remove);
 	if (work->registration_reply)
@@ -86,8 +109,46 @@ NetworkWork *get_network_work(CrimsonNetwork *network) {
 	work->multiline = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_irc_message);
 	work->pending = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
 	work->splits = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_unref);
+	work->refused_targets = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	work->profiles = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_kept_profile);
 	g_object_set_data_full(G_OBJECT(network), WORK_KEY, work, (GDestroyNotify)free_network_work);
 	return work;
+}
+
+
+static char *fold_target(CrimsonNetwork *network, const char *target) {
+	IrcState *state = get_network_state(network);
+	return state ? fold_state_name(state, target) : g_ascii_strdown(target, -1);
+}
+
+
+void note_user_target(CrimsonNetwork *network, const char *target) {
+	NetworkWork *work = get_network_work(network);
+	g_free(work->user_target);
+	work->user_target = fold_target(network, target);
+	work->user_target_time = g_get_monotonic_time();
+	/* Sending them something is the user trying again, so the app may too */
+	g_hash_table_remove(work->refused_targets, work->user_target);
+}
+
+
+gboolean refuse_target(CrimsonNetwork *network, const char *target) {
+	NetworkWork *work = get_network_work(network);
+	char *folded = fold_target(network, target);
+	gint64 now = g_get_monotonic_time();
+	gboolean is_users = g_strcmp0(folded, work->user_target) == 0
+		&& now - work->user_target_time < USER_TARGET_SECONDS * G_USEC_PER_SEC;
+	gint64 until = now + ANSWER_KEEP_SECONDS * G_USEC_PER_SEC;
+	g_hash_table_replace(work->refused_targets, folded, GSIZE_TO_POINTER((gsize)until));
+	return is_users;
+}
+
+
+gboolean is_target_refused(CrimsonNetwork *network, const char *target) {
+	NetworkWork *work = get_network_work(network);
+	g_autofree char *folded = fold_target(network, target);
+	gint64 until = GPOINTER_TO_SIZE(g_hash_table_lookup(work->refused_targets, folded));
+	return until && g_get_monotonic_time() < until;
 }
 
 
@@ -713,9 +774,13 @@ void delete_bouncer_network(CrimsonNetwork *network) {
 
 
 void reconnect_network(CrimsonNetwork *network) {
-	if (network->session->record->is_bouncer && network->session->control
-		&& get_irc_client_status(network->session->control) == IRC_CLIENT_DISCONNECTED)
+	IrcClient *control = network->session->control;
+	if (network->session->record->is_bouncer && control
+		&& get_irc_client_status(control) == IRC_CLIENT_DISCONNECTED)
 		connect_session(network->session);
+	/* Crimson Chat's own bouncer reconnects to the server itself, where other bouncers only reconnect the app */
+	else if (network->bouncer_id && control && has_irc_cap(get_irc_client_state(control), "crimson-chat/reconnect"))
+		send_irc_client_command(control, "BOUNCER", "RECONNECTNETWORK", network->bouncer_id, NULL);
 	else
 		connect_network(network);
 }
@@ -852,6 +917,12 @@ void cancel_profile(CrimsonNetwork *network, gpointer data) {
 void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady ready, gpointer data) {
 	NetworkWork *work = get_network_work(network);
 	cancel_profile(network, work->profile_data);
+	g_autofree char *folded = fold_target(network, nick);
+	KeptProfile *kept = g_hash_table_lookup(work->profiles, folded);
+	if (kept && g_get_monotonic_time() - kept->time < ANSWER_KEEP_SECONDS * G_USEC_PER_SEC) {
+		ready(kept->profile, data);
+		return;
+	}
 	work->profile = g_new0(Profile, 1);
 	work->profile->nick = g_strdup(nick);
 	work->profile->is_found = TRUE;
@@ -865,6 +936,22 @@ void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady rea
 static void set_profile_text(char **field, const char *text) {
 	g_free(*field);
 	*field = text && *text ? g_strdup(text) : NULL;
+}
+
+
+/* Hands the finished profile to whoever asked and keeps it for a while, so opening it again asks nothing */
+static void finish_profile(CrimsonNetwork *network, Profile *profile) {
+	NetworkWork *work = get_network_work(network);
+	ProfileReady ready = work->profile_ready;
+	gpointer data = work->profile_data;
+	work->profile = NULL;
+	work->profile_ready = NULL;
+	work->profile_data = NULL;
+	if (ready)
+		ready(profile, data);
+	KeptProfile *kept = g_new0(KeptProfile, 1);
+	*kept = (KeptProfile){profile, g_get_monotonic_time()};
+	g_hash_table_replace(work->profiles, fold_target(network, profile->nick), kept);
 }
 
 
@@ -903,17 +990,15 @@ gboolean collect_profile(CrimsonNetwork *network, int number, const IrcMessage *
 	case 401:
 		profile->is_found = FALSE;
 		break;
-	case 318: {
-		ProfileReady ready = work->profile_ready;
-		gpointer data = work->profile_data;
-		work->profile = NULL;
-		work->profile_ready = NULL;
-		work->profile_data = NULL;
-		if (ready)
-			ready(profile, data);
-		free_profile(profile);
+	/* The nick asked a second time names the person's server, which no server knows while they are away, and that
+	 * answer ends the question without a closing reply */
+	case 402:
+		profile->is_found = FALSE;
+		finish_profile(network, profile);
 		break;
-	}
+	case 318:
+		finish_profile(network, profile);
+		break;
 	default:
 		break;
 	}

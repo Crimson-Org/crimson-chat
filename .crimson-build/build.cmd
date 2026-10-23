@@ -52,6 +52,12 @@ if errorlevel 1 exit /b %errorlevel%
 echo(==^> cc -std=gnu11 -O2 -g $^(pkg-config --cflags gio-2.0^) -c build/resources.c -o build/obj/resources.o
 cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/resources.c -o build/obj/resources.o
 if errorlevel 1 exit /b %errorlevel%
+echo(==^> glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml
+glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml
+if errorlevel 1 exit /b %errorlevel%
+echo(==^> cc -std=gnu11 -O2 -g $^(pkg-config --cflags gio-2.0^) -c build/core-resources.c -o build/obj/core-resources.o
+cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/core-resources.c -o build/obj/core-resources.o
+if errorlevel 1 exit /b %errorlevel%
 echo(==^> cc -o build/%PROGRAM% build/obj/*.o build/irc/*.o $^(pkg-config --libs $PKGS^) -lm
 cc -o build/%PROGRAM% build/obj/*.o build/irc/*.o $(pkg-config --libs $PKGS) -lm
 if errorlevel 1 exit /b %errorlevel%

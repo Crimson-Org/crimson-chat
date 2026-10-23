@@ -3,6 +3,8 @@
 	<gresource prefix="/io/github/CrimsonOrg/CrimsonChat">
 		<file>style.css</file>
 		<file>grain.png</file>
+		<file>sounds/message.ogg</file>
+		<file>sounds/mention.ogg</file>
 		<file alias="common.css">../subprojects/crimson-core/data/common.css</file>
 		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonChat.svg</file>
 		<file>icons/symbolic/apps/io.github.CrimsonOrg.CrimsonChat-symbolic.svg</file>

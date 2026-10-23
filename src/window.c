@@ -29,7 +29,7 @@
 #define MOUSE_BACK_BUTTON 8
 #define MINIMUM_WIDTH 452
 #define RAIL_SPINNER_SIZE 22
-#define MINIMUM_HEIGHT 660
+#define MINIMUM_HEIGHT 668
 #define APPLICATION_ICON "io.github.CrimsonOrg.CrimsonChat"
 
 static Window *main_window;
@@ -822,12 +822,25 @@ void hide_window(Window *window) {
 }
 
 
+/* Quitting takes the window and tray icon away at once, while the connections close behind them */
+void withdraw_window(Window *window) {
+	window->is_quitting = TRUE;
+	read_window_geometry(GTK_WINDOW(window->window), &window->geometry);
+	save_window_geometry_state(&window->geometry);
+	gtk_widget_set_visible(GTK_WIDGET(window->window), FALSE);
+	if (window->tray)
+		remove_tray(window->tray);
+}
+
+
 /* Closing keeps the chats connected in the tray, and only quitting really closes the window */
 static gboolean close_window(GtkWindow *gtk_window, Window *window) {
+	if (window->is_quitting)
+		return FALSE;
 	read_window_geometry(gtk_window, &window->geometry);
 	save_window_geometry_state(&window->geometry);
 	gboolean has_tray = window->tray && is_tray_shown(window->tray);
-	if (window->is_quitting || !get_settings()->closes_to_tray || !has_tray)
+	if (!get_settings()->closes_to_tray || !has_tray)
 		return FALSE;
 	gtk_widget_set_visible(GTK_WIDGET(gtk_window), FALSE);
 	return TRUE;
@@ -1220,7 +1233,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	apply_window_geometry(GTK_WINDOW(window->window), &window->geometry);
 	gtk_widget_set_size_request(GTK_WIDGET(window->window), MINIMUM_WIDTH, MINIMUM_HEIGHT);
 	window->room_list = create_room_list(window);
-	watch_room_list_focus(window->room_list, GTK_WIDGET(window->window));
 	window->conversation = create_conversation(window);
 	window->split = ADW_NAVIGATION_SPLIT_VIEW(adw_navigation_split_view_new());
 	AdwNavigationPage *sidebar = adw_navigation_page_new(create_sidebar(window), TEXT_CHATS);

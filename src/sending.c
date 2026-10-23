@@ -58,7 +58,7 @@ static CrimsonMessage *add_own_message(CrimsonRoom *room, MessageKind kind, cons
 	g_autofree char *nick = get_own_nick(network);
 	CrimsonMessage *line = create_message(kind, nick, text, g_get_real_time());
 	line->is_own = TRUE;
-	line->is_fresh = TRUE;
+	line->arrival_time = g_get_monotonic_time();
 	line->is_pending = can_network(network, "echo-message");
 	line->reply_to = reply_to && reply_to->id ? g_strdup(reply_to->id) : NULL;
 	if (line->is_pending && can_network(network, "labeled-response"))
@@ -116,6 +116,7 @@ static void send_text_as(CrimsonRoom *room, const char *command, const char *tex
 		lines[count] = NULL;
 	}
 	MessageKind kind = is_action ? MESSAGE_ACTION : g_str_equal(command, "NOTICE") ? MESSAGE_NOTICE : MESSAGE_TEXT;
+	note_user_target(network, room->name);
 	gboolean is_long = count > 1 || strlen(text) > LINE_BYTES - strlen(room->name);
 	if (is_long && !is_action && can_network(network, "draft/multiline") && can_network(network, "batch")) {
 		g_autoptr(CrimsonMessage) line = add_own_message(room, kind, text, reply_to);
@@ -198,11 +199,14 @@ static gboolean run_room_command(CrimsonRoom *room, const char *name, const char
 		leave_room(room);
 	} else if (g_str_equal(name, "kick") && is_channel) {
 		g_autofree char *nick = take_argument(&rest);
+		note_user_target(network, nick);
 		send_irc_client_command(network->client, "KICK", room->name, nick, *rest ? rest : NULL, NULL);
 	} else if (g_str_equal(name, "invite") && is_channel && !strchr(rest, ' ')) {
+		note_user_target(network, rest);
 		send_irc_client_command(network->client, "INVITE", rest, room->name, NULL);
 	} else if (g_str_equal(name, "whois")) {
 		get_network_work(network)->whois_room = room;
+		note_user_target(network, rest);
 		send_irc_client_command(network->client, "WHOIS", rest, NULL);
 	} else {
 		return FALSE;
@@ -341,7 +345,8 @@ void redact_message(CrimsonRoom *room, CrimsonMessage *message) {
 void send_typing(CrimsonRoom *room, const char *state) {
 	CrimsonNetwork *network = room->network;
 	if (!get_settings()->sends_typing || room->kind == ROOM_SERVER || !can_network(network, "message-tags")
-		|| !allows_client_tag(network, "typing"))
+		|| !allows_client_tag(network, "typing") || room->presence == PRESENCE_OFFLINE
+		|| is_target_refused(network, room->name))
 		return;
 	g_autoptr(IrcMessage) message = create_irc_message("TAGMSG", room->name, NULL);
 	set_irc_tag(message, "+typing", state);
@@ -391,6 +396,7 @@ void join_channel(CrimsonNetwork *network, const char *name, const char *key) {
 	NetworkWork *work = get_network_work(network);
 	g_free(work->opening_room);
 	work->opening_room = g_strdup(channel);
+	note_user_target(network, channel);
 	send_irc_client_command(network->client, "JOIN", channel, key, NULL);
 }
 

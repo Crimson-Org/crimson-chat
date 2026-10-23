@@ -225,13 +225,14 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	line->is_highlight = !line->is_own && line->sender && room->kind != ROOM_SERVER
 		&& (room->kind == ROOM_PRIVATE || is_mention(network, line->text));
 	stop_typing(room, line->sender);
+	/* A live message is marked new before it joins the room, since the open chat reacts while it is added */
+	line->arrival_time = load ? 0 : g_get_monotonic_time();
 	if (!insert_room_message(room, line))
 		return;
 	if (line->is_own && line->time > room->read_time)
 		room->read_time = line->time;
 	if (load)
 		return;
-	line->is_fresh = TRUE;
 	offer_login(network, line);
 	count_unread(room);
 	announce_room_change(room);
@@ -354,10 +355,11 @@ static void deliver_redaction(CrimsonNetwork *network, const IrcMessage *message
 }
 
 
-static void add_event(CrimsonRoom *room, const IrcMessage *message, char *text) {
+static void add_event(CrimsonRoom *room, const IrcMessage *message, char *text, gboolean is_membership) {
 	g_autofree char *owned = text;
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_EVENT, NULL, text, read_message_time(message));
 	line->id = g_strdup(get_irc_tag(message, "msgid"));
+	line->is_membership = is_membership;
 	if (insert_room_message(room, line))
 		announce_room_change(room);
 }
@@ -402,14 +404,13 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 	const char *command = message->command;
 	CrimsonRoom *room = load ? load->room : channel ? find_room(network, channel) : NULL;
 	gboolean is_self = is_own_nick(state, sender);
-	gboolean shows = get_settings()->shows_events;
 	if (g_str_equal(command, "JOIN")) {
 		if (!room && is_self && !load)
 			room = ensure_room(network, ROOM_CHANNEL, channel);
 		if (room && is_self && !load)
 			handle_own_join(network, room);
-		else if (room && shows)
-			add_event(room, message, g_strdup_printf(TEXT_JOINED, sender));
+		else if (room)
+			add_event(room, message, g_strdup_printf(TEXT_JOINED, sender), TRUE);
 	} else if (g_str_equal(command, "PART") && room) {
 		const char *reason = get_irc_parameter(message, 1);
 		stop_typing(room, sender);
@@ -417,25 +418,26 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 			room->is_joined = FALSE;
 			save_network_channels(network);
 		}
-		if (shows || is_self)
-			add_event(room, message, reason && *reason ? g_strdup_printf(TEXT_LEFT_SAYING, sender, reason)
-				: g_strdup_printf(TEXT_LEFT, sender));
+		add_event(room, message, reason && *reason ? g_strdup_printf(TEXT_LEFT_SAYING, sender, reason)
+			: g_strdup_printf(TEXT_LEFT, sender), !is_self);
 	} else if (g_str_equal(command, "KICK") && room) {
 		const char *kicked = get_irc_parameter(message, 1);
 		if (kicked && is_own_nick(state, kicked) && !load)
 			room->is_joined = FALSE;
-		add_event(room, message, g_strdup_printf(TEXT_KICKED, sender, kicked, get_last_irc_parameter(message)));
+		add_event(room, message, g_strdup_printf(TEXT_KICKED, sender, kicked, get_last_irc_parameter(message)),
+			FALSE);
 	} else if (g_str_equal(command, "TOPIC") && room) {
 		g_free(room->topic);
 		room->topic = g_strdup(get_irc_parameter(message, 1));
-		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_irc_parameter(message)));
-	} else if (g_str_equal(command, "MODE") && room && shows) {
+		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_irc_parameter(message)),
+			FALSE);
+	} else if (g_str_equal(command, "MODE") && room) {
 		g_autoptr(GPtrArray) parts = g_ptr_array_new();
 		for (guint index = 1; index < count_irc_parameters(message); index++)
 			g_ptr_array_add(parts, (gpointer)get_irc_parameter(message, index));
 		g_ptr_array_add(parts, NULL);
 		g_autofree char *modes = g_strjoinv(" ", (char **)parts->pdata);
-		add_event(room, message, g_strdup_printf(TEXT_MODE_CHANGED, sender, modes));
+		add_event(room, message, g_strdup_printf(TEXT_MODE_CHANGED, sender, modes), TRUE);
 	}
 }
 
@@ -447,7 +449,7 @@ static void deliver_departure(CrimsonNetwork *network, const IrcMessage *message
 	gboolean is_nick = g_str_equal(message->command, "NICK");
 	const char *new_nick = get_irc_parameter(message, 0);
 	IrcState *state = get_network_state(network);
-	gboolean shows = get_settings()->shows_events || (is_nick && state && is_own_nick(state, new_nick));
+	gboolean is_own_rename = is_nick && state && is_own_nick(state, new_nick);
 	g_autoptr(GPtrArray) rooms = g_ptr_array_new();
 	if (load)
 		g_ptr_array_add(rooms, load->room);
@@ -464,10 +466,10 @@ static void deliver_departure(CrimsonNetwork *network, const IrcMessage *message
 			private_room->name = g_strdup(new_nick);
 		}
 	}
-	for (guint index = 0; shows && index < rooms->len; index++) {
+	for (guint index = 0; index < rooms->len; index++) {
 		char *text = is_nick ? g_strdup_printf(TEXT_RENAMED, sender, new_nick)
 			: g_strdup_printf(TEXT_QUIT_EVENT, sender, get_last_irc_parameter(message));
-		add_event(g_ptr_array_index(rooms, index), message, text);
+		add_event(g_ptr_array_index(rooms, index), message, text, !is_own_rename);
 	}
 	for (guint index = 0; index < rooms->len; index++) {
 		stop_typing(g_ptr_array_index(rooms, index), sender);
@@ -590,10 +592,7 @@ static void finish_split(CrimsonNetwork *network, const IrcMessage *message, GHa
 		int people = GPOINTER_TO_INT(count);
 		char *text = is_join ? g_strdup_printf(people == 1 ? TEXT_NETJOIN_ONE : TEXT_NETJOIN, people)
 			: g_strdup_printf(people == 1 ? TEXT_NETSPLIT_ONE : TEXT_NETSPLIT, people);
-		if (get_settings()->shows_events)
-			add_event(room, message, text);
-		else
-			g_free(text);
+		add_event(room, message, text, TRUE);
 		announce_room_change(room);
 	}
 }
@@ -696,7 +695,8 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 	NetworkWork *work = get_network_work(network);
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
 	g_autofree char *text = join_parameters(message, 1);
-	if ((g_strv_contains(WHOIS_REPLIES, command) || number == 401) && collect_profile(network, number, message))
+	if ((g_strv_contains(WHOIS_REPLIES, command) || number == 401 || number == 402)
+		&& collect_profile(network, number, message))
 		return;
 	if (g_strv_contains(WHOIS_REPLIES, command)) {
 		add_status(work->whois_room ? work->whois_room : network->server_room, message, text);
@@ -732,6 +732,13 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 			return;
 	}
 	add_status(network->server_room, message, text);
+	/* A person or room that refuses messages, such as one missing or open only to registered accounts, is left
+	 * alone for a while, and only shows as a problem when the user just acted on it rather than the app on its own,
+	 * as typing notices do */
+	const char *target = get_irc_parameter(message, 1);
+	gboolean is_refusal = number == 401 || number == 403 || number == 404 || number == 477;
+	if (is_refusal && target && !refuse_target(network, target))
+		return;
 	/* A missing message of the day and a taken nick during registration are routine, and an unknown command
 	 * answers something the app sent on its own, not something the user did */
 	if (number >= 400 && number < 600 && number != 421 && number != 422 && number != 433)

@@ -9,6 +9,7 @@
 
 #define ROOM_AVATAR_SIZE 50
 #define SEARCH_SLIDE_MS 200
+#define LIST_SLIDE_MS 220
 #define CONNECTION_SPINNER_SIZE 24
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
@@ -17,8 +18,12 @@
 struct RoomList {
 	Window *window;
 	GtkWidget *box, *header, *search, *menu_button;
+	/* Switching servers slides the new list in over a still image of the old one */
+	GtkWidget *slider, *still;
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
+	/* Whether the pointer is over the chat list, which shows the + button */
+	GtkEventControllerMotion *list_hover;
 	GtkWidget *add_button, *add_revealer, *connection, *connection_button, *connection_icons, *connection_note,
 		*connection_label, *connection_fix;
 	/* The account offer above the chats, its words, its button and the button that closes it */
@@ -76,6 +81,7 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	GtkWidget *preview = g_object_get_data(G_OBJECT(row), "preview");
 	GtkWidget *badge = g_object_get_data(G_OBJECT(row), "badge");
 	GtkWidget *kind = g_object_get_data(G_OBJECT(row), "kind");
+	GtkWidget *bottom = g_object_get_data(G_OBJECT(row), "bottom");
 	fill_room_avatar(avatar, room, ROOM_AVATAR_SIZE);
 	g_autofree char *title = describe_room_title(room);
 	gtk_label_set_text(GTK_LABEL(name), title);
@@ -84,17 +90,16 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	g_autofree char *moment = format_list_time(room->last_time);
 	gtk_label_set_text(GTK_LABEL(time), moment);
 	g_autofree char *line = describe_room_preview(room);
-	gtk_label_set_text(GTK_LABEL(preview), line);
-	if (is_room_typing(room) && get_settings()->shows_typing)
-		gtk_widget_add_css_class(preview, "typing");
-	else
-		gtk_widget_remove_css_class(preview, "typing");
+	gboolean shows_typing = is_room_typing(room) && get_settings()->shows_typing;
+	show_room_line(preview, line, shows_typing);
 	style_unread_badge(badge, room->unread_count, room->has_mention || room->new_reaction);
 	/* An unseen reaction to the user's message shows as itself where no unread lines are counted */
 	if (room->new_reaction && !room->unread_count) {
 		gtk_label_set_text(GTK_LABEL(badge), room->new_reaction);
 		gtk_widget_set_visible(badge, TRUE);
 	}
+	/* A chat with nothing to show under its name keeps the name centred beside the avatar */
+	gtk_widget_set_visible(bottom, (line && *line) || shows_typing || gtk_widget_get_visible(badge));
 	gtk_widget_set_opacity(row, room->kind == ROOM_CHANNEL && !room->is_joined ? 0.6 : 1.0);
 }
 
@@ -208,6 +213,7 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	g_object_set_data(G_OBJECT(row), "time", time);
 	g_object_set_data(G_OBJECT(row), "preview", preview);
 	g_object_set_data(G_OBJECT(row), "badge", badge);
+	g_object_set_data(G_OBJECT(row), "bottom", bottom);
 	g_object_set_data(G_OBJECT(row), "kind", kind);
 	GtkGesture *click = gtk_gesture_click_new();
 	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(click), GDK_BUTTON_SECONDARY);
@@ -218,6 +224,19 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	g_signal_connect(open, "released", G_CALLBACK(click_room), data);
 	gtk_widget_add_controller(row, GTK_EVENT_CONTROLLER(open));
 	gtk_list_item_set_child(item, row);
+}
+
+
+/* A chat's time turns from the clock time into a weekday once its day is over */
+static void refill_rows_for_new_day(gpointer data) {
+	RoomList *list = data;
+	for (GtkWidget *item = gtk_widget_get_first_child(list->list_view); item;
+		item = gtk_widget_get_next_sibling(item)) {
+		GtkWidget *row = gtk_widget_get_first_child(item);
+		CrimsonRoom *room = row ? g_object_get_data(G_OBJECT(row), ROOM_KEY) : NULL;
+		if (room)
+			fill_row(row, room);
+	}
 }
 
 
@@ -330,15 +349,13 @@ static void open_space_menu(GtkGestureClick *gesture, int presses, double x, dou
 }
 
 
-/* The + button rises while the window has focus and sinks out of sight when another window takes it */
-static void follow_window_focus(GtkWindow *window, GParamSpec *spec, RoomList *list) {
-	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), gtk_window_is_active(window));
-}
-
-
-void watch_room_list_focus(RoomList *list, GtkWidget *window) {
-	g_signal_connect(window, "notify::is-active", G_CALLBACK(follow_window_focus), list);
-	follow_window_focus(GTK_WINDOW(window), NULL, list);
+/* The + button rises while the window has focus and the pointer is over the chat list, and stays while its menu
+ * is open */
+static void show_add_button(RoomList *list) {
+	gboolean is_active = gtk_window_is_active(GTK_WINDOW(list->window->window));
+	gboolean is_pointed_at = gtk_event_controller_motion_contains_pointer(list->list_hover);
+	gboolean is_open = gtk_menu_button_get_active(GTK_MENU_BUTTON(list->add_button));
+	gtk_revealer_set_reveal_child(GTK_REVEALER(list->add_revealer), is_open || (is_active && is_pointed_at));
 }
 
 
@@ -384,7 +401,7 @@ static void leave_search(GtkEventControllerFocus *focus, RoomList *list) {
 
 static GtkWidget *create_header(RoomList *list) {
 	list->header = adw_header_bar_new();
-	gtk_widget_add_css_class(list->header, "top-bar");
+	gtk_widget_add_css_class(list->header, "title-bar");
 	list->menu_button = create_main_menu_button(list->window);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(list->header), list->menu_button);
 	list->search = gtk_search_entry_new();
@@ -470,6 +487,11 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_set_halign(list->add_revealer, GTK_ALIGN_END);
 	gtk_widget_set_valign(list->add_revealer, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), list->add_revealer);
+	list->list_hover = GTK_EVENT_CONTROLLER_MOTION(gtk_event_controller_motion_new());
+	g_signal_connect_swapped(list->list_hover, "notify::contains-pointer", G_CALLBACK(show_add_button), list);
+	gtk_widget_add_controller(overlay, GTK_EVENT_CONTROLLER(list->list_hover));
+	g_signal_connect_swapped(list->add_button, "notify::active", G_CALLBACK(show_add_button), list);
+	g_signal_connect_swapped(list->window->window, "notify::is-active", G_CALLBACK(show_add_button), list);
 	/* A spinner in the other corner while a connection is down, or a warning when it needs the user, with what it
 	 * is about sliding out beside it */
 	list->connection_button = gtk_button_new();
@@ -605,6 +627,25 @@ void show_room_list_banner(RoomList *list, AccountBanner banner, const char *net
 }
 
 
+/* Shows a still image of the list in its place, so the list can change underneath before sliding in */
+static gboolean freeze_room_list(RoomList *list) {
+	if (!gtk_widget_get_mapped(list->box) || gtk_widget_get_width(list->box) <= 0)
+		return FALSE;
+	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(list->box);
+	g_autoptr(GdkPaintable) image = gdk_paintable_get_current_image(live);
+	gtk_picture_set_paintable(GTK_PICTURE(list->still), image);
+	gtk_stack_set_transition_type(GTK_STACK(list->slider), GTK_STACK_TRANSITION_TYPE_NONE);
+	gtk_stack_set_visible_child(GTK_STACK(list->slider), list->still);
+	return TRUE;
+}
+
+
+static void forget_list_still(GtkStack *slider, GParamSpec *spec, RoomList *list) {
+	if (!gtk_stack_get_transition_running(slider))
+		gtk_picture_set_paintable(GTK_PICTURE(list->still), NULL);
+}
+
+
 RoomList *create_room_list(Window *window) {
 	RoomList *list = g_new0(RoomList, 1);
 	list->window = window;
@@ -615,6 +656,7 @@ RoomList *create_room_list(Window *window) {
 	gtk_box_append(GTK_BOX(list->box), create_banner(list));
 	list->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
+	watch_day_change(refill_rows_for_new_day, list);
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");
 	/* The connection note sits over every page of the list, including the one for a server without chats */
 	GtkWidget *pages = gtk_overlay_new();
@@ -622,12 +664,19 @@ RoomList *create_room_list(Window *window) {
 	gtk_overlay_add_overlay(GTK_OVERLAY(pages), list->connection);
 	gtk_widget_set_vexpand(pages, TRUE);
 	gtk_box_append(GTK_BOX(list->box), pages);
+	list->slider = gtk_stack_new();
+	gtk_stack_set_transition_duration(GTK_STACK(list->slider), LIST_SLIDE_MS);
+	gtk_stack_add_named(GTK_STACK(list->slider), list->box, "live");
+	list->still = gtk_picture_new();
+	gtk_picture_set_content_fit(GTK_PICTURE(list->still), GTK_CONTENT_FIT_FILL);
+	gtk_stack_add_named(GTK_STACK(list->slider), list->still, "still");
+	g_signal_connect(list->slider, "notify::transition-running", G_CALLBACK(forget_list_still), list);
 	return list;
 }
 
 
 GtkWidget *get_room_list_widget(RoomList *list) {
-	return list->box;
+	return list->slider;
 }
 
 
@@ -648,10 +697,15 @@ void refresh_room_list_header(RoomList *list) {
 
 
 void show_room_list_network(RoomList *list, CrimsonNetwork *network) {
+	gboolean slides = list->network && network != list->network && freeze_room_list(list);
 	list->network = network;
 	gtk_filter_changed(GTK_FILTER(list->filter), GTK_FILTER_CHANGE_DIFFERENT);
 	select_listed_room(list, get_open_room(list->window));
 	refresh_room_list_header(list);
+	if (!slides)
+		return;
+	gtk_stack_set_transition_type(GTK_STACK(list->slider), GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
+	gtk_stack_set_visible_child(GTK_STACK(list->slider), list->box);
 }
 
 

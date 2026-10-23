@@ -263,23 +263,12 @@ static void ask_to_remove(GtkWidget *avatar) {
 }
 
 
-static void click_picture(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
-	choose_picture(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)));
-}
-
-
-GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
-	const char *name) {
-	PictureChoice *choice = g_new0(PictureChoice, 1);
-	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}};
-	g_weak_ref_init(&choice->avatar, NULL);
-	g_object_set_data_full(G_OBJECT(avatar), "picture-choice", choice, (GDestroyNotify)free_picture_choice);
+GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer data) {
 	gtk_widget_set_cursor_from_name(avatar, "pointer");
 	gtk_widget_set_tooltip_text(avatar, TEXT_CHANGE_PICTURE);
 	GtkGesture *click = gtk_gesture_click_new();
-	g_signal_connect(click, "released", G_CALLBACK(click_picture), NULL);
+	g_signal_connect_swapped(click, "released", change, data);
 	gtk_widget_add_controller(avatar, GTK_EVENT_CONTROLLER(click));
-	/* Pointing at the picture shows a picture sign in its corner, and a remove button where the user chose one */
 	GtkWidget *overlay = gtk_overlay_new();
 	gtk_widget_add_css_class(overlay, "picture-choice");
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), avatar);
@@ -289,6 +278,18 @@ GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwor
 	gtk_widget_set_valign(sign, GTK_ALIGN_END);
 	gtk_widget_set_can_target(sign, FALSE);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), sign);
+	return overlay;
+}
+
+
+GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
+	const char *name) {
+	PictureChoice *choice = g_new0(PictureChoice, 1);
+	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}};
+	g_weak_ref_init(&choice->avatar, NULL);
+	g_object_set_data_full(G_OBJECT(avatar), "picture-choice", choice, (GDestroyNotify)free_picture_choice);
+	GtkWidget *overlay = offer_picture_change(avatar, G_CALLBACK(choose_picture), avatar);
+	/* A remove button sits in the other corner where the user chose a picture */
 	GtkWidget *remove = gtk_button_new_from_icon_name("user-trash-symbolic");
 	gtk_widget_add_css_class(remove, "picture-badge");
 	gtk_widget_add_css_class(remove, "circular");

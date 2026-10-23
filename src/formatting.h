@@ -21,3 +21,7 @@ char *format_list_time(gint64 time);
 /* A heading for a day in a conversation, such as Today or Monday 19 October */
 char *format_day_heading(gint64 time);
 gboolean is_same_day(gint64 first, gint64 second);
+
+typedef void (*DayChangedFunction)(gpointer data);
+/* Runs the function each time the local date changes, so words such as Today and Yesterday move on */
+void watch_day_change(DayChangedFunction on_changed, gpointer data);

@@ -1,5 +1,7 @@
 #include <string.h>
 
+#include <adwaita.h>
+
 #include "../lang/en.h"
 #include "composer.h"
 #include "formatting.h"
@@ -8,6 +10,11 @@
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
 #define SEND_SPINNER_SIZE 20
+#define SEND_ROOM_MS 250
+/* The send button's width and the gap before it, which the field gives up while the button shows */
+#define SEND_ROOM 52
+/* How far the field has moved aside when the send button starts to grow in */
+#define SEND_GROW_POINT 0.5
 #define PAUSE_SECONDS 6
 #define FIELD_MAXIMUM_HEIGHT 180
 #define DRAFTS_KEY "draft"
@@ -20,8 +27,12 @@ struct Composer {
 	gint64 last_typing;
 	gboolean is_typing;
 	/* Whether the room's server is not connected, which turns the send button into a spinner and holds the text */
-	gboolean is_waiting;
-	GtkWidget *send_icons;
+	gboolean is_waiting, is_spinner_shown;
+	/* The send button only takes room beside the field while there is text to send or a wait to show */
+	GtkWidget *send_icons, *field_area;
+	AdwAnimation *send_room_animation;
+	double send_room;
+	gboolean is_send_shown;
 	guint pause_source, wait_source;
 	gulong change_handler;
 	/* Tab completion cycles through matches until another key is pressed */
@@ -83,6 +94,37 @@ static void clear_matches(Composer *composer) {
 }
 
 
+/* Ranks each matching nick by how recently it spoke in the room, newest first, stopping once every one is found */
+static GHashTable *rank_recent_speakers(CrimsonRoom *room, GPtrArray *nicks) {
+	GHashTable *ranks = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	g_autoptr(GHashTable) wanted = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	for (guint index = 0; index < nicks->len; index++)
+		g_hash_table_add(wanted, g_utf8_casefold(g_ptr_array_index(nicks, index), -1));
+	GListModel *messages = G_LIST_MODEL(room->messages);
+	guint count = g_list_model_get_n_items(messages);
+	for (guint index = count; index > 0 && g_hash_table_size(ranks) < g_hash_table_size(wanted); index--) {
+		g_autoptr(CrimsonMessage) message = g_list_model_get_item(messages, index - 1);
+		g_autofree char *sender = message->sender ? g_utf8_casefold(message->sender, -1) : NULL;
+		if (sender && g_hash_table_contains(wanted, sender) && !g_hash_table_contains(ranks, sender))
+			g_hash_table_insert(ranks, g_steal_pointer(&sender), GUINT_TO_POINTER(count - index + 1));
+	}
+	return ranks;
+}
+
+
+static int compare_by_recent_speech(gconstpointer first, gconstpointer second, gpointer data) {
+	const char *one = *(const char *const *)first, *other = *(const char *const *)second;
+	g_autofree char *one_folded = g_utf8_casefold(one, -1);
+	g_autofree char *other_folded = g_utf8_casefold(other, -1);
+	guint one_rank = GPOINTER_TO_UINT(g_hash_table_lookup(data, one_folded));
+	guint other_rank = GPOINTER_TO_UINT(g_hash_table_lookup(data, other_folded));
+	/* Anyone who has not spoken comes after those who have, in alphabetical order */
+	if (one_rank != other_rank)
+		return !one_rank ? 1 : !other_rank ? -1 : one_rank < other_rank ? -1 : 1;
+	return g_ascii_strcasecmp(one, other);
+}
+
+
 static void collect_matches(Composer *composer, const char *prefix) {
 	composer->matches = g_ptr_array_new_with_free_func(g_free);
 	IrcState *state = get_network_state(composer->room->network);
@@ -105,7 +147,8 @@ static void collect_matches(Composer *composer, const char *prefix) {
 		if (g_str_has_prefix(name, wanted))
 			g_ptr_array_add(composer->matches, g_strdup(composer->room->name));
 	}
-	g_ptr_array_sort_values(composer->matches, (GCompareFunc)g_ascii_strcasecmp);
+	g_autoptr(GHashTable) ranks = rank_recent_speakers(composer->room, composer->matches);
+	g_ptr_array_sort_with_data(composer->matches, compare_by_recent_speech, ranks);
 	composer->match_index = 0;
 }
 
@@ -141,8 +184,24 @@ static void complete_nick(Composer *composer) {
 }
 
 
+/* Deleting past either end of the text does nothing, so the field is kept from answering it with the error sound */
+static gboolean is_deleting_past_edge(Composer *composer, guint key) {
+	if (gtk_text_buffer_get_has_selection(composer->buffer))
+		return FALSE;
+	GtkTextIter cursor;
+	gtk_text_buffer_get_iter_at_mark(composer->buffer, &cursor, gtk_text_buffer_get_insert(composer->buffer));
+	if (key == GDK_KEY_BackSpace)
+		return gtk_text_iter_is_start(&cursor);
+	if (key == GDK_KEY_Delete || key == GDK_KEY_KP_Delete)
+		return gtk_text_iter_is_end(&cursor);
+	return FALSE;
+}
+
+
 static gboolean press_key(GtkEventControllerKey *controller, guint key, guint code, GdkModifierType state,
 	Composer *composer) {
+	if (is_deleting_past_edge(composer, key))
+		return TRUE;
 	if (key != GDK_KEY_Tab && key != GDK_KEY_ISO_Left_Tab)
 		clear_matches(composer);
 	gboolean has_shift = state & GDK_SHIFT_MASK;
@@ -172,12 +231,41 @@ static gboolean pause_typing(gpointer data) {
 }
 
 
+/* The send button stays put at the row's end while the field moves aside for it, and the button grows in with a
+ * little bounce once the field is halfway there */
+static void move_field_aside(double value, gpointer data) {
+	Composer *composer = data;
+	composer->send_room = value;
+	gtk_widget_set_margin_end(composer->field_area, (int)(value * SEND_ROOM + 0.5));
+	if (composer->is_send_shown && value >= SEND_GROW_POINT)
+		gtk_widget_remove_css_class(composer->send_button, "tucked");
+}
+
+
+/* Going, the button shrinks away at once while the field takes the room back */
+static void refresh_send_button(Composer *composer) {
+	g_autofree char *text = get_field_text(composer);
+	gtk_widget_set_sensitive(composer->send_button, *text && !composer->is_waiting);
+	gboolean is_shown = *text || composer->is_spinner_shown;
+	if (is_shown == composer->is_send_shown)
+		return;
+	composer->is_send_shown = is_shown;
+	gtk_widget_set_can_target(composer->send_button, is_shown);
+	if (!is_shown)
+		gtk_widget_add_css_class(composer->send_button, "tucked");
+	AdwTimedAnimation *animation = ADW_TIMED_ANIMATION(composer->send_room_animation);
+	adw_timed_animation_set_value_from(animation, composer->send_room);
+	adw_timed_animation_set_value_to(animation, is_shown ? 1 : 0);
+	adw_animation_play(composer->send_room_animation);
+}
+
+
 /* Typing notices go at most every three seconds and say done when the field is emptied */
 static void change_text(GtkTextBuffer *buffer, Composer *composer) {
 	g_autofree char *text = get_field_text(composer);
 	gboolean is_empty = !*text;
 	gtk_widget_set_visible(composer->placeholder, is_empty);
-	gtk_widget_set_sensitive(composer->send_button, !is_empty && !composer->is_waiting);
+	refresh_send_button(composer);
 	if (!composer->room || *text == '/')
 		return;
 	if (is_empty) {
@@ -274,7 +362,7 @@ Composer *create_composer(void) {
 	gtk_widget_add_css_class(composer->box, "composer");
 	composer->reply_bar = create_reply_bar(composer);
 	gtk_box_append(GTK_BOX(composer->box), composer->reply_bar);
-	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_add_css_class(row, "composer-row");
 	GtkWidget *emoji = gtk_menu_button_new();
 	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(emoji), "face-smile-symbolic");
@@ -287,7 +375,8 @@ Composer *create_composer(void) {
 	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), composer);
 	gtk_menu_button_set_popover(GTK_MENU_BUTTON(emoji), chooser);
 	gtk_box_append(GTK_BOX(row), emoji);
-	gtk_box_append(GTK_BOX(row), create_field(composer));
+	composer->field_area = create_field(composer);
+	gtk_box_append(GTK_BOX(row), composer->field_area);
 	composer->send_button = gtk_button_new();
 	composer->send_icons = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(composer->send_icons), gtk_image_new_from_icon_name("crimson-send-symbolic"), "send");
@@ -303,9 +392,17 @@ Composer *create_composer(void) {
 	gtk_widget_add_css_class(composer->send_button, "send-button");
 	gtk_widget_set_valign(composer->send_button, GTK_ALIGN_END);
 	gtk_widget_set_sensitive(composer->send_button, FALSE);
+	gtk_widget_add_css_class(composer->send_button, "tucked");
 	g_signal_connect(composer->send_button, "clicked", G_CALLBACK(click_send), composer);
-	gtk_box_append(GTK_BOX(row), composer->send_button);
-	gtk_box_append(GTK_BOX(composer->box), row);
+	gtk_widget_set_halign(composer->send_button, GTK_ALIGN_END);
+	gtk_widget_set_can_target(composer->send_button, FALSE);
+	GtkWidget *layers = gtk_overlay_new();
+	gtk_overlay_set_child(GTK_OVERLAY(layers), row);
+	gtk_overlay_add_overlay(GTK_OVERLAY(layers), composer->send_button);
+	AdwAnimationTarget *target = adw_callback_animation_target_new(move_field_aside, composer, NULL);
+	composer->send_room_animation = adw_timed_animation_new(layers, 0, 1, SEND_ROOM_MS, target);
+	adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(composer->send_room_animation), ADW_EASE_OUT_CUBIC);
+	gtk_box_append(GTK_BOX(composer->box), layers);
 	return composer;
 }
 
@@ -331,7 +428,7 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 	gtk_text_buffer_set_text(composer->buffer, draft ? draft : "", -1);
 	g_signal_handler_unblock(composer->buffer, composer->change_handler);
 	gtk_widget_set_visible(composer->placeholder, !draft || !*draft);
-	gtk_widget_set_sensitive(composer->send_button, draft && *draft && !composer->is_waiting);
+	refresh_send_button(composer);
 	gtk_label_set_text(GTK_LABEL(composer->placeholder), room && room->kind == ROOM_SERVER ? TEXT_SEND_COMMAND
 		: TEXT_WRITE_MESSAGE);
 }
@@ -351,11 +448,13 @@ void mention_in_composer(Composer *composer, const char *nick) {
 
 
 static void show_send_look(Composer *composer, gboolean is_waiting) {
+	composer->is_spinner_shown = is_waiting;
 	gtk_stack_set_visible_child_name(GTK_STACK(composer->send_icons), is_waiting ? "waiting" : "send");
 	if (is_waiting)
 		gtk_widget_add_css_class(composer->send_button, "waiting");
 	else
 		gtk_widget_remove_css_class(composer->send_button, "waiting");
+	refresh_send_button(composer);
 }
 
 
@@ -379,6 +478,5 @@ void set_composer_waiting(Composer *composer, const char *message) {
 		composer->wait_source = g_timeout_add(WAIT_SHOWN_MS, show_send_waiting, composer);
 	else
 		show_send_look(composer, FALSE);
-	g_autofree char *text = get_field_text(composer);
-	gtk_widget_set_sensitive(composer->send_button, !is_waiting && *text);
+	refresh_send_button(composer);
 }

@@ -52,8 +52,10 @@ struct _CrimsonMessage {
 	GHashTable *reactions;
 	GPtrArray *reaction_order;
 	gboolean is_own, is_pending, is_redacted, is_highlight, is_bot;
-	/* Arrived while the room was live, so its bubble pops in once when first drawn */
-	gboolean is_fresh;
+	/* Someone else joining, leaving, quitting, renaming or changing modes, kept always and shown by the setting */
+	gboolean is_membership;
+	/* The monotonic moment a live message arrived, or 0 for one loaded from history */
+	gint64 arrival_time;
 };
 
 #define CRIMSON_TYPE_ROOM (crimson_room_get_type())
@@ -159,6 +161,8 @@ CrimsonMessage *get_last_message(CrimsonRoom *room);
 /* Counts the unread messages again after the read marker or the messages changed */
 void count_unread(CrimsonRoom *room);
 gboolean is_room_typing(CrimsonRoom *room);
+/* Whether a message arrived just now, which however often its row is drawn in that moment makes it rise in */
+gboolean is_message_arriving(CrimsonMessage *message);
 
 CrimsonNetwork *create_network(Session *session, const char *key, const char *name);
 void announce_network_change(CrimsonNetwork *network);

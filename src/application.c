@@ -6,6 +6,7 @@
 #include "formatting.h"
 #include "settings-dialog.h"
 #include "settings.h"
+#include "sounds.h"
 #include "window.h"
 #include "wizards.h"
 
@@ -39,11 +40,14 @@ static void withdraw_notification(CrimsonRoom *room, gpointer data) {
 }
 
 
-/* A desktop notification for a mention or a private message, unless the room is already on screen */
+/* A desktop notification for a mention or a private message, unless the room is already on screen, with the longer
+ * sound unless the chat is the open one, which makes its own short sound */
 static void notify_message(CrimsonRoom *room, CrimsonMessage *message, gpointer data) {
 	Window *window = get_main_window();
 	if (window && is_room_in_view(window, room))
 		return;
+	if (!window || get_open_room(window) != room)
+		play_sound(SOUND_MENTION);
 	g_autofree char *title = room->kind == ROOM_PRIVATE ? g_strdup(message->sender)
 		: g_strdup_printf(TEXT_NOTIFICATION_TITLE, message->sender, room->name);
 	g_autofree char *body = strip_irc_formatting(message->text);
@@ -165,15 +169,22 @@ static void open_room_action(GSimpleAction *action, GVariant *parameter, gpointe
 }
 
 
-static void quit(GSimpleAction *action, GVariant *parameter, gpointer application) {
+static void finish_quitting(gpointer application) {
 	Window *window = get_main_window();
 	stop_chat(chat);
-	if (!window) {
+	if (window)
+		gtk_window_close(GTK_WINDOW(window->window));
+	else
 		g_application_quit(application);
-		return;
-	}
-	window->is_quitting = TRUE;
-	gtk_window_close(GTK_WINDOW(window->window));
+}
+
+
+/* The window and tray icon go first, and the connections close once the display has seen them leave */
+static void quit(GSimpleAction *action, GVariant *parameter, gpointer application) {
+	Window *window = get_main_window();
+	if (window)
+		withdraw_window(window);
+	g_idle_add_once(finish_quitting, application);
 }
 
 

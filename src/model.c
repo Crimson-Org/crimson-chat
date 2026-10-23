@@ -2,6 +2,9 @@
 
 #include "model.h"
 
+/* How long after arriving a message still counts as new when its row is drawn */
+#define ARRIVAL_MICROSECONDS (G_USEC_PER_SEC / 2)
+
 enum {
 	SIGNAL_CHANGED,
 	SIGNAL_COUNT,
@@ -200,6 +203,23 @@ static guint find_insert_position(CrimsonRoom *room, gint64 time) {
 }
 
 
+static gboolean is_message_note(CrimsonRoom *room, guint position) {
+	g_autoptr(CrimsonMessage) message = g_list_model_get_item(G_LIST_MODEL(room->messages), position);
+	return message->kind == MESSAGE_EVENT || message->kind == MESSAGE_STATUS;
+}
+
+
+/* Tells the rows of the messages from first up to end to draw again, since a list keeps the row of a message put
+ * back in place as it was */
+static void redraw_messages(GListStore *messages, guint first, guint end) {
+	end = MIN(end, g_list_model_get_n_items(G_LIST_MODEL(messages)));
+	for (guint position = first; position < end; position++) {
+		g_autoptr(CrimsonMessage) message = g_list_model_get_item(G_LIST_MODEL(messages), position);
+		announce_message_change(message);
+	}
+}
+
+
 gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 	if (message->id && g_hash_table_contains(room->by_id, message->id))
 		return FALSE;
@@ -207,10 +227,16 @@ gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 		g_hash_table_insert(room->by_id, g_strdup(message->id), message);
 	guint position = find_insert_position(room, message->time);
 	g_list_store_insert(room->messages, position, message);
-	/* The message after a new one may now continue its group or lose its date line, so it is drawn again */
-	g_autoptr(CrimsonMessage) next = g_list_model_get_item(G_LIST_MODEL(room->messages), position + 1);
-	if (next)
-		g_list_store_splice(room->messages, position + 1, 1, (gpointer *)&next, 1);
+	/* The message after a new one may now continue its group or lose its date line, and the one before may no longer
+	 * end its group, so both are drawn again, reaching past events that may be hidden to the nearest bubbles */
+	guint last = position + 1;
+	while (last < g_list_model_get_n_items(G_LIST_MODEL(room->messages)) && is_message_note(room, last))
+		last++;
+	redraw_messages(room->messages, position + 1, last + 1);
+	guint first = position;
+	while (first > 0 && is_message_note(room, first - 1))
+		first--;
+	redraw_messages(room->messages, first ? first - 1 : 0, position);
 	if (message->time >= room->last_time && message->kind != MESSAGE_EVENT) {
 		room->last_time = message->time;
 		g_free(room->preview);
@@ -235,6 +261,11 @@ CrimsonMessage *get_last_message(CrimsonRoom *room) {
 	CrimsonMessage *message = g_list_model_get_item(G_LIST_MODEL(room->messages), count - 1);
 	g_object_unref(message);
 	return message;
+}
+
+
+gboolean is_message_arriving(CrimsonMessage *message) {
+	return message->arrival_time && g_get_monotonic_time() - message->arrival_time < ARRIVAL_MICROSECONDS;
 }
 
 

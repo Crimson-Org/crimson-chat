@@ -9,6 +9,12 @@
 #include "pictures.h"
 
 #define TYPING_NAMES_SHOWN 2
+#define TYPING_DOTS_MILLISECONDS 750
+
+/* Lines saying who is typing end in dots that count up, and one clock moves them all together */
+static const char *const TYPING_DOTS[] = {"...", ".", ".."};
+static GPtrArray *typing_labels;
+static guint typing_source, typing_step;
 
 
 const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key) {
@@ -61,6 +67,59 @@ static char *describe_typing(CrimsonRoom *room) {
 		return g_strdup_printf(TEXT_TYPING_TWO, (const char *)g_ptr_array_index(nicks, 0),
 			(const char *)g_ptr_array_index(nicks, 1));
 	return g_strdup_printf(TEXT_TYPING_MANY, nicks->len);
+}
+
+
+static void show_typing_dots(GtkWidget *label) {
+	const char *text = g_object_get_data(G_OBJECT(label), "typing-text");
+	g_autofree char *line = g_strconcat(text, TYPING_DOTS[typing_step], NULL);
+	gtk_label_set_text(GTK_LABEL(label), line);
+}
+
+
+static gboolean step_typing_dots(gpointer data) {
+	typing_step = (typing_step + 1) % G_N_ELEMENTS(TYPING_DOTS);
+	for (guint index = 0; index < typing_labels->len; index++)
+		show_typing_dots(g_ptr_array_index(typing_labels, index));
+	return G_SOURCE_CONTINUE;
+}
+
+
+static void forget_typing_label(gpointer data, GObject *label) {
+	g_ptr_array_remove(typing_labels, label);
+	if (!typing_labels->len)
+		g_clear_handle_id(&typing_source, g_source_remove);
+}
+
+
+static void stop_typing_dots(GtkWidget *label) {
+	if (!typing_labels || !g_ptr_array_find(typing_labels, label, NULL))
+		return;
+	g_object_weak_unref(G_OBJECT(label), forget_typing_label, NULL);
+	forget_typing_label(NULL, G_OBJECT(label));
+}
+
+
+void show_room_line(GtkWidget *label, const char *text, gboolean is_typing) {
+	if (!is_typing) {
+		stop_typing_dots(label);
+		gtk_widget_remove_css_class(label, "typing");
+		gtk_label_set_text(GTK_LABEL(label), text);
+		return;
+	}
+	gtk_widget_add_css_class(label, "typing");
+	g_object_set_data_full(G_OBJECT(label), "typing-text", g_strdup(text), g_free);
+	if (!typing_labels)
+		typing_labels = g_ptr_array_new();
+	if (!g_ptr_array_find(typing_labels, label, NULL)) {
+		g_ptr_array_add(typing_labels, label);
+		g_object_weak_ref(G_OBJECT(label), forget_typing_label, NULL);
+	}
+	if (!typing_source) {
+		typing_step = 0;
+		typing_source = g_timeout_add(TYPING_DOTS_MILLISECONDS, step_typing_dots, NULL);
+	}
+	show_typing_dots(label);
 }
 
 

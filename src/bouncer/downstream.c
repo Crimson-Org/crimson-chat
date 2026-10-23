@@ -17,7 +17,7 @@ static const char *const OFFERED_CAPS[] = {
 	"batch", "echo-message", "draft/chathistory", "draft/event-playback", "draft/read-marker", "cap-notify",
 	"account-notify", "away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname",
 	"invite-notify", "account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename",
-	"extended-monitor", "crimson-chat/invites", "draft/account-registration", NULL,
+	"extended-monitor", "crimson-chat/invites", "crimson-chat/reconnect", "draft/account-registration", NULL,
 };
 
 /* Commands a client only receives once it took the capability that describes them */
@@ -575,22 +575,40 @@ static void change_network_for(Downstream *downstream, const char *network_id, c
 	if (!check_attributes(downstream, "CHANGENETWORK", network_id, attributes))
 		return;
 	/* A login saved for the account the connection is already logged into, as after registering, needs no
-	 * reconnect, and neither does a new name */
+	 * reconnect, and neither does a new name or real name */
 	IrcState *state = get_irc_client_state(upstream->client);
 	const char *new_login = g_hash_table_lookup(attributes, "sasl-username");
 	gboolean is_current_login = new_login && state->account && g_ascii_strcasecmp(new_login, state->account) == 0;
-	guint login_keys = g_hash_table_contains(attributes, "sasl-username") + g_hash_table_contains(attributes,
-		"sasl-password");
-	gboolean only_login = is_current_login && login_keys == g_hash_table_size(attributes);
+	guint quiet_keys = g_hash_table_contains(attributes, "name") + g_hash_table_contains(attributes, "realname");
+	if (is_current_login)
+		quiet_keys += g_hash_table_contains(attributes, "sasl-username") + g_hash_table_contains(attributes,
+			"sasl-password");
+	gboolean needs_restart = quiet_keys < g_hash_table_size(attributes);
 	apply_attributes(&upstream->record, attributes);
 	save_network(downstream->bouncer->database, &upstream->record);
+	/* A network with SETNAME takes the real name at once, and any other one on its next connection */
+	const char *realname = g_hash_table_lookup(attributes, "realname");
+	gboolean is_registered = get_irc_client_status(upstream->client) == IRC_CLIENT_REGISTERED;
+	if (!needs_restart && realname && *realname && is_registered && has_irc_cap(state, "setname"))
+		send_irc_client_command(upstream->client, "SETNAME", realname, NULL);
 	g_hash_table_remove(attributes, "pass");
 	g_hash_table_remove(attributes, "sasl-password");
 	announce_network(upstream, g_hash_table_ref(attributes));
-	gboolean only_names = g_hash_table_size(attributes) == 1 && g_hash_table_contains(attributes, "name");
-	if (!only_names && !only_login)
+	if (needs_restart)
 		restart_upstream(upstream);
 	send_from_bouncer(downstream, "BOUNCER", "CHANGENETWORK", network_id, NULL);
+}
+
+
+/* The client asks for a network to reconnect, such as to log in with a real name the network cannot change */
+static void reconnect_network_for(Downstream *downstream, const char *network_id) {
+	Upstream *upstream = find_upstream(downstream->user, network_id);
+	if (!upstream) {
+		send_from_bouncer(downstream, "FAIL", "BOUNCER", "INVALID_NETID", "RECONNECTNETWORK", network_id ? network_id
+			: "*", "Network not found", NULL);
+		return;
+	}
+	restart_upstream(upstream);
 }
 
 
@@ -632,6 +650,8 @@ static void handle_bouncer(Downstream *downstream, const IrcMessage *message) {
 		change_network_for(downstream, get_irc_parameter(message, 1), get_irc_parameter(message, 2));
 	} else if (g_ascii_strcasecmp(subcommand, "DELNETWORK") == 0) {
 		delete_network_for(downstream, get_irc_parameter(message, 1));
+	} else if (g_ascii_strcasecmp(subcommand, "RECONNECTNETWORK") == 0) {
+		reconnect_network_for(downstream, get_irc_parameter(message, 1));
 	} else {
 		send_from_bouncer(downstream, "FAIL", "BOUNCER", "UNKNOWN_COMMAND", subcommand, "Unknown subcommand", NULL);
 	}

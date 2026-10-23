@@ -92,6 +92,10 @@ printf '==> %s\n' 'each subprojects/crimson-core/src/common/*.c'
 crimson_each "subprojects/crimson-core/src/common/*.c" "build/obj/{id}.o" "cc -std=${STD} \$WARN \$OPT \$DEFINES \$INCLUDES \$(pkg-config --cflags \$PKGS | sed \"s/-I/-isystem /g\") -c {from} -o {to}" "subprojects/crimson-core/src/common/*.h"
 printf '==> %s\n' 'cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/resources.c -o build/obj/resources.o'
 cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/resources.c -o build/obj/resources.o
+printf '==> %s\n' 'glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml'
+glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml
+printf '==> %s\n' 'cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/core-resources.c -o build/obj/core-resources.o'
+cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/core-resources.c -o build/obj/core-resources.o
 printf '==> %s\n' 'cc -o build/${PROGRAM} build/obj/*.o build/irc/*.o $(pkg-config --libs $PKGS) -lm'
 cc -o build/${PROGRAM} build/obj/*.o build/irc/*.o $(pkg-config --libs $PKGS) -lm
 printf '==> %s\n' 'copy build/${PROGRAM} to .${PROGRAM}.new'

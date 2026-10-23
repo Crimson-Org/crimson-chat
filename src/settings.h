@@ -11,8 +11,10 @@ typedef enum {
 /* The choices in Settings, kept in the user's config folder */
 typedef struct {
 	Style style;
+	/* Theme ids for the light and dark style */
+	char *light_theme, *dark_theme;
 	gboolean shows_events, shows_images, shows_typing, sends_typing, sends_read_markers;
-	gboolean notifies_mentions, notifies_private, closes_to_tray, uses_24_hours;
+	gboolean notifies_mentions, notifies_private, plays_sounds, closes_to_tray, uses_24_hours;
 	/* Comma separated words that count as a mention besides the user's own nick */
 	char *highlight_words;
 } Settings;

@@ -15,6 +15,9 @@
 #define RESET '\x0f'
 #define NAME_COLORS 8
 #define WEEK_DAYS 6
+/* The timer to midnight stops while the computer sleeps, so it also checks the date this often to catch a missed
+ * midnight soon after waking */
+#define DAY_CHECK_SECONDS (10 * 60)
 #define LINK_PATTERN "(?:https?|ftp)://[^\\s<>\"]+|www\\.[^\\s<>\"]+"
 #define TRAILING_PUNCTUATION ".,;:!?'\""
 
@@ -318,6 +321,65 @@ char *format_day_heading(gint64 time) {
 	g_autoptr(GDateTime) now = g_date_time_new_now_local();
 	gboolean is_this_year = g_date_time_get_year(local) == g_date_time_get_year(now);
 	return g_date_time_format(local, is_this_year ? "%A %e %B" : "%A %e %B %Y");
+}
+
+
+/* A function to tell when the date changes */
+typedef struct {
+	DayChangedFunction on_changed;
+	gpointer data;
+} DayWatcher;
+
+static GArray *day_watchers;
+static int watched_day;
+
+
+/* The local date as one number that changes exactly when the date does */
+static int read_local_day(void) {
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	return g_date_time_get_year(now) * 1000 + g_date_time_get_day_of_year(now);
+}
+
+
+static guint count_seconds_to_midnight(void) {
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	g_autoptr(GDateTime) start = g_date_time_new_local(g_date_time_get_year(now), g_date_time_get_month(now),
+		g_date_time_get_day_of_month(now), 0, 0, 0);
+	g_autoptr(GDateTime) midnight = g_date_time_add_days(start, 1);
+	return (guint)(g_date_time_difference(midnight, now) / G_USEC_PER_SEC) + 1;
+}
+
+
+static gboolean check_day(gpointer data);
+
+
+static void schedule_day_check(void) {
+	g_timeout_add_seconds(MIN(count_seconds_to_midnight(), DAY_CHECK_SECONDS), check_day, NULL);
+}
+
+
+static gboolean check_day(gpointer data) {
+	int today = read_local_day();
+	if (today != watched_day) {
+		watched_day = today;
+		for (guint index = 0; index < day_watchers->len; index++) {
+			DayWatcher *watcher = &g_array_index(day_watchers, DayWatcher, index);
+			watcher->on_changed(watcher->data);
+		}
+	}
+	schedule_day_check();
+	return G_SOURCE_REMOVE;
+}
+
+
+void watch_day_change(DayChangedFunction on_changed, gpointer data) {
+	if (!day_watchers) {
+		day_watchers = g_array_new(FALSE, FALSE, sizeof(DayWatcher));
+		watched_day = read_local_day();
+		schedule_day_check();
+	}
+	DayWatcher watcher = {on_changed, data};
+	g_array_append_val(day_watchers, watcher);
 }
 
 

@@ -3,13 +3,15 @@
 :root {
 	--accent-bg-color: #c8102e;
 	--accent-fg-color: #ffffff;
-	--accent-color: color-mix(in srgb, #e5354f 80%, var(--window-fg-color));
+	--accent-color: color-mix(in srgb, var(--accent-bg-color) 80%, var(--window-fg-color));
 	/* Everything below follows the light or dark style through libadwaita's own colours */
-	--bubble-own: color-mix(in srgb, #c8102e 24%, var(--view-bg-color));
+	--bubble-own: color-mix(in srgb, var(--accent-bg-color) 24%, var(--view-bg-color));
 	--bubble-other: color-mix(in srgb, var(--window-fg-color) 7%, var(--view-bg-color));
-	--chat-wall: color-mix(in srgb, #c8102e 5%, var(--window-bg-color));
+	--chat-wall: color-mix(in srgb, var(--accent-bg-color) 5%, var(--window-bg-color));
 	--pill-bg: color-mix(in srgb, var(--window-fg-color) 32%, transparent);
 	--rail-bg: color-mix(in srgb, var(--window-fg-color) 6%, var(--window-bg-color));
+	/* What lifts bubbles, reactions and avatars off the chat's wall */
+	--message-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
 }
 
 window,
@@ -25,17 +27,10 @@ tooltip {
 	font-size: 16px;
 }
 
-/* One near black bar runs along the top of every pane */
-headerbar.top-bar {
-	background-color: #0b0a0b;
-	color: #f2f2f4;
+/* One bar in the theme's title bar colours runs along the top of every pane */
+headerbar.title-bar {
 	box-shadow: none;
 	min-height: 56px;
-}
-
-headerbar.top-bar button,
-headerbar.top-bar menubutton > button {
-	color: #f2f2f4;
 }
 
 /* The rail of networks down the left edge */
@@ -101,6 +96,7 @@ headerbar.top-bar menubutton > button {
 
 .unread-badge.mention {
 	background-color: var(--accent-bg-color);
+	color: var(--accent-fg-color);
 }
 
 /* The chat list */
@@ -119,16 +115,31 @@ headerbar.top-bar menubutton > button {
 	transition: background-color 150ms ease-out;
 }
 
-.room-list > row:selected {
-	background-color: var(--accent-bg-color);
-	color: #ffffff;
+/* A chosen chat or person is shaded like a pointed one, only stronger */
+.room-list > row:selected,
+.member-list > row:selected,
+.picker-list > row:selected {
+	background-color: alpha(currentColor, 0.12);
 }
 
-.room-list > row:selected .room-time,
-.room-list > row:selected .room-network,
-.room-list > row:selected .room-preview,
-.room-list > row:selected .room-kind {
-	color: alpha(#ffffff, 0.8);
+.room-list > row:selected:hover,
+.member-list > row:selected:hover,
+.picker-list > row:selected:hover {
+	background-color: alpha(currentColor, 0.16);
+}
+
+/* Keyboard focus shades a row instead of ringing it, so the ring left after typing does not linger on a chat */
+.room-list > row:focus-visible,
+.member-list > row:focus-visible,
+.picker-list > row:focus-visible {
+	outline: none;
+	background-color: alpha(currentColor, 0.07);
+}
+
+.room-list > row:selected:focus-visible,
+.member-list > row:selected:focus-visible,
+.picker-list > row:selected:focus-visible {
+	background-color: alpha(currentColor, 0.16);
 }
 
 .room-row {
@@ -160,15 +171,10 @@ headerbar.top-bar menubutton > button {
 	color: var(--accent-color);
 }
 
-.room-list > row:selected .room-preview.typing {
-	color: #ffffff;
-}
-
 .room-search {
 	min-height: 38px;
 	border-radius: 9999px;
-	background-color: rgba(255, 255, 255, 0.08);
-	color: #f2f2f4;
+	background-color: alpha(currentColor, 0.08);
 }
 
 /* An avatar draws through an inner node, which takes the corner shape */
@@ -232,10 +238,13 @@ headerbar.top-bar menubutton > button {
 .chat-background {
 	background-color: var(--chat-wall);
 	background-image: url("resource:///io/github/CrimsonOrg/CrimsonChat/grain.png"),
-		radial-gradient(ellipse at 20% 0%, alpha(#c8102e, 0.10), transparent 60%),
-		radial-gradient(ellipse at 90% 100%, alpha(#8e0a1d, 0.10), transparent 55%);
+		radial-gradient(ellipse at 20% 0%, alpha(var(--accent-bg-color), 0.10), transparent 60%),
+		radial-gradient(ellipse at 90% 100%, alpha(color-mix(in srgb, var(--accent-bg-color) 70%, black), 0.10),
+		transparent 55%);
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-size: 128px 128px, auto, auto;
+	/* A black line parts the chat from the side panel, ending where the composer's own line takes over */
+	box-shadow: inset 1px 0 #000000;
 }
 
 .messages {
@@ -258,26 +267,40 @@ headerbar.top-bar menubutton > button {
 
 .conversation-title {
 	font-weight: 700;
-	color: #f2f2f4;
 }
 
 .conversation-subtitle {
-	color: alpha(#f2f2f4, 0.6);
+	color: alpha(currentColor, 0.6);
+}
+
+/* A new message rises into place as it fades in, and a picture preview fades in once it has loaded */
+@keyframes pop-in {
+	from {
+		opacity: 0;
+		transform: translateY(28px) scale(0.94);
+	}
+
+	to {
+		opacity: 1;
+		transform: none;
+	}
 }
 
 .bubble {
 	background-color: var(--bubble-other);
 	border-radius: 6px 18px 18px 6px;
 	padding: 7px 12px 5px 12px;
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+	box-shadow: var(--message-shadow);
 }
 
-.bubble.fresh {
-	animation: pop-in 180ms ease-out;
+.fresh-message {
+	animation: pop-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
 
+/* A group's first bubble points at the avatar with a tail on its side, level with the avatar's middle, so the
+ * corner above it is kept small enough for the side to be straight where the tail meets it */
 .bubble.first {
-	border-top-left-radius: 18px;
+	border-radius: 8px 18px 18px 6px;
 }
 
 .bubble.own {
@@ -286,11 +309,54 @@ headerbar.top-bar menubutton > button {
 }
 
 .bubble.own.first {
-	border-top-right-radius: 18px;
+	border-radius: 18px 8px 6px 18px;
+}
+
+/* Only a group's last bubble rounds its lower corner on the avatar's side */
+.bubble.group-end {
+	border-bottom-left-radius: 18px;
+}
+
+.bubble.own.group-end {
+	border-bottom-right-radius: 18px;
+}
+
+/* Every bubble leaves room for a tail beside it, so a group's bubbles line up under its first one */
+.bubble {
+	margin-left: 8px;
+}
+
+.bubble.own {
+	margin-left: 0;
+	margin-right: 8px;
+}
+
+/* The tail is a triangle drawn by a wide side border between two clear ones, one pixel wider than the room left
+ * for it so it covers the bubble's edge where they meet */
+.bubble-tail {
+	margin-top: 11px;
+	border-top: 6px solid transparent;
+	border-bottom: 6px solid transparent;
+	border-right: 9px solid var(--bubble-other);
+}
+
+.bubble-tail.own {
+	border-right-width: 0;
+	border-left: 9px solid var(--bubble-own);
 }
 
 .bubble.mention {
-	box-shadow: inset 3px 0 var(--accent-color), 0 1px 2px rgba(0, 0, 0, 0.12);
+	box-shadow: inset 3px 0 var(--accent-color), var(--message-shadow);
+}
+
+.bubble-tail.mention {
+	border-right-color: var(--accent-color);
+}
+
+/* What people wrote reads a size up from the rest of the window */
+.bubble .body,
+.bubble .redacted {
+	font-size: 17px;
 }
 
 .bubble.notice .body {
@@ -299,6 +365,13 @@ headerbar.top-bar menubutton > button {
 
 .bubble .redacted {
 	color: alpha(currentColor, 0.5);
+}
+
+/* The eye beside a deleted message stays small enough to sit on its line */
+.reveal-button {
+	min-width: 28px;
+	min-height: 28px;
+	padding: 0;
 }
 
 .sender {
@@ -350,17 +423,53 @@ headerbar.top-bar menubutton > button {
 	margin: 0 4px 0 0;
 }
 
+.message-avatar {
+	border-radius: 9999px;
+	box-shadow: var(--message-shadow);
+}
+
+/* Avatars of several people typing lie over each other, each ringed in the chat's colour to keep them apart */
+.typing-face {
+	border-radius: 9999px;
+	box-shadow: 0 0 0 2px var(--chat-wall), var(--message-shadow);
+	animation: typing-bob 1100ms ease-in-out infinite;
+}
+
+/* Each typing avatar bobs while its person types, the ones beside it a beat later like a wave */
+@keyframes typing-bob {
+	0%,
+	100% {
+		transform: none;
+	}
+
+	50% {
+		transform: translateY(-6px);
+	}
+}
+
+.typing-face:nth-child(2) {
+	animation-delay: 180ms;
+}
+
+.typing-face:nth-child(3) {
+	animation-delay: 360ms;
+}
+
+.typing-face:nth-child(4) {
+	animation-delay: 540ms;
+}
+
 .reaction-pill {
 	min-height: 28px;
 	padding: 0 10px;
 	border-radius: 9999px;
 	background-color: var(--bubble-other);
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+	box-shadow: var(--message-shadow);
 }
 
 .reaction-pill.mine {
 	background-color: var(--accent-bg-color);
-	color: #ffffff;
+	color: var(--accent-fg-color);
 }
 
 .quick-reaction {
@@ -384,9 +493,42 @@ headerbar.top-bar menubutton > button {
 	margin: 8px 24px;
 }
 
+/* The message after an event always starts a group, whose own room above it is the gap under the pill */
+.event-pill {
+	margin-bottom: 0;
+}
+
+/* A run of events is one pill with a line each, rounded less so its many lines keep their shape */
+.event-pill.merged {
+	border-radius: 14px;
+	padding: 6px 14px;
+}
+
+/* An event inside a run takes no room, since the run's first row shows it */
+.message-row.folded-note {
+	padding: 0;
+}
+
+/* Where the new messages start, quieter than the day headings, with as much room below it as the row's own
+ * padding and the row above leave over it */
+.read-line {
+	margin: 2px 16px 11px;
+}
+
+/* A day heading keeps the same gap above and below, so its row drops the group's own room above and an event
+ * pill under it drops its top margin */
 .day-pill {
 	font-weight: 700;
-	margin-top: 14px;
+	margin-top: 10px;
+	margin-bottom: 10px;
+}
+
+.message-row.day-start {
+	padding-top: 1px;
+}
+
+.day-pill + .event-pill {
+	margin-top: 0;
 }
 
 .empty-pill {
@@ -406,9 +548,11 @@ headerbar.top-bar menubutton > button {
 	min-height: 44px;
 }
 
-/* The composer along the bottom */
+/* The composer along the bottom, set off from the chat by a black line with a faint light one under it */
 .composer {
 	padding: 8px 12px;
+	border-top: 1px solid #000000;
+	box-shadow: inset 0 1px alpha(#ffffff, 0.12);
 }
 
 .reply-bar {
@@ -431,6 +575,10 @@ headerbar.top-bar menubutton > button {
 }
 
 /* The smiley matches the send button's size, so both sit centred on a one line message */
+.emoji-button {
+	margin-right: 8px;
+}
+
 .emoji-button > button {
 	min-width: 44px;
 	min-height: 44px;
@@ -440,10 +588,18 @@ headerbar.top-bar menubutton > button {
 	-gtk-icon-size: 22px;
 }
 
+/* The send button grows past its size and settles as it arrives, and shrinks quickly as it goes */
 .send-button {
 	min-width: 44px;
 	min-height: 44px;
-	transition: opacity 200ms ease-out;
+	transition: opacity 200ms ease-out, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.send-button.tucked,
+.send-button.tucked:disabled {
+	opacity: 0;
+	transform: scale(0.3);
+	transition: opacity 100ms ease-in, transform 100ms ease-in;
 }
 
 .send-button:disabled {
@@ -465,8 +621,10 @@ headerbar.top-bar menubutton > button {
 }
 
 /* The member list */
+/* The same black line as beside the chat parts the members from it */
 .member-panel {
 	background-color: var(--window-bg-color);
+	box-shadow: inset 1px 0 #000000;
 }
 
 .member-list {
@@ -579,6 +737,17 @@ headerbar.top-bar menubutton > button {
 }
 
 .picture-choice:hover > .picture-badge {
+	opacity: 1;
+}
+
+/* The pen beside the user's own name only shows while the name is pointed at */
+.name-editor > .name-pen {
+	opacity: 0;
+	transition: opacity 150ms ease;
+}
+
+.name-editor:hover > .name-pen,
+.name-editor > .name-pen:focus-visible {
 	opacity: 1;
 }
 

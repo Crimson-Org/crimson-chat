@@ -1,6 +1,7 @@
 #include <adwaita.h>
 
 #include "../lang/en.h"
+#include "common/themes.h"
 #include "settings-dialog.h"
 #include "settings.h"
 #include "window.h"
@@ -58,6 +59,39 @@ static void change_style(AdwComboRow *row, GParamSpec *spec, gpointer data) {
 }
 
 
+static void change_theme(AdwComboRow *row, GParamSpec *spec, char **theme) {
+	const char *const *ids = g_object_get_data(G_OBJECT(row), "theme-ids");
+	g_free(*theme);
+	*theme = g_strdup(ids[adw_combo_row_get_selected(row)]);
+	save_settings();
+	apply_style();
+}
+
+
+/* Lists every theme by name with the one in use for that style picked
+ * The row keeps its own ids, since the theme list is read again when a theme file changes */
+static void add_theme_row(GtkWidget *group, const char *title, char **theme, const char *fallback) {
+	GPtrArray *themes = list_themes();
+	g_autoptr(GtkStringList) names = gtk_string_list_new(NULL);
+	char **ids = g_new0(char *, themes->len + 1);
+	guint selected = 0;
+	for (guint index = 0; index < themes->len; index++) {
+		const Theme *listed = g_ptr_array_index(themes, index);
+		gtk_string_list_append(names, listed->name);
+		ids[index] = g_strdup(listed->id);
+		if (g_strcmp0(listed->id, *theme ? *theme : fallback) == 0)
+			selected = index;
+	}
+	GtkWidget *row = adw_combo_row_new();
+	g_object_set_data_full(G_OBJECT(row), "theme-ids", ids, (GDestroyNotify)g_strfreev);
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+	adw_combo_row_set_model(ADW_COMBO_ROW(row), G_LIST_MODEL(names));
+	adw_combo_row_set_selected(ADW_COMBO_ROW(row), selected);
+	g_signal_connect(row, "notify::selected", G_CALLBACK(change_theme), theme);
+	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
+}
+
+
 static void change_words(AdwEntryRow *row, gpointer data) {
 	g_free(get_settings()->highlight_words);
 	get_settings()->highlight_words = g_strdup(gtk_editable_get_text(GTK_EDITABLE(row)));
@@ -77,6 +111,8 @@ static void fill_appearance(AdwPreferencesDialog *dialog) {
 	adw_combo_row_set_selected(ADW_COMBO_ROW(style), settings->style);
 	g_signal_connect(style, "notify::selected", G_CALLBACK(change_style), NULL);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(look), style);
+	add_theme_row(look, TEXT_LIGHT_THEME, &settings->light_theme, DEFAULT_LIGHT_THEME);
+	add_theme_row(look, TEXT_DARK_THEME, &settings->dark_theme, DEFAULT_DARK_THEME);
 	const SwitchSetting LOOK[] = {
 		{TEXT_24_HOURS, NULL, &settings->uses_24_hours},
 	};
@@ -98,6 +134,7 @@ static void fill_notifications(AdwPreferencesDialog *dialog) {
 	const SwitchSetting NOTICES[] = {
 		{TEXT_NOTIFY_MENTIONS, NULL, &settings->notifies_mentions},
 		{TEXT_NOTIFY_PRIVATE, NULL, &settings->notifies_private},
+		{TEXT_PLAY_SOUNDS, NULL, &settings->plays_sounds},
 	};
 	add_switches(group, NOTICES, G_N_ELEMENTS(NOTICES));
 	GtkWidget *words = adw_entry_row_new();
