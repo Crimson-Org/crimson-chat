@@ -297,5 +297,5 @@
 #define TEXT_REPEAT_PASSWORD "Repeat Password"
 #define TEXT_CODE "Code"
 #define TEXT_VERIFY "Verify"
-#define TEXT_REGISTER_BANNER "Register your nickname so it stays yours"
-#define TEXT_LOGIN_BANNER "This nickname is registered. Log in to use it"
+#define TEXT_REGISTER_BANNER "Nickname not registered"
+#define TEXT_LOGIN_BANNER "Nickname is registered"

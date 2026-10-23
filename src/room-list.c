@@ -548,7 +548,7 @@ static GtkWidget *create_banner(RoomList *list) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	gtk_widget_add_css_class(box, "account-banner");
 	list->banner_label = gtk_label_new(NULL);
-	gtk_label_set_wrap(GTK_LABEL(list->banner_label), TRUE);
+	gtk_label_set_ellipsize(GTK_LABEL(list->banner_label), PANGO_ELLIPSIZE_END);
 	gtk_label_set_xalign(GTK_LABEL(list->banner_label), 0);
 	gtk_widget_set_hexpand(list->banner_label, TRUE);
 	gtk_box_append(GTK_BOX(box), list->banner_label);
