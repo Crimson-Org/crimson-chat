@@ -323,6 +323,18 @@ static GtkWidget *create_reply_bar(Composer *composer) {
 }
 
 
+/* A wrapped line makes the text view scroll to the cursor before the field has grown, and it only learns its new
+ * height once that scroll ends, so a scroll while the whole text fits goes back to the top and the view relearns */
+static void keep_text_in_view(GtkAdjustment *range, Composer *composer) {
+	if (gtk_adjustment_get_value(range) <= 0 || gtk_adjustment_get_upper(range) > gtk_widget_get_height(composer->field))
+		return;
+	gtk_adjustment_set_value(range, 0);
+	gtk_widget_queue_allocate(composer->field);
+}
+
+
+
+
 static GtkWidget *create_field(Composer *composer) {
 	composer->field = gtk_text_view_new();
 	composer->buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(composer->field));
@@ -340,6 +352,10 @@ static GtkWidget *create_field(Composer *composer) {
 	gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroller), TRUE);
 	gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(scroller), FIELD_MAXIMUM_HEIGHT);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), composer->field);
+	GtkAdjustment *range = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(scroller));
+	/* A text view reports a wrapped line only through its scroll range, so the field measures itself again */
+	g_signal_connect_swapped(range, "notify::upper", G_CALLBACK(gtk_widget_queue_resize), scroller);
+	g_signal_connect(range, "value-changed", G_CALLBACK(keep_text_in_view), composer);
 	gtk_widget_set_hexpand(scroller, TRUE);
 	gtk_widget_set_valign(scroller, GTK_ALIGN_CENTER);
 	composer->placeholder = gtk_label_new(TEXT_WRITE_MESSAGE);
