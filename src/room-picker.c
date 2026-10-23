@@ -202,7 +202,7 @@ static void show_rooms(GPtrArray *rooms, gpointer data) {
 static GtkWidget *create_loading_page(Picker *picker) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), adw_spinner_new());
+	gtk_box_append(GTK_BOX(box), create_spinner());
 	picker->loading_label = gtk_label_new(TEXT_FINDING_ROOMS);
 	gtk_label_set_wrap(GTK_LABEL(picker->loading_label), TRUE);
 	gtk_label_set_justify(GTK_LABEL(picker->loading_label), GTK_JUSTIFY_CENTER);

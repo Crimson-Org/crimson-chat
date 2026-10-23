@@ -182,11 +182,20 @@ headerbar.top-bar menubutton > button {
 	border-radius: 28%;
 }
 
+/* The corner's add button is quiet, in the same grey as the connection note opposite it */
 .add-chat {
 	margin: 16px;
-	min-width: 48px;
-	min-height: 48px;
+}
+
+.add-chat > button {
+	min-width: 40px;
+	min-height: 40px;
+	background-color: color-mix(in srgb, var(--window-fg-color) 12%, var(--window-bg-color));
 	box-shadow: 0 2px 8px alpha(black, 0.3);
+}
+
+.add-chat > button:hover {
+	background-color: color-mix(in srgb, var(--window-fg-color) 18%, var(--window-bg-color));
 }
 
 .help-text {
@@ -511,9 +520,13 @@ headerbar.top-bar menubutton > button {
 	opacity: 0.5;
 }
 
-.connection-spinner {
+.connection-spinner,
+.connection-spinner:hover,
+.connection-spinner:active {
 	min-width: 48px;
 	min-height: 48px;
+	background: none;
+	box-shadow: none;
 }
 
 .plain-item {
@@ -530,7 +543,12 @@ headerbar.top-bar menubutton > button {
 }
 
 .connection-note-box {
-	padding: 10px 18px 10px 8px;
+	padding: 8px 18px 8px 0;
+}
+
+/* With a fix the pill ends in the button, kept as far from the edge as from the top and bottom */
+.connection-note-box.has-fix {
+	padding-right: 8px;
 }
 
 /* While the server is away the send button only spins, plainly visible rather than faded */
@@ -541,9 +559,9 @@ headerbar.top-bar menubutton > button {
 	color: var(--window-fg-color);
 }
 
-/* The fix in a connection note is a small button under its words */
+/* The fix in a connection note is a small button at the end of its row */
 .connection-fix {
-	min-height: 28px;
-	padding: 2px 16px;
+	min-height: 32px;
+	padding: 0 16px;
 	border-radius: 9999px;
 }

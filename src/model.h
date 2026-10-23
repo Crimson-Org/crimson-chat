@@ -103,6 +103,8 @@ struct _CrimsonNetwork {
 	char *key;
 	char *name, *bouncer_id, *error, *icon_url;
 	NetworkState state;
+	/* The server was connected at some point since the app started, so losing it later is a reconnection */
+	gboolean has_connected;
 	IrcClient *client;
 	GListStore *rooms;
 	CrimsonRoom *server_room;

@@ -10,7 +10,6 @@
 #define ROOM_AVATAR_SIZE 50
 #define SEARCH_SLIDE_MS 200
 #define CONNECTION_SPINNER_SIZE 24
-#define CONNECTION_NOTE_CHARS 30
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
 #define WATCHED_KEY "watched"
@@ -119,7 +118,7 @@ static void forget_row_menu(GtkPopover *popover, gpointer data) {
 }
 
 
-/* Right-clicking a room or private chat offers to leave it, without opening it */
+/* Right-clicking a room or private chat offers its card or the person's profile first, then leaving it */
 static void open_row_menu(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(row), ROOM_KEY);
@@ -134,10 +133,26 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), is_server ? "win.hide-server-messages" : "win.leave-chat");
 	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(leave), is_server ? g_variant_new_string(room->network->key)
 		: g_variant_new("(ss)", room->network->key, room->name));
+	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	if (!is_server) {
+		GtkWidget *details = gtk_button_new_with_label(room->kind == ROOM_CHANNEL ? TEXT_ROOM_DETAILS
+			: TEXT_VIEW_PROFILE);
+		gtk_widget_add_css_class(details, "flat");
+		gtk_widget_add_css_class(details, "plain-item");
+		gtk_actionable_set_action_name(GTK_ACTIONABLE(details), "win.chat-details");
+		gtk_actionable_set_action_target_value(GTK_ACTIONABLE(details),
+			g_variant_new("(ss)", room->network->key, room->name));
+		gtk_box_append(GTK_BOX(items), details);
+	}
+	gtk_box_append(GTK_BOX(items), leave);
+	/* Menu items read from the left, like the app's other menus */
+	for (GtkWidget *item = gtk_widget_get_first_child(items); item; item = gtk_widget_get_next_sibling(item))
+		gtk_label_set_xalign(GTK_LABEL(gtk_button_get_child(GTK_BUTTON(item))), 0);
 	GtkWidget *popover = gtk_popover_new();
 	gtk_widget_add_css_class(popover, "menu");
-	gtk_popover_set_child(GTK_POPOVER(popover), leave);
-	g_signal_connect_swapped(leave, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
+	gtk_popover_set_child(GTK_POPOVER(popover), items);
+	for (GtkWidget *item = gtk_widget_get_first_child(items); item; item = gtk_widget_get_next_sibling(item))
+		g_signal_connect_swapped(item, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
 	gtk_widget_set_parent(popover, row);
 	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
@@ -401,7 +416,6 @@ static GtkWidget *create_list_view(RoomList *list) {
 	list->add_button = gtk_menu_button_new();
 	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(list->add_button), "list-add-symbolic");
 	gtk_widget_add_css_class(list->add_button, "circular");
-	gtk_widget_add_css_class(list->add_button, "suggested-action");
 	gtk_widget_add_css_class(list->add_button, "add-chat");
 	gtk_widget_set_tooltip_text(list->add_button, TEXT_ADD);
 
@@ -420,7 +434,7 @@ static GtkWidget *create_list_view(RoomList *list) {
 	 * is about sliding out beside it */
 	list->connection_button = gtk_button_new();
 	list->connection_icons = gtk_stack_new();
-	GtkWidget *spinner = adw_spinner_new();
+	GtkWidget *spinner = create_spinner();
 	gtk_widget_set_size_request(spinner, CONNECTION_SPINNER_SIZE, CONNECTION_SPINNER_SIZE);
 	gtk_stack_add_named(GTK_STACK(list->connection_icons), spinner, "waiting");
 	gtk_stack_add_named(GTK_STACK(list->connection_icons), gtk_image_new_from_icon_name("dialog-warning-symbolic"),
@@ -431,9 +445,10 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_add_css_class(list->connection_button, "circular");
 	gtk_widget_add_css_class(list->connection_button, "flat");
 	gtk_widget_add_css_class(list->connection_button, "connection-spinner");
+	gtk_widget_set_cursor_from_name(list->connection_button, "pointer");
 	list->connection_label = gtk_label_new(NULL);
-	gtk_label_set_wrap(GTK_LABEL(list->connection_label), TRUE);
-	gtk_label_set_max_width_chars(GTK_LABEL(list->connection_label), CONNECTION_NOTE_CHARS);
+	/* The notes are a few words, kept on one line, since a wrapping label beside a button measures too narrow */
+	gtk_label_set_ellipsize(GTK_LABEL(list->connection_label), PANGO_ELLIPSIZE_END);
 	gtk_label_set_xalign(GTK_LABEL(list->connection_label), 0);
 	gtk_widget_add_css_class(list->connection_label, "connection-note");
 	list->connection_note = gtk_revealer_new();
@@ -441,9 +456,11 @@ static GtkWidget *create_list_view(RoomList *list) {
 	list->connection_fix = gtk_button_new();
 	gtk_widget_add_css_class(list->connection_fix, "suggested-action");
 	gtk_widget_add_css_class(list->connection_fix, "connection-fix");
-	gtk_widget_set_halign(list->connection_fix, GTK_ALIGN_CENTER);
-	GtkWidget *note_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+	gtk_widget_set_valign(list->connection_fix, GTK_ALIGN_CENTER);
+	/* The words and the fix share one row, like a toast, so the pill stays a single line */
+	GtkWidget *note_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
 	gtk_widget_add_css_class(note_box, "connection-note-box");
+	gtk_widget_set_valign(list->connection_label, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(note_box), list->connection_label);
 	gtk_box_append(GTK_BOX(note_box), list->connection_fix);
 	gtk_revealer_set_child(GTK_REVEALER(list->connection_note), note_box);
@@ -586,6 +603,12 @@ void show_room_list_connection(RoomList *list, const ConnectionNote *note) {
 	if (note) {
 		gtk_label_set_text(GTK_LABEL(list->connection_label), note->message);
 		gtk_widget_set_visible(list->connection_fix, note->fix_label != NULL);
+		/* With a fix the pill ends in the button, as far from the edge as from the top and bottom */
+		GtkWidget *note_box = gtk_widget_get_parent(list->connection_fix);
+		if (note->fix_label)
+			gtk_widget_add_css_class(note_box, "has-fix");
+		else
+			gtk_widget_remove_css_class(note_box, "has-fix");
 		if (note->fix_label) {
 			gtk_button_set_label(GTK_BUTTON(list->connection_fix), note->fix_label);
 			gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_fix), note->fix_action);

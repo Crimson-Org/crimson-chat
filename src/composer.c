@@ -4,6 +4,7 @@
 #include "composer.h"
 #include "formatting.h"
 #include "session.h"
+#include "window.h"
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
 #define SEND_SPINNER_SIZE 20
@@ -21,7 +22,7 @@ struct Composer {
 	/* Whether the room's server is not connected, which turns the send button into a spinner and holds the text */
 	gboolean is_waiting;
 	GtkWidget *send_icons;
-	guint pause_source;
+	guint pause_source, wait_source;
 	gulong change_handler;
 	/* Tab completion cycles through matches until another key is pressed */
 	GPtrArray *matches;
@@ -290,7 +291,7 @@ Composer *create_composer(void) {
 	composer->send_button = gtk_button_new();
 	composer->send_icons = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(composer->send_icons), gtk_image_new_from_icon_name("crimson-send-symbolic"), "send");
-	GtkWidget *spinner = adw_spinner_new();
+	GtkWidget *spinner = create_spinner();
 	gtk_widget_set_size_request(spinner, SEND_SPINNER_SIZE, SEND_SPINNER_SIZE);
 	gtk_stack_add_named(GTK_STACK(composer->send_icons), spinner, "waiting");
 	gtk_widget_set_halign(composer->send_icons, GTK_ALIGN_CENTER);
@@ -349,17 +350,35 @@ void mention_in_composer(Composer *composer, const char *nick) {
 }
 
 
+static void show_send_look(Composer *composer, gboolean is_waiting) {
+	gtk_stack_set_visible_child_name(GTK_STACK(composer->send_icons), is_waiting ? "waiting" : "send");
+	if (is_waiting)
+		gtk_widget_add_css_class(composer->send_button, "waiting");
+	else
+		gtk_widget_remove_css_class(composer->send_button, "waiting");
+}
+
+
+static gboolean show_send_waiting(gpointer data) {
+	Composer *composer = data;
+	composer->wait_source = 0;
+	show_send_look(composer, TRUE);
+	return G_SOURCE_REMOVE;
+}
+
+
 void set_composer_waiting(Composer *composer, const char *message) {
 	gboolean is_waiting = message != NULL;
 	gtk_widget_set_tooltip_text(composer->send_button, message ? message : TEXT_SEND);
 	if (composer->is_waiting == is_waiting)
 		return;
 	composer->is_waiting = is_waiting;
-	gtk_stack_set_visible_child_name(GTK_STACK(composer->send_icons), is_waiting ? "waiting" : "send");
+	/* Sending stops at once, while the button only turns into a spinner once the wait has lasted */
+	g_clear_handle_id(&composer->wait_source, g_source_remove);
 	if (is_waiting)
-		gtk_widget_add_css_class(composer->send_button, "waiting");
+		composer->wait_source = g_timeout_add(WAIT_SHOWN_MS, show_send_waiting, composer);
 	else
-		gtk_widget_remove_css_class(composer->send_button, "waiting");
+		show_send_look(composer, FALSE);
 	g_autofree char *text = get_field_text(composer);
 	gtk_widget_set_sensitive(composer->send_button, !is_waiting && *text);
 }

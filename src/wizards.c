@@ -274,7 +274,7 @@ static void follow_login(CrimsonAccount *account, Guide *guide) {
 /* A spinner while the connection is made, with Back undoing what the guide just added */
 static void push_connecting_step(Guide *guide, const char *name) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
-	gtk_box_append(GTK_BOX(box), adw_spinner_new());
+	gtk_box_append(GTK_BOX(box), create_spinner());
 	guide->connecting_label = create_label(NULL, "guide-error");
 	gtk_widget_set_visible(guide->connecting_label, FALSE);
 	gtk_box_append(GTK_BOX(box), guide->connecting_label);

@@ -14,12 +14,13 @@
 
 #define NARROW_CONDITION "max-width: 640sp"
 #define RAIL_AVATAR_SIZE 48
-#define SIDEBAR_WIDTH 388
-#define SIDEBAR_MINIMUM 300
+#define SIDEBAR_WIDTH 420
+#define SIDEBAR_MINIMUM 410
 #define SIDEBAR_MAXIMUM 640
 #define BADGE_LIMIT 999
 #define NETWORK_KEY "network"
 #define CONNECTION_DELAY_MS 1500
+#define RAIL_DIMMED 0.45
 #define MOUSE_BACK_BUTTON 8
 #define MINIMUM_WIDTH 452
 #define RAIL_SPINNER_SIZE 22
@@ -174,17 +175,28 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	gboolean has_mention = FALSE;
 	guint unread = count_network_unread(network, &has_mention);
 	style_unread_badge(badge, unread, has_mention);
-	gtk_widget_set_opacity(GTK_WIDGET(avatar), network->state == NETWORK_CONNECTED ? 1.0 : 0.45);
+	/* The picture dims along with the spinner, once the wait has lasted, and a warning shows at once */
+	GtkWidget *state_shown = g_object_get_data(G_OBJECT(row), "state");
+	gboolean is_dimmed = network->state != NETWORK_CONNECTED
+		&& (is_stuck(network) || gtk_widget_get_opacity(state_shown) > 0);
+	gtk_widget_set_opacity(GTK_WIDGET(avatar), is_dimmed ? RAIL_DIMMED : 1.0);
 	/* A server that is not connected shows a spinner over its picture while it connects, or a warning when it
 	 * stopped with a reason and waits for the user */
 	gboolean is_stopped = is_stuck(network);
 	GtkWidget *state = g_object_get_data(G_OBJECT(row), "state");
 	gtk_widget_set_visible(state, network->state != NETWORK_CONNECTED);
 	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
+	if (is_stopped)
+		gtk_widget_set_opacity(state, 1);
 	/* A connected server only names itself, and one that is not says what the corner of the list says about it */
 	g_autofree char *wait = describe_connection_wait(network);
 	g_autofree char *tooltip = wait ? g_strdup_printf("%s\n%s", network->name, wait) : g_strdup(network->name);
 	gtk_widget_set_tooltip_text(row, tooltip);
+}
+
+
+static void dim_rail_avatar(gpointer avatar) {
+	gtk_widget_set_opacity(avatar, RAIL_DIMMED);
 }
 
 
@@ -208,6 +220,7 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	gtk_widget_set_valign(badge, GTK_ALIGN_END);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), badge);
 	GtkWidget *state = gtk_stack_new();
+	show_after_wait(state, G_CALLBACK(dim_rail_avatar), avatar);
 	GtkWidget *spinner = adw_spinner_new();
 	gtk_widget_set_size_request(spinner, RAIL_SPINNER_SIZE, RAIL_SPINNER_SIZE);
 	gtk_stack_add_named(GTK_STACK(state), spinner, "waiting");
@@ -278,6 +291,8 @@ static const char *find_lost_connection(Window *window, gboolean *was_connected)
 		return describe_account_name(session);
 	if (network->state == NETWORK_CONNECTED)
 		return NULL;
+	/* Behind a bouncer the link to it can be up long before this server is, which is no reconnection */
+	*was_connected = network->has_connected;
 	return network->name;
 }
 
@@ -348,14 +363,15 @@ static void refresh_connection(Window *window) {
 	window->lost_message = describe_connection_wait(window->network);
 	g_free(window->lost_name);
 	window->lost_name = was_connected ? g_strdup(lost) : NULL;
-	/* A problem shows at once, since nothing is coming to fix it, and so does a server that was already down when
-	 * chosen, while a fresh drop waits a moment in case it comes straight back */
-	if (window->is_connection_shown || window->is_problem || !is_same_server) {
+	/* A problem shows at once, since nothing is coming to fix it, a server that was already down when chosen shows
+	 * once its wait has lasted, and a fresh drop waits a little longer in case it comes straight back */
+	if (window->is_connection_shown || window->is_problem) {
 		g_clear_handle_id(&window->connection_source, g_source_remove);
 		window->is_connection_shown = TRUE;
 		show_connection(window);
 	} else if (!window->connection_source)
-		window->connection_source = g_timeout_add(CONNECTION_DELAY_MS, reveal_connection, window);
+		window->connection_source = g_timeout_add(is_same_server ? CONNECTION_DELAY_MS : WAIT_SHOWN_MS,
+			reveal_connection, window);
 }
 
 
@@ -365,6 +381,22 @@ static gboolean is_listed_network(Window *window, CrimsonNetwork *network) {
 
 
 /* Shows the welcome or the chats, the rail only with several servers, and keeps a server chosen */
+static void show_network(Window *window, CrimsonNetwork *network);
+
+
+static CrimsonNetwork *find_wanted_network(Window *window) {
+	if (!window->wanted_network)
+		return NULL;
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
+		if (g_str_equal(network->key, window->wanted_network) && is_listed_network(window, network))
+			return g_steal_pointer(&network);
+	}
+	return NULL;
+}
+
+
 static void update_view(Window *window) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	gboolean has_chats = count > 0 || !window->chat->has_started;
@@ -375,9 +407,12 @@ static void update_view(Window *window) {
 	window->has_rail = has_rail;
 	gtk_widget_set_visible(window->rail, has_rail);
 	set_room_list_narrow(window->room_list, !has_rail);
-	if (!is_listed_network(window, window->network)) {
+	g_autoptr(CrimsonNetwork) wanted = find_wanted_network(window);
+	if (wanted)
+		choose_network(window, wanted);
+	else if (!is_listed_network(window, window->network)) {
 		g_autoptr(CrimsonNetwork) first = count ? g_list_model_get_item(G_LIST_MODEL(window->chat->networks), 0) : NULL;
-		choose_network(window, first);
+		show_network(window, first);
 	}
 	refresh_room_list_header(window->room_list);
 	refresh_connection(window);
@@ -427,12 +462,19 @@ static void select_rail_row(Window *window, CrimsonNetwork *network) {
 }
 
 
-void choose_network(Window *window, CrimsonNetwork *network) {
+/* Shows a server without taking it as the user's choice, while the one from last time is still awaited */
+static void show_network(Window *window, CrimsonNetwork *network) {
 	window->network = network;
 	select_rail_row(window, network);
 	show_room_list_network(window->room_list, network);
 	/* The corner's spinner and the dimming belong to the chosen server's own connection */
 	refresh_window_later(window);
+}
+
+
+void choose_network(Window *window, CrimsonNetwork *network) {
+	g_clear_pointer(&window->wanted_network, g_free);
+	show_network(window, network);
 	save_window_choice(network ? network->key : NULL, NULL);
 }
 
@@ -764,6 +806,27 @@ static void leave_room_action(GSimpleAction *action, GVariant *parameter, gpoint
 }
 
 
+/* A private chat's person shows over the list as it is, while a room opens first, so its card can show the
+ * members beside it */
+static void chat_details_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	const char *key = NULL, *name = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &name);
+	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
+	CrimsonNetwork *network = find_keyed_network(window, network_key);
+	CrimsonRoom *room = network ? find_room(network, name) : NULL;
+	if (!room)
+		return;
+	if (room->kind == ROOM_PRIVATE) {
+		show_profile(window, room, room->name);
+		return;
+	}
+	if (get_open_room(window) != room)
+		open_room(window, room);
+	show_conversation_details(window->conversation);
+}
+
+
 static void leave_chat_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
 	const char *key = NULL, *name = NULL;
@@ -817,6 +880,7 @@ static void add_window_actions(Window *window) {
 		{"remove-network", remove_network_action, "s", NULL, NULL, {0}},
 		{"leave-room", leave_room_action, NULL, NULL, NULL, {0}},
 		{"leave-chat", leave_chat_action, "(ss)", NULL, NULL, {0}},
+		{"chat-details", chat_details_action, "(ss)", NULL, NULL, {0}},
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
@@ -866,12 +930,63 @@ void restore_window_choice(Window *window) {
 	/* The app starts on the server from last time, with no chat open */
 	g_autofree char *network_key = NULL, *room_network = NULL, *room_name = NULL;
 	load_window_choice(&network_key, &room_network, &room_name);
-	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
-	for (guint index = 0; index < count; index++) {
-		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
-		if (g_strcmp0(network->key, network_key) == 0)
-			choose_network(window, network);
-	}
+	window->wanted_network = network_key && *network_key ? g_steal_pointer(&network_key) : NULL;
+	update_view(window);
+}
+
+
+typedef struct {
+	GtkWidget *widget;
+	guint source;
+	GCallback shown;
+	gpointer data;
+} WaitShown;
+
+
+static gboolean reveal_wait(gpointer data) {
+	WaitShown *wait = data;
+	wait->source = 0;
+	gtk_widget_set_opacity(wait->widget, 1);
+	if (wait->shown)
+		((void (*)(gpointer))wait->shown)(wait->data);
+	return G_SOURCE_REMOVE;
+}
+
+
+static void start_wait(GtkWidget *widget, WaitShown *wait) {
+	gtk_widget_set_opacity(widget, 0);
+	g_clear_handle_id(&wait->source, g_source_remove);
+	wait->source = g_timeout_add(WAIT_SHOWN_MS, reveal_wait, wait);
+}
+
+
+static void stop_wait(GtkWidget *widget, WaitShown *wait) {
+	g_clear_handle_id(&wait->source, g_source_remove);
+	gtk_widget_set_opacity(widget, 0);
+}
+
+
+static void free_wait(gpointer data) {
+	WaitShown *wait = data;
+	g_clear_handle_id(&wait->source, g_source_remove);
+	g_free(wait);
+}
+
+
+void show_after_wait(GtkWidget *widget, GCallback shown, gpointer data) {
+	WaitShown *wait = g_new0(WaitShown, 1);
+	*wait = (WaitShown){widget, 0, shown, data};
+	gtk_widget_set_opacity(widget, 0);
+	g_signal_connect(widget, "map", G_CALLBACK(start_wait), wait);
+	g_signal_connect(widget, "unmap", G_CALLBACK(stop_wait), wait);
+	g_object_set_data_full(G_OBJECT(widget), "wait-shown", wait, free_wait);
+}
+
+
+GtkWidget *create_spinner(void) {
+	GtkWidget *spinner = adw_spinner_new();
+	show_after_wait(spinner, NULL, NULL);
+	return spinner;
 }
 
 

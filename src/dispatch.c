@@ -223,8 +223,9 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	CrimsonRoom *room = load ? load->room : find_conversation(network, message);
 	if (line->is_own && !load && confirm_own_message(network, room, line, message))
 		return;
-	line->is_highlight = !line->is_own && line->sender && (room->kind == ROOM_PRIVATE || is_mention(network,
-		line->text));
+	/* The server's own messages, such as a service naming the user's last login, are never a mention */
+	line->is_highlight = !line->is_own && line->sender && room->kind != ROOM_SERVER
+		&& (room->kind == ROOM_PRIVATE || is_mention(network, line->text));
 	stop_typing(room, line->sender);
 	if (!insert_room_message(room, line))
 		return;

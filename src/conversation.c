@@ -26,7 +26,7 @@ struct Conversation {
 	GtkWidget *still;
 	/* A narrow window slides whole pages itself, so the chat view does not slide on top of that */
 	gboolean is_narrow;
-	GtkWidget *member_view, *empty_note;
+	GtkWidget *member_view, *empty_note, *members_title;
 	GtkStringList *members;
 	GtkNoSelection *messages;
 	Composer *composer;
@@ -514,6 +514,10 @@ static gboolean fill_members(gpointer data) {
 	for (guint index = 0; index < ranked->len; index++)
 		g_ptr_array_add(nicks, (gpointer)g_array_index(ranked, RankedMember, index).nick);
 	g_ptr_array_add(nicks, NULL);
+	/* The panel's title counts the people in the room */
+	g_autofree char *title = ranked->len ? g_strdup_printf(ranked->len == 1 ? TEXT_MEMBERS_ONE : TEXT_MEMBERS_COUNT,
+		ranked->len) : g_strdup(TEXT_MEMBERS_TITLE);
+	adw_window_title_set_title(ADW_WINDOW_TITLE(conversation->members_title), title);
 	gtk_string_list_splice(conversation->members, 0, g_list_model_get_n_items(G_LIST_MODEL(conversation->members)),
 		(const char *const *)nicks->pdata);
 	return G_SOURCE_REMOVE;
@@ -532,7 +536,8 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	gtk_widget_add_css_class(panel, "member-panel");
 	GtkWidget *header = adw_header_bar_new();
 	gtk_widget_add_css_class(header, "top-bar");
-	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), adw_window_title_new(TEXT_MEMBERS_TITLE, NULL));
+	conversation->members_title = adw_window_title_new(TEXT_MEMBERS_TITLE, NULL);
+	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), conversation->members_title);
 	/* The panel sits at the window's right edge, so its header carries the window buttons there, and it never
 	 * offers the narrow window's Back, which would leave the whole room instead of closing the panel */
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
@@ -563,8 +568,7 @@ static void show_members_panel(gpointer data) {
 }
 
 
-/* Clicking the header shows a room's card, or the person a private chat is with */
-static void click_header(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+void show_conversation_details(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	if (!room)
 		return;
@@ -572,6 +576,12 @@ static void click_header(GtkGestureClick *gesture, int presses, double x, double
 		show_room_details(conversation->window, room, G_CALLBACK(show_members_panel), conversation);
 	else if (room->kind == ROOM_PRIVATE)
 		show_profile(conversation->window, room, room->name);
+}
+
+
+/* Clicking the header shows a room's card, or the person a private chat is with */
+static void click_header(GtkGestureClick *gesture, int presses, double x, double y, Conversation *conversation) {
+	show_conversation_details(conversation);
 }
 
 

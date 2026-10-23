@@ -31,6 +31,9 @@ struct Window {
 	Conversation *conversation;
 	/* The server whose rooms the list shows, NULL only while there is none */
 	CrimsonNetwork *network;
+	/* The server chosen last time, waited for until it is listed, since a bouncer only lists its servers once
+	 * connected */
+	char *wanted_network;
 	/* The rail only shows with more than one server */
 	gboolean is_narrow, has_rail, is_quitting;
 	guint refresh_source;
@@ -55,6 +58,12 @@ GtkWidget *create_main_menu_button(Window *window);
 void show_toast(Window *window, const char *text);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);
+/* A wait only shows once it has lasted this long, so quick ones pass without anything flashing up */
+#define WAIT_SHOWN_MS 500
+/* Keeps a widget invisible until it has been on screen for WAIT_SHOWN_MS, each time it appears, then calls shown */
+void show_after_wait(GtkWidget *widget, GCallback shown, gpointer data);
+/* A spinner that only shows once its wait has lasted WAIT_SHOWN_MS */
+GtkWidget *create_spinner(void);
 /* Hides the window in the tray when there is one, so the chats stay connected */
 void hide_window(Window *window);
 gboolean is_room_in_view(Window *window, CrimsonRoom *room);
@@ -97,5 +106,8 @@ GtkWidget *get_conversation_widget(Conversation *conversation);
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room);
 CrimsonRoom *get_conversation_room(Conversation *conversation);
 void refresh_conversation(Conversation *conversation);
+/* The open room's card, whose members button opens the members beside it, or the profile of the person a private
+ * chat is with */
+void show_conversation_details(Conversation *conversation);
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow);
 void focus_composer(Conversation *conversation);

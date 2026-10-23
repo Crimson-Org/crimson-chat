@@ -144,7 +144,7 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	gtk_box_append(GTK_BOX(box), message);
 	view->stack = gtk_stack_new();
 	gtk_stack_set_vhomogeneous(GTK_STACK(view->stack), FALSE);
-	gtk_stack_add_named(GTK_STACK(view->stack), adw_spinner_new(), "loading");
+	gtk_stack_add_named(GTK_STACK(view->stack), create_spinner(), "loading");
 	view->rows = gtk_list_box_new();
 	gtk_list_box_set_selection_mode(GTK_LIST_BOX(view->rows), GTK_SELECTION_NONE);
 	gtk_widget_add_css_class(view->rows, "boxed-list");
@@ -175,7 +175,57 @@ typedef struct {
 	GtkWidget *avatar, *nick, *display_name, *realname, *picture, *account, *password;
 	/* What the fields held when the dialog opened, so only changes are sent */
 	char *old_nick, *old_display_name, *old_realname, *old_picture, *old_account, *old_password;
+	/* The password field holds a stand-in for one the bouncer keeps, and its button that shows the password */
+	gboolean has_stand_in;
+	GtkWidget *peek;
 } OwnProfile;
+
+
+/* Shows as dots for a password the bouncer keeps but never sends back, and is itself never sent */
+#define PASSWORD_STAND_IN "saved-password"
+
+
+static const char *read_password(OwnProfile *own) {
+	const char *password = gtk_editable_get_text(GTK_EDITABLE(own->password));
+	return own->has_stand_in && g_str_equal(password, PASSWORD_STAND_IN) ? "" : password;
+}
+
+
+/* Typing into the field starts from empty, since the stand-in is no password to edit */
+static void clear_stand_in(OwnProfile *own) {
+	if (own->has_stand_in && !*read_password(own))
+		gtk_editable_set_text(GTK_EDITABLE(own->password), "");
+}
+
+
+/* The password row's own button that shows the password, which libadwaita adds as its one button suffix */
+static GtkWidget *find_peek_button(GtkWidget *widget) {
+	const char *icon = GTK_IS_BUTTON(widget) ? gtk_button_get_icon_name(GTK_BUTTON(widget)) : NULL;
+	if (icon && g_str_has_prefix(icon, "view-"))
+		return widget;
+	for (GtkWidget *child = gtk_widget_get_first_child(widget); child; child = gtk_widget_get_next_sibling(child)) {
+		GtkWidget *found = find_peek_button(child);
+		if (found)
+			return found;
+	}
+	return NULL;
+}
+
+
+/* A password the app never learned cannot be shown, so the button only works on one typed here */
+static void update_peek(OwnProfile *own) {
+	gboolean is_stand_in = own->has_stand_in
+		&& g_str_equal(gtk_editable_get_text(GTK_EDITABLE(own->password)), PASSWORD_STAND_IN);
+	if (own->peek)
+		gtk_widget_set_sensitive(own->peek, !is_stand_in);
+}
+
+
+/* Leaving the field empty keeps the saved password, so the dots come back */
+static void restore_stand_in(OwnProfile *own) {
+	if (own->has_stand_in && !*gtk_editable_get_text(GTK_EDITABLE(own->password)))
+		gtk_editable_set_text(GTK_EDITABLE(own->password), PASSWORD_STAND_IN);
+}
 
 
 static void free_own_profile(OwnProfile *own) {
@@ -232,19 +282,20 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 	if (own->display_name || own->picture)
 		save_network_profile(network->key, read_field(own->display_name), read_field(own->picture));
 	/* A new login only counts on the next connection, so changing it reconnects */
-	gboolean has_new_login = has_changed(own->account, own->old_account) || has_changed(own->password, own->old_password);
+	gboolean has_new_login = has_changed(own->account, own->old_account)
+		|| g_strcmp0(read_password(own), own->old_password ? own->old_password : "") != 0;
 	if (has_new_login && !is_direct) {
 		g_autoptr(GHashTable) attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 		g_hash_table_insert(attributes, g_strdup("sasl-username"), g_strdup(read_field(own->account)));
-		if (*read_field(own->password))
-			g_hash_table_insert(attributes, g_strdup("sasl-password"), g_strdup(read_field(own->password)));
+		if (*read_password(own))
+			g_hash_table_insert(attributes, g_strdup("sasl-password"), g_strdup(read_password(own)));
 		change_bouncer_network(network, attributes);
 	} else if (has_new_login) {
 		AccountRecord *changed = copy_account_record(record);
 		g_free(changed->sasl_username);
 		changed->sasl_username = *read_field(own->account) ? g_strdup(read_field(own->account)) : NULL;
 		g_free(changed->sasl_password);
-		changed->sasl_password = *read_field(own->password) ? g_strdup(read_field(own->password)) : NULL;
+		changed->sasl_password = *read_password(own) ? g_strdup(read_password(own)) : NULL;
 		change_account(network->session, changed);
 		free_account_record(changed);
 	} else if (is_direct) {
@@ -364,11 +415,20 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	own->old_password = g_strdup(network->bouncer_id ? NULL : record->sasl_password);
 	own->account = add_field(login, TEXT_ACCOUNT_NAME, own->old_account, TRUE);
 	own->password = adw_password_entry_row_new();
-	/* A bouncer keeps the password without ever sending it back, so the field says it is saved there */
-	gboolean is_saved_on_bouncer = network->bouncer_id && own->old_account && *own->old_account;
-	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), is_saved_on_bouncer ? TEXT_PASSWORD_SAVED
-		: TEXT_PASSWORD);
-	gtk_editable_set_text(GTK_EDITABLE(own->password), own->old_password ? own->old_password : "");
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(own->password), TEXT_PASSWORD);
+	/* A bouncer keeps the password without ever sending it back, so a stand-in shows that one is set */
+	own->has_stand_in = network->bouncer_id && own->old_account && *own->old_account;
+	gtk_editable_set_text(GTK_EDITABLE(own->password), own->has_stand_in ? PASSWORD_STAND_IN
+		: own->old_password ? own->old_password : "");
+	if (own->has_stand_in) {
+		GtkEventController *focus = gtk_event_controller_focus_new();
+		g_signal_connect_swapped(focus, "enter", G_CALLBACK(clear_stand_in), own);
+		g_signal_connect_swapped(focus, "leave", G_CALLBACK(restore_stand_in), own);
+		gtk_widget_add_controller(own->password, focus);
+		own->peek = find_peek_button(own->password);
+		g_signal_connect_swapped(own->password, "changed", G_CALLBACK(update_peek), own);
+		update_peek(own);
+	}
 	gtk_list_box_append(GTK_LIST_BOX(login), own->password);
 	gtk_box_append(GTK_BOX(box), login);
 	GtkWidget *save = gtk_button_new_with_label(TEXT_SAVE);
