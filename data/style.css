@@ -46,11 +46,12 @@ headerbar.title-bar {
 	background: none;
 }
 
-/* Each server row is as wide as it is tall, so hovering shades a rounded square around its picture */
+/* Each server row is a 68px square, the 54px picture plus 7px on every side, so hovering shades a box that nearly
+ * spans the 76px rail */
 .rail-list > row {
-	padding: 6px 0;
-	margin: 0 9px;
-	border-radius: 12px;
+	padding: 7px 0;
+	margin: 0 4px;
+	border-radius: 8px;
 	background: none;
 	box-shadow: none;
 }
