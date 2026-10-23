@@ -889,8 +889,12 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 		gtk_widget_add_css_class(realname_line, "dim-label");
 		gtk_box_append(GTK_BOX(box), realname_line);
 	}
+	/* The server is named here rather than in the title, where a long name would not fit */
 	GtkWidget *account_line = create_account_line();
-	show_account_line(account_line, state ? state->account : NULL);
+	const char *account = state ? state->account : NULL;
+	g_autofree char *where = account && *account ? g_strdup_printf(TEXT_LOGGED_IN_ON, account, network->name)
+		: g_strdup_printf(TEXT_ON_SERVER, network->name);
+	gtk_label_set_text(GTK_LABEL(account_line), where);
 	gtk_box_append(GTK_BOX(box), account_line);
 	if (has_metadata)
 		gtk_box_append(GTK_BOX(box), create_status_field(&own->status, own->old_status));
@@ -961,8 +965,7 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_PROFILE));
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
-	g_autofree char *title = g_strdup_printf(TEXT_ACCOUNT_ON, network->name);
-	adw_dialog_set_title(own->dialog, title);
+	adw_dialog_set_title(own->dialog, TEXT_ACCOUNT_TITLE);
 	adw_dialog_set_child(own->dialog, toolbar);
 	adw_dialog_present(own->dialog, GTK_WIDGET(window->window));
 }
