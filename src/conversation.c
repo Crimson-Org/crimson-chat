@@ -949,8 +949,19 @@ static void toggle_members(GtkToggleButton *button, Conversation *conversation) 
 }
 
 
+/* Docked members are parted from the chat by the chat's own edge, which stops at the composer */
+static void mark_docked_members(Conversation *conversation) {
+	AdwOverlaySplitView *split = ADW_OVERLAY_SPLIT_VIEW(conversation->split);
+	if (adw_overlay_split_view_get_show_sidebar(split) && !adw_overlay_split_view_get_collapsed(split))
+		gtk_widget_add_css_class(conversation->split, "docked-members");
+	else
+		gtk_widget_remove_css_class(conversation->split, "docked-members");
+}
+
+
 /* Closing the overlaid list by clicking beside it counts as the user closing it */
 static void follow_member_panel(AdwOverlaySplitView *split, GParamSpec *spec, Conversation *conversation) {
+	mark_docked_members(conversation);
 	gboolean is_shown = adw_overlay_split_view_get_show_sidebar(split);
 	if (adw_overlay_split_view_get_collapsed(split))
 		conversation->wants_members = is_shown;
@@ -967,6 +978,7 @@ static void place_member_panel(Conversation *conversation) {
 	adw_overlay_split_view_set_show_sidebar(split, room && room->kind == ROOM_CHANNEL && wants_members
 		&& !adw_overlay_split_view_get_collapsed(split));
 	conversation->wants_members = wants_members;
+	mark_docked_members(conversation);
 }
 
 
