@@ -43,7 +43,7 @@ Messages from the same person group into bubbles under one avatar, with your own
 Replies quote the message they answer, and a right click reacts with an emoji, copies the text or deletes your message.\
 Typing notices show who is writing, and the read position follows you between your devices through the bouncer.\
 Long and multi-line messages arrive in one piece on servers with multiline batches, and history loads as you scroll up.\
-Avatars, display names and network icons come from the IRCv3 metadata the server shares.\
+Avatars, display names, pronouns, status lines, homepages and network icons come from the IRCv3 metadata the server shares, and you set your own in Account.\
 Clicking the picture of a person, room or server lets you choose your own, which stays on this computer.\
 Links to pictures over HTTPS show the picture, and bold, italics, colours and monospace keep their formatting.\
 Typing **bold** or *italics*, with stars or underscores, sends them formatted.
@@ -79,4 +79,4 @@ Clone it with `git clone --recurse-submodules` so the shared Crimson Core code c
 `sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, SQLite and GnuTLS but no graphical libraries.\
 `crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.\
 People can upload pictures for themselves and for rooms they run, which the bouncer scales, keeps and sets as their avatar on servers with IRCv3 metadata.\
-Its settings file holds `avatars`, `avatar-format`, `avatar-quality`, `avatar-size`, `avatar-largest-mb` and `public-url`, the address pictures are served from, which needs a certificate other people's apps trust.
+The settings file takes `avatars`, `avatar-format`, `avatar-quality`, `avatar-size`, `avatar-largest-mb` and `public-url`, the address pictures are served from, which needs a certificate other people's apps trust.

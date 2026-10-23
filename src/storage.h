@@ -26,9 +26,10 @@ void load_room_cache(CrimsonNetwork *network);
 /* The bouncer networks of an account seen on the last run, as network keys and their names */
 GPtrArray *list_cached_networks(const char *account_id, GPtrArray **names);
 void save_room_cache(GListModel *networks);
-/* The display name and picture the user chose on a server, which servers forget when the connection ends */
-void load_network_profile(const char *key, char **display_name, char **picture);
-void save_network_profile(const char *key, const char *display_name, const char *picture);
+/* The user's own value for a profile key, such as display-name, avatar or status, kept per server so the app sets it
+ * again on each connection; an empty value forgets it */
+char *load_profile_value(const char *network_key, const char *field);
+void save_profile_value(const char *network_key, const char *field, const char *value);
 /* A private chat the user deleted, with when, so a bouncer listing older history does not bring it back */
 void note_deleted_chat(const char *key, const char *name, gint64 time);
 gint64 find_deleted_chat(const char *key, const char *name);

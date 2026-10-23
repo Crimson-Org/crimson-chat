@@ -612,3 +612,17 @@ headerbar.top-bar menubutton > button {
 	min-width: 28px;
 	min-height: 28px;
 }
+
+/* A person's own status line on their profile, and the mark of a bot */
+.profile-status {
+	font-style: italic;
+	margin-top: 4px;
+}
+
+.bot-badge {
+	padding: 1px 10px;
+	border-radius: 9999px;
+	font-size: 0.85em;
+	font-weight: bold;
+	background-color: color-mix(in srgb, var(--accent-bg-color) 30%, var(--window-bg-color));
+}

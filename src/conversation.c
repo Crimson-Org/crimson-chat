@@ -429,6 +429,19 @@ static void send_channel_mode(Conversation *conversation, const char *mode, cons
 }
 
 
+/* The account-extban form of a ban, such as $a:name, where ACCOUNTEXTBAN names the type and EXTBAN its prefix */
+static char *describe_account_ban(IrcState *state, const char *account) {
+	const char *types = get_irc_support(state, "ACCOUNTEXTBAN");
+	const char *extban = get_irc_support(state, "EXTBAN");
+	if (!account || !*account || g_str_equal(account, "*") || !types || !*types)
+		return NULL;
+	g_autofree char *type = g_strndup(types, strcspn(types, ","));
+	/* A prefix before the comma goes first, while a server without one takes the type alone */
+	g_autofree char *prefix = extban && strchr(extban, ',') ? g_strndup(extban, strcspn(extban, ",")) : g_strdup("");
+	return g_strdup_printf("%s%s:%s", prefix, type, account);
+}
+
+
 static void moderate_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Conversation *conversation = data;
 	const char *name = g_action_get_name(G_ACTION(action));
@@ -443,12 +456,14 @@ static void moderate_member(GSimpleAction *action, GVariant *parameter, gpointer
 		if (g_str_equal(name, MODES[index].action))
 			send_channel_mode(conversation, MODES[index].mode, nick);
 	}
-	/* A ban covers the person's host where it is known, so a new nick does not get around it */
+	/* A ban covers the person's account where the server bans by account, and otherwise their host, so a new
+	 * nick or address does not get around it */
 	if (g_str_equal(name, "ban")) {
 		IrcState *state = get_network_state(room->network);
 		IrcUser *user = state ? find_irc_user(state, nick) : NULL;
-		g_autofree char *mask = user && user->host ? g_strdup_printf("*!*@%s", user->host)
-			: g_strdup_printf("%s!*@*", nick);
+		g_autofree char *account_mask = user ? describe_account_ban(state, user->account) : NULL;
+		g_autofree char *mask = account_mask ? g_steal_pointer(&account_mask) : user && user->host
+			? g_strdup_printf("*!*@%s", user->host) : g_strdup_printf("%s!*@*", nick);
 		send_channel_mode(conversation, "+b", mask);
 	}
 	if (g_str_equal(name, "kick") || g_str_equal(name, "ban"))

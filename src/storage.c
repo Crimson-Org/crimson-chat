@@ -243,22 +243,26 @@ void save_room_cache(GListModel *networks) {
 }
 
 
-void load_network_profile(const char *key, char **display_name, char **picture) {
-	g_autofree char *path = get_config_file_path(PROFILES_FILE);
-	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
-	*display_name = g_key_file_get_string(file, key, "display-name", NULL);
-	*picture = g_key_file_get_string(file, key, "picture", NULL);
+/* The avatar was kept as the picture before the other keys were, so it keeps that name in the file */
+static const char *name_profile_field(const char *field) {
+	return g_str_equal(field, "avatar") ? "picture" : field;
 }
 
 
-void save_network_profile(const char *key, const char *display_name, const char *picture) {
+char *load_profile_value(const char *network_key, const char *field) {
 	g_autofree char *path = get_config_file_path(PROFILES_FILE);
 	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
-	g_key_file_remove_group(file, key, NULL);
-	if (display_name && *display_name)
-		g_key_file_set_string(file, key, "display-name", display_name);
-	if (picture && *picture)
-		g_key_file_set_string(file, key, "picture", picture);
+	return g_key_file_get_string(file, network_key, name_profile_field(field), NULL);
+}
+
+
+void save_profile_value(const char *network_key, const char *field, const char *value) {
+	g_autofree char *path = get_config_file_path(PROFILES_FILE);
+	g_autoptr(GKeyFile) file = load_key_file(path, G_KEY_FILE_NONE);
+	if (value && *value)
+		g_key_file_set_string(file, network_key, name_profile_field(field), value);
+	else
+		g_key_file_remove_key(file, network_key, name_profile_field(field), NULL);
 	save_key_file(file, path);
 }
 

@@ -65,6 +65,7 @@ static void free_network_work(NetworkWork *work) {
 	g_hash_table_unref(work->history);
 	g_hash_table_unref(work->multiline);
 	g_hash_table_unref(work->pending);
+	g_hash_table_unref(work->splits);
 	g_free(work->opening_room);
 	g_clear_handle_id(&work->typing_source, g_source_remove);
 	if (work->registration_reply)
@@ -84,6 +85,7 @@ NetworkWork *get_network_work(CrimsonNetwork *network) {
 	work->history = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_history_load);
 	work->multiline = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_irc_message);
 	work->pending = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
+	work->splits = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_unref);
 	g_object_set_data_full(G_OBJECT(network), WORK_KEY, work, (GDestroyNotify)free_network_work);
 	return work;
 }
@@ -230,19 +232,19 @@ static void watch_private_rooms(CrimsonNetwork *network) {
 
 /* Servers forget a display name and picture when the connection ends, so each connection sets them again */
 static void restore_own_profile(CrimsonNetwork *network) {
-	g_autofree char *display_name = NULL, *picture = NULL;
-	load_network_profile(network->key, &display_name, &picture);
-	if (display_name && *display_name)
-		send_irc_client_command(network->client, "METADATA", "*", "SET", "display-name", display_name, NULL);
-	if (picture && *picture)
-		send_irc_client_command(network->client, "METADATA", "*", "SET", "avatar", picture, NULL);
+	static const char *const KEYS[] = {OWN_PROFILE_KEYS, NULL};
+	for (int index = 0; KEYS[index]; index++) {
+		g_autofree char *value = load_profile_value(network->key, KEYS[index]);
+		if (value && *value)
+			send_irc_client_command(network->client, "METADATA", "*", "SET", KEYS[index], value, NULL);
+	}
 }
 
 
 static void start_registered_network(CrimsonNetwork *network) {
 	adopt_network_name(network);
 	if (can_network(network, "draft/metadata-2")) {
-		send_irc_client_command(network->client, "METADATA", "*", "SUB", "avatar", "display-name", "color", NULL);
+		send_irc_client_command(network->client, "METADATA", "*", "SUB", FOLLOWED_PROFILE_KEYS, NULL);
 		restore_own_profile(network);
 	}
 	if (!network->bouncer_id)

@@ -22,6 +22,8 @@ typedef struct {
 	CrimsonNetwork *network;
 	AdwDialog *dialog;
 	GtkWidget *stack, *rows, *realname;
+	/* The name shown large, the nick and pronouns under it, the status the person set and whether it is a bot */
+	GtkWidget *name, *identity, *status, *bot;
 	char *nick;
 } ProfileView;
 
@@ -72,6 +74,56 @@ static void add_row(ProfileView *view, const char *title, const char *value) {
 }
 
 
+/* A homepage opens in the browser from its row */
+static void open_homepage(GtkButton *button, ProfileView *view) {
+	const char *url = g_object_get_data(G_OBJECT(button), "url");
+	g_autoptr(GtkUriLauncher) launcher = gtk_uri_launcher_new(url);
+	gtk_uri_launcher_launch(launcher, GTK_WINDOW(view->window->window), NULL, NULL, NULL);
+}
+
+
+static void add_homepage_row(ProfileView *view, const char *url) {
+	if (!url || (!g_str_has_prefix(url, "https://") && !g_str_has_prefix(url, "http://")))
+		return;
+	GtkWidget *row = adw_action_row_new();
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), TEXT_HOMEPAGE);
+	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), url);
+	gtk_widget_add_css_class(row, "property");
+	GtkWidget *button = gtk_button_new_from_icon_name("adw-external-link-symbolic");
+	gtk_widget_add_css_class(button, "flat");
+	gtk_widget_set_valign(button, GTK_ALIGN_CENTER);
+	gtk_widget_set_tooltip_text(button, TEXT_OPEN_HOMEPAGE);
+	g_object_set_data_full(G_OBJECT(button), "url", g_strdup(url), g_free);
+	g_signal_connect(button, "clicked", G_CALLBACK(open_homepage), view);
+	adw_action_row_add_suffix(ADW_ACTION_ROW(row), button);
+	adw_action_row_set_activatable_widget(ADW_ACTION_ROW(row), button);
+	gtk_list_box_append(GTK_LIST_BOX(view->rows), row);
+}
+
+
+/* What the person set for themselves through the metadata registry: a display name shown large with the nick
+ * under it, pronouns beside the nick, a status line and whether it is a bot */
+static void fill_person_metadata(ProfileView *view) {
+	CrimsonRoom *server = view->network->server_room;
+	const char *display_name = find_metadata(server, view->nick, "display-name");
+	const char *pronouns = find_metadata(server, view->nick, "pronouns");
+	const char *status = find_metadata(server, view->nick, "status");
+	const char *bot = find_metadata(server, view->nick, "bot");
+	gboolean has_display = display_name && *display_name && g_strcmp0(display_name, view->nick) != 0;
+	gtk_label_set_text(GTK_LABEL(view->name), has_display ? display_name : view->nick);
+	g_autoptr(GString) identity = g_string_new(has_display ? view->nick : "");
+	if (pronouns && *pronouns)
+		g_string_append_printf(identity, "%s%s", identity->len ? " · " : "", pronouns);
+	gtk_label_set_text(GTK_LABEL(view->identity), identity->str);
+	gtk_widget_set_visible(view->identity, identity->len > 0);
+	gtk_label_set_text(GTK_LABEL(view->status), status ? status : "");
+	gtk_widget_set_visible(view->status, status && *status);
+	IrcState *state = get_network_state(view->network);
+	IrcUser *user = state ? find_irc_user(state, view->nick) : NULL;
+	gtk_widget_set_visible(view->bot, (bot && *bot) || (user && user->is_bot));
+}
+
+
 static void show_details(Profile *profile, gpointer data) {
 	ProfileView *view = data;
 	if (!profile) {
@@ -98,6 +150,8 @@ static void show_details(Profile *profile, gpointer data) {
 		: NULL;
 	add_row(view, TEXT_PROFILE_ADDRESS, address);
 	add_row(view, TEXT_PROFILE_SERVER, profile->server);
+	add_homepage_row(view, find_metadata(view->network->server_room, view->nick, "homepage"));
+	fill_person_metadata(view);
 	gtk_widget_set_visible(view->rows, gtk_widget_get_first_child(view->rows) != NULL);
 	gtk_stack_set_visible_child_name(GTK_STACK(view->stack), "details");
 }
@@ -131,9 +185,23 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	GtkWidget *choice = offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick);
 	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), choice);
-	GtkWidget *name = gtk_label_new(nick);
-	gtk_widget_add_css_class(name, "title-1");
-	gtk_box_append(GTK_BOX(box), name);
+	view->name = gtk_label_new(nick);
+	gtk_label_set_wrap(GTK_LABEL(view->name), TRUE);
+	gtk_label_set_justify(GTK_LABEL(view->name), GTK_JUSTIFY_CENTER);
+	gtk_widget_add_css_class(view->name, "title-1");
+	gtk_box_append(GTK_BOX(box), view->name);
+	view->bot = gtk_label_new(TEXT_BOT);
+	gtk_widget_add_css_class(view->bot, "bot-badge");
+	gtk_widget_set_halign(view->bot, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), view->bot);
+	view->identity = gtk_label_new(NULL);
+	gtk_widget_add_css_class(view->identity, "dim-label");
+	gtk_box_append(GTK_BOX(box), view->identity);
+	view->status = gtk_label_new(NULL);
+	gtk_label_set_wrap(GTK_LABEL(view->status), TRUE);
+	gtk_label_set_justify(GTK_LABEL(view->status), GTK_JUSTIFY_CENTER);
+	gtk_widget_add_css_class(view->status, "profile-status");
+	gtk_box_append(GTK_BOX(box), view->status);
 	view->realname = gtk_label_new(NULL);
 	gtk_label_set_wrap(GTK_LABEL(view->realname), TRUE);
 	gtk_widget_add_css_class(view->realname, "dim-label");
@@ -164,6 +232,10 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
 	adw_dialog_set_child(view->dialog, toolbar);
 	adw_dialog_present(view->dialog, GTK_WIDGET(window->window));
+	fill_person_metadata(view);
+	/* The server only tells profile keys of people outside the user's rooms when asked */
+	if (network->client && can_network(network, "draft/metadata-2"))
+		send_irc_client_command(network->client, "METADATA", nick, "GET", FOLLOWED_PROFILE_KEYS, NULL);
 	if (network->state == NETWORK_CONNECTED)
 		request_profile(network, nick, show_details, view);
 	else
@@ -178,6 +250,9 @@ typedef struct {
 	GtkWidget *avatar, *nick, *display_name, *realname, *picture, *account, *password;
 	/* What the fields held when the dialog opened, so only changes are sent */
 	char *old_nick, *old_display_name, *old_realname, *old_picture, *old_account, *old_password;
+	/* The registry's status, pronouns and homepage keys, and what they held when the dialog opened */
+	GtkWidget *status, *pronouns, *homepage;
+	char *old_status, *old_pronouns, *old_homepage;
 	/* The password field holds a stand-in for one the bouncer keeps, and its button that shows the password */
 	gboolean has_stand_in;
 	GtkWidget *peek;
@@ -236,6 +311,9 @@ static void free_own_profile(OwnProfile *own) {
 	g_free(own->old_display_name);
 	g_free(own->old_realname);
 	g_free(own->old_picture);
+	g_free(own->old_status);
+	g_free(own->old_pronouns);
+	g_free(own->old_homepage);
 	g_free(own->old_account);
 	g_free(own->old_password);
 	g_free(own);
@@ -280,9 +358,7 @@ static void finish_picture_upload(const char *url, const char *problem, gpointer
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(upload->row), problem ? problem : TEXT_UPLOAD_PICTURE_ABOUT);
 	if (url && g_str_equal(upload->target, "*")) {
 		/* The address is kept like a typed one, so the app sets it again on each connection */
-		g_autofree char *display_name = NULL, *picture = NULL;
-		load_network_profile(upload->network->key, &display_name, &picture);
-		save_network_profile(upload->network->key, display_name ? display_name : "", url);
+		save_profile_value(upload->network->key, "avatar", url);
 	}
 	show_toast(upload->window, url ? TEXT_PICTURE_UPLOADED : problem);
 	free_picture_upload(upload);
@@ -375,8 +451,22 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 		set_metadata(network, "display-name", read_field(own->display_name));
 	if (network->client && has_changed(own->picture, own->old_picture))
 		set_metadata(network, "avatar", read_field(own->picture));
-	if (own->display_name || own->picture)
-		save_network_profile(network->key, read_field(own->display_name), read_field(own->picture));
+	/* Each profile key is kept, so the app sets it again on every connection */
+	const struct {
+		GtkWidget *row;
+		const char *old, *key;
+	} FIELDS[] = {
+		{own->display_name, own->old_display_name, "display-name"}, {own->picture, own->old_picture, "avatar"},
+		{own->status, own->old_status, "status"}, {own->pronouns, own->old_pronouns, "pronouns"},
+		{own->homepage, own->old_homepage, "homepage"},
+	};
+	for (guint index = 0; index < G_N_ELEMENTS(FIELDS); index++) {
+		if (!FIELDS[index].row)
+			continue;
+		if (network->client && index >= 2 && has_changed(FIELDS[index].row, FIELDS[index].old))
+			set_metadata(network, FIELDS[index].key, read_field(FIELDS[index].row));
+		save_profile_value(network->key, FIELDS[index].key, read_field(FIELDS[index].row));
+	}
 	/* A new login only counts on the next connection, so changing it reconnects */
 	gboolean has_new_login = has_changed(own->account, own->old_account)
 		|| g_strcmp0(read_password(own), own->old_password ? own->old_password : "") != 0;
@@ -419,6 +509,11 @@ static void refresh_own_profile(CrimsonNetwork *network, AdwDialog *dialog) {
 	refresh_own_field(own->display_name, &own->old_display_name, find_metadata(network->server_room, state->nick,
 		"display-name"));
 	refresh_own_field(own->picture, &own->old_picture, find_metadata(network->server_room, state->nick, "avatar"));
+	refresh_own_field(own->status, &own->old_status, find_metadata(network->server_room, state->nick, "status"));
+	refresh_own_field(own->pronouns, &own->old_pronouns, find_metadata(network->server_room, state->nick,
+		"pronouns"));
+	refresh_own_field(own->homepage, &own->old_homepage, find_metadata(network->server_room, state->nick,
+		"homepage"));
 }
 
 
@@ -452,6 +547,13 @@ static GtkWidget *add_field(GtkWidget *list, const char *title, const char *valu
 }
 
 
+/* What the server says the user set for a key, or what the app kept from last time before the server answers */
+static char *read_own_value(CrimsonNetwork *network, const char *nick, const char *key) {
+	const char *current = find_metadata(network->server_room, nick, key);
+	return current ? g_strdup(current) : load_profile_value(network->key, key);
+}
+
+
 void show_own_profile(Window *window, CrimsonNetwork *network) {
 	OwnProfile *own = g_new0(OwnProfile, 1);
 	own->window = window;
@@ -461,18 +563,17 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	IrcUser *user = state && nick ? find_irc_user(state, nick) : NULL;
 	gboolean has_metadata = can_network(network, "draft/metadata-2");
 	own->old_nick = g_strdup(nick);
-	g_autofree char *saved_name = NULL, *saved_picture = NULL;
-	load_network_profile(network->key, &saved_name, &saved_picture);
-	const char *display_name = find_metadata(network->server_room, nick, "display-name");
-	const char *picture = find_metadata(network->server_room, nick, "avatar");
-	own->old_display_name = g_strdup(display_name ? display_name : saved_name);
-	own->old_picture = g_strdup(picture ? picture : saved_picture);
+	own->old_display_name = read_own_value(network, nick, "display-name");
+	own->old_picture = read_own_value(network, nick, "avatar");
+	own->old_status = read_own_value(network, nick, "status");
+	own->old_pronouns = read_own_value(network, nick, "pronouns");
+	own->old_homepage = read_own_value(network, nick, "homepage");
 	/* Without a real name given, the app logs in with the nickname as the real name */
 	const char *realname = user && user->realname ? user->realname : network->session->record->realname;
 	own->old_realname = g_strdup(realname ? realname : network->session->record->nick);
 	/* The server only tells the user's own details when asked */
 	if (has_metadata && network->client)
-		send_irc_client_command(network->client, "METADATA", "*", "GET", "avatar", "display-name", NULL);
+		send_irc_client_command(network->client, "METADATA", "*", "GET", OWN_PROFILE_KEYS, NULL);
 	own->dialog = adw_dialog_new();
 	adw_dialog_set_content_width(own->dialog, PROFILE_WIDTH);
 	g_object_set_data_full(G_OBJECT(own->dialog), "own", own, (GDestroyNotify)free_own_profile);
@@ -492,6 +593,9 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	g_signal_connect(own->nick, "changed", G_CALLBACK(preview_name), own);
 	own->display_name = add_field(list, TEXT_DISPLAY_NAME, own->old_display_name, has_metadata);
 	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname, can_network(network, "setname"));
+	own->status = add_field(list, TEXT_STATUS, own->old_status, has_metadata);
+	own->pronouns = add_field(list, TEXT_PRONOUNS, own->old_pronouns, has_metadata);
+	own->homepage = add_field(list, TEXT_HOMEPAGE, own->old_homepage, has_metadata);
 	/* A bouncer that takes uploads replaces the address with a button that sends a picture from the computer */
 	g_autofree char *upload_url = has_metadata ? find_avatar_upload_url(network) : NULL;
 	if (upload_url) {

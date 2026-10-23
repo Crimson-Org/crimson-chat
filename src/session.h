@@ -90,6 +90,8 @@ typedef void (*RegistrationReply)(RegistrationResult result, const char *message
 typedef struct {
 	/* Batch references to the history loads and multiline messages being collected */
 	GHashTable *history, *multiline;
+	/* Batch references to netsplits and netjoins, each counting the people per room it took or brought back */
+	GHashTable *splits;
 	/* Pending own messages by label, waiting for their echo */
 	GHashTable *pending;
 	CrimsonRoom *whois_room;

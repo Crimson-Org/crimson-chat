@@ -326,8 +326,13 @@ static void deliver_tag_message(CrimsonNetwork *network, const IrcMessage *messa
 	}
 	const char *reply = get_irc_tag(message, "+reply");
 	CrimsonMessage *target = find_room_message(room, reply ? reply : get_irc_tag(message, "+draft/reply"));
+	/* The registry names the tags without the draft prefix, which some clients already send */
 	const char *reaction = get_irc_tag(message, "+draft/react");
 	const char *removal = get_irc_tag(message, "+draft/unreact");
+	if (!reaction && !removal) {
+		reaction = get_irc_tag(message, "+react");
+		removal = get_irc_tag(message, "+unreact");
+	}
 	if (!target || (!reaction && !removal))
 		return;
 	if (change_reaction(target, reaction ? reaction : removal, sender, reaction != NULL))
@@ -520,6 +525,12 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 		load->is_end = has_irc_tag(message, "draft/chathistory-end");
 		load->count_before = load->room ? g_list_model_get_n_items(G_LIST_MODEL(load->room->messages)) : 0;
 		g_hash_table_insert(work->history, g_strdup(reference + 1), load);
+	} else if (g_strcmp0(type, "netsplit") == 0 || g_strcmp0(type, "netjoin") == 0) {
+		/* Room names to how many people the split took or brought back, with the batch's kind under an empty
+		 * name */
+		GHashTable *counts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+		g_hash_table_insert(counts, g_strdup(""), GINT_TO_POINTER(g_str_equal(type, "netjoin")));
+		g_hash_table_insert(work->splits, g_strdup(reference + 1), counts);
 	} else if (g_strcmp0(type, "draft/multiline") == 0) {
 		IrcMessage *gathered = copy_irc_message(message);
 		g_ptr_array_set_size(gathered->parameters, 0);
@@ -566,9 +577,57 @@ static gboolean continue_history(HistoryLoad *load) {
 }
 
 
+/* A netsplit or netjoin shows as one line per room with how many people it took or brought back */
+static void finish_split(CrimsonNetwork *network, const IrcMessage *message, GHashTable *counts) {
+	gboolean is_join = GPOINTER_TO_INT(g_hash_table_lookup(counts, ""));
+	GHashTableIter iterator;
+	gpointer name, count;
+	g_hash_table_iter_init(&iterator, counts);
+	while (g_hash_table_iter_next(&iterator, &name, &count)) {
+		CrimsonRoom *room = *(char *)name ? find_room(network, name) : NULL;
+		if (!room)
+			continue;
+		int people = GPOINTER_TO_INT(count);
+		char *text = is_join ? g_strdup_printf(people == 1 ? TEXT_NETJOIN_ONE : TEXT_NETJOIN, people)
+			: g_strdup_printf(people == 1 ? TEXT_NETSPLIT_ONE : TEXT_NETSPLIT, people);
+		if (get_settings()->shows_events)
+			add_event(room, message, text);
+		else
+			g_free(text);
+		announce_room_change(room);
+	}
+}
+
+
+/* Inside a netsplit or netjoin, a leave or join only counts toward its room's line, while the members still change */
+static gboolean count_split(CrimsonNetwork *network, const IrcMessage *message, GPtrArray *affected) {
+	const char *batch = get_irc_tag(message, "batch");
+	GHashTable *counts = batch ? g_hash_table_lookup(get_network_work(network)->splits, batch) : NULL;
+	if (!counts)
+		return FALSE;
+	g_autoptr(GPtrArray) names = g_ptr_array_new();
+	if (g_str_equal(message->command, "JOIN") && get_irc_parameter(message, 0))
+		g_ptr_array_add(names, (gpointer)get_irc_parameter(message, 0));
+	for (guint index = 0; g_str_equal(message->command, "QUIT") && affected && index < affected->len; index++)
+		g_ptr_array_add(names, g_ptr_array_index(affected, index));
+	for (guint index = 0; index < names->len; index++) {
+		const char *name = g_ptr_array_index(names, index);
+		int count = GPOINTER_TO_INT(g_hash_table_lookup(counts, name));
+		g_hash_table_replace(counts, g_strdup(name), GINT_TO_POINTER(count + 1));
+	}
+	return TRUE;
+}
+
+
 static void finish_batch(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *outer) {
 	const char *reference = get_irc_parameter(message, 0) + 1;
 	NetworkWork *work = get_network_work(network);
+	GHashTable *counts = g_hash_table_lookup(work->splits, reference);
+	if (counts) {
+		finish_split(network, message, counts);
+		g_hash_table_remove(work->splits, reference);
+		return;
+	}
 	HistoryLoad *load = g_hash_table_lookup(work->history, reference);
 	if (load && load->room && continue_history(load)) {
 		g_hash_table_remove(work->history, reference);
@@ -777,6 +836,8 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 	if (load)
 		note_oldest_line(load, message);
 	if (!load && collect_registration(network, message))
+		return;
+	if (!load && count_split(network, message, affected))
 		return;
 	handle_message_in(network, message, affected, load);
 }
