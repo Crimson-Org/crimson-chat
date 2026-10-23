@@ -87,11 +87,20 @@ headerbar.title-bar {
 	background-color: var(--rail-bg);
 }
 
-/* The ring is a border, since a shadow ring leaves a seam where the picture shows through, and the margin puts the
- * badge where it sat on the bare picture */
-.rail-badge {
+/* One circle whose rim is painted in the rail's colour, since a separate border or shadow ring shares its edge with
+ * the fill and lets one show through the other; the margin puts it where it sat on the bare picture */
+.unread-badge.rail-badge {
+	--badge-fill: color-mix(in srgb, var(--window-fg-color) 26%, var(--window-bg-color));
+	min-width: 30px;
+	min-height: 30px;
 	margin: -3px -5px;
-	border: 2px solid var(--rail-bg);
+	background: radial-gradient(circle closest-side, var(--badge-fill) 12.5px, var(--rail-bg) 13.5px);
+	background-color: var(--rail-bg);
+}
+
+.unread-badge.rail-badge.mention {
+	--badge-fill: var(--accent-bg-color);
+	background-color: var(--rail-bg);
 }
 
 /* Unread counters, crimson when they hold a mention */
