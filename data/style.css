@@ -44,10 +44,11 @@ headerbar.title-bar {
 
 .rail-list {
 	background: none;
+	padding: 4px 0;
 }
 
-/* Each server row is a 68px square, the 54px picture plus 7px on every side, so hovering shades a box that nearly
- * spans the 76px rail */
+/* Each server row is a 68px square, the 54px picture plus 7px on every side, so hovering shades a box that keeps
+ * 4px from the 76px rail's sides and, through the list's padding, from its top */
 .rail-list > row {
 	padding: 7px 0;
 	margin: 0 4px;
@@ -138,8 +139,10 @@ headerbar.title-bar {
 	background-color: var(--window-bg-color);
 }
 
+/* The first and last chats keep the same 6px gap from the list's ends as from its sides */
 .room-list {
 	background: none;
+	padding: 5px 0;
 }
 
 .room-list > row {
