@@ -309,6 +309,11 @@ static void finish_registration(Downstream *downstream) {
 		send_from_bouncer(downstream, "CRIMSON", "ADMIN", downstream->bouncer->web_port, NULL);
 	if (downstream->upstream)
 		replay_upstream(downstream);
+	/* A client joining while the network is down learns why, and whether the bouncer is trying again */
+	if (downstream->upstream && get_irc_client_status(downstream->upstream->client) != IRC_CLIENT_REGISTERED) {
+		g_autofree char *progress = describe_upstream_progress(downstream->upstream);
+		send_from_bouncer(downstream, "NOTICE", downstream->nick, progress, NULL);
+	}
 	else if (has_downstream_cap(downstream, "soju.im/bouncer-networks-notify"))
 		send_network_list(downstream);
 }

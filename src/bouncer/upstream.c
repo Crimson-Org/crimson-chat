@@ -79,8 +79,10 @@ GHashTable *describe_upstream(Upstream *upstream) {
 	add_attribute(attributes, "username", record->username);
 	add_attribute(attributes, "realname", record->realname);
 	add_attribute(attributes, "sasl-username", record->sasl_username);
-	if (upstream->client && get_irc_client_status(upstream->client) == IRC_CLIENT_DISCONNECTED)
+	if (upstream->client && get_irc_client_status(upstream->client) == IRC_CLIENT_DISCONNECTED) {
 		add_attribute(attributes, "error", upstream->error);
+		add_attribute(attributes, RETRY_ATTRIBUTE, will_irc_client_retry(upstream->client) ? "1" : "0");
+	}
 	return attributes;
 }
 
@@ -125,9 +127,24 @@ static void join_saved_channels(Upstream *upstream) {
 }
 
 
-static void tell_disconnected(Downstream *downstream, gpointer reason) {
-	g_autofree char *text = g_strdup_printf("Disconnected from the network: %s",
-		reason ? (const char *)reason : "no reason given");
+/* What the bouncer is doing with a network, in words, so a client's server messages say it plainly */
+char *describe_upstream_progress(Upstream *upstream) {
+	const char *host = upstream->record.host;
+	switch (get_irc_client_status(upstream->client)) {
+	case IRC_CLIENT_REGISTERED:
+		return g_strdup_printf("Connected to %s", host);
+	case IRC_CLIENT_CONNECTING:
+		return g_strdup_printf("Connecting to %s…", host);
+	default:
+		return g_strdup_printf("Disconnected from %s: %s. %s", host, upstream->error ? upstream->error
+			: "no reason given", will_irc_client_retry(upstream->client) ? "Trying again soon."
+			: "Not trying again until its login or settings change.");
+	}
+}
+
+
+static void tell_progress(Downstream *downstream, gpointer data) {
+	g_autofree char *text = describe_upstream_progress(downstream->upstream);
 	g_autoptr(IrcMessage) notice = create_irc_message("NOTICE", downstream->nick, text, NULL);
 	notice->source = g_strdup(BOUNCER_NAME);
 	send_to_downstream(downstream, notice);
@@ -158,16 +175,21 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	add_attribute(attributes, "state", describe_upstream_state(upstream));
 	g_hash_table_insert(attributes, g_strdup("error"), g_strdup(status == IRC_CLIENT_DISCONNECTED && reason
 		? reason : ""));
+	/* Whether the bouncer will try again by itself, so clients only say they reconnect when that is true */
+	g_hash_table_insert(attributes, g_strdup(RETRY_ATTRIBUTE), g_strdup(status != IRC_CLIENT_DISCONNECTED ? ""
+		: will_irc_client_retry(client) ? "1" : "0"));
 	announce_network(upstream, attributes);
-	g_message("%s on %s is %s%s%s", upstream->user->name, upstream->record.host,
-		describe_upstream_state(upstream), reason ? ": " : "", reason ? reason : "");
+	gboolean is_final = status == IRC_CLIENT_DISCONNECTED && !will_irc_client_retry(client);
+	g_message("%s on %s is %s%s%s%s", upstream->user->name, upstream->record.host,
+		describe_upstream_state(upstream), reason ? ": " : "", reason ? reason : "",
+		is_final ? ", not retrying" : status == IRC_CLIENT_DISCONNECTED ? ", retrying" : "");
+	for_each_bound_downstream(upstream, tell_progress, NULL);
 	if (status == IRC_CLIENT_REGISTERED) {
 		join_saved_channels(upstream);
 		for_each_bound_downstream(upstream, tell_new_nick, NULL);
 		for_each_bound_downstream(upstream, drop_missing_caps, NULL);
 	} else if (status == IRC_CLIENT_DISCONNECTED) {
 		g_queue_clear_full(&upstream->pending_echoes, (GDestroyNotify)free_pending_echo);
-		for_each_bound_downstream(upstream, tell_disconnected, (gpointer)reason);
 	}
 }
 

@@ -155,4 +155,8 @@ void join_channel(CrimsonNetwork *network, const char *name, const char *key);
 void leave_room(CrimsonRoom *room);
 CrimsonRoom *open_private_room(CrimsonNetwork *network, const char *nick);
 gboolean can_network(CrimsonNetwork *network, const char *cap);
+/* Why a network that is not connected went down, from the bouncer for a network on one */
+const char *read_network_error(CrimsonNetwork *network);
+/* Whether a network that is not connected will be tried again by itself, as its bouncer or its connection says */
+gboolean is_network_retrying(CrimsonNetwork *network);
 gint64 read_message_time(const IrcMessage *message);

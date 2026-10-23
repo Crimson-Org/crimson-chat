@@ -608,3 +608,9 @@ IrcBatch *find_enclosing_batch(IrcClient *client, const IrcMessage *message, con
 	}
 	return NULL;
 }
+
+
+gboolean will_irc_client_retry(IrcClient *client) {
+	return client->wants_connection && client->failure != IRC_FAILURE_CERTIFICATE
+		&& client->failure != IRC_FAILURE_LOGIN;
+}

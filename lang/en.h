@@ -271,4 +271,5 @@
 #define TEXT_PASSWORD_SAVED "Password (Saved)"
 #define TEXT_ROOMS_WAIT "This server shows its rooms after you have been connected for a minute. Asking again in %u seconds…"
 #define TEXT_HIDE "Hide"
-#define TEXT_LOGIN_FAILED_ON "Couldn't log in to %s: %s"
+#define TEXT_DISCONNECTED_FROM "Disconnected from %s: %s"
+#define TEXT_NO_REASON "no reason given"

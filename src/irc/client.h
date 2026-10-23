@@ -66,6 +66,8 @@ IrcState *get_irc_client_state(IrcClient *client);
 const IrcClientSettings *get_irc_client_settings(IrcClient *client);
 IrcClientStatus get_irc_client_status(IrcClient *client);
 IrcFailure get_irc_client_failure(IrcClient *client);
+/* Whether a lost connection will be tried again by itself, which a refused certificate or login never is */
+gboolean will_irc_client_retry(IrcClient *client);
 /* The SHA-256 of the certificate the last connection was refused over, as lowercase hex */
 const char *get_refused_certificate(IrcClient *client);
 IrcBatch *find_irc_batch(IrcClient *client, const char *reference);

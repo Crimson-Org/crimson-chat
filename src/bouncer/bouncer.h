@@ -7,6 +7,8 @@
 #include "database.h"
 
 #define BOUNCER_NAME "crimson-chat-bouncer"
+/* The network attribute that says whether the bouncer will reconnect a disconnected network by itself */
+#define RETRY_ATTRIBUTE "crimson-chat/retrying"
 #define HISTORY_PAGE_LIMIT 1000
 
 typedef struct Bouncer Bouncer;
@@ -95,6 +97,7 @@ void restart_upstream(Upstream *upstream);
 GHashTable *describe_upstream(Upstream *upstream);
 const char *describe_upstream_state(Upstream *upstream);
 void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessage *message);
+char *describe_upstream_progress(Upstream *upstream);
 char *get_upstream_nick(Upstream *upstream);
 
 /* Downstream */

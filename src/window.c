@@ -107,24 +107,33 @@ static const char *describe_state(NetworkState state) {
 }
 
 
-/* Whether a disconnect reason is a refused login or certificate, which the connection never retries by itself */
-static gboolean needs_user(const char *error) {
-	if (!error)
-		return FALSE;
-	g_autofree char *reason = g_ascii_strdown(error, -1);
-	return strstr(reason, "sasl") || strstr(reason, "authentication") || strstr(reason, "password")
-		|| strstr(reason, "login") || strstr(reason, "certificate");
+/* Whether the link behind a server is down with nothing trying it again, which only the user can change */
+static gboolean is_stuck(CrimsonNetwork *network) {
+	Session *session = network->session;
+	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED)
+		return read_account_state(session) == NETWORK_DISCONNECTED && session->control
+			&& !will_irc_client_retry(session->control);
+	return network->state == NETWORK_DISCONNECTED && !is_network_retrying(network);
 }
 
 
+/* Only says reconnecting when something really is trying again, and otherwise says why it stopped */
 char *describe_connection_wait(CrimsonNetwork *network) {
 	Session *session = network->session;
-	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED)
-		return g_strdup_printf(TEXT_RECONNECTING_TO, describe_account_name(session));
+	gboolean is_stopped = is_stuck(network);
+	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED) {
+		const char *name = describe_account_name(session);
+		const char *error = read_account_error(session);
+		if (is_stopped)
+			return g_strdup_printf(TEXT_DISCONNECTED_FROM, name, error ? error : TEXT_NO_REASON);
+		return g_strdup_printf(session->has_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS, name);
+	}
 	if (network->state == NETWORK_CONNECTED)
 		return NULL;
-	if (needs_user(network->error))
-		return g_strdup_printf(TEXT_LOGIN_FAILED_ON, network->name, network->error);
+	if (is_stopped) {
+		const char *error = read_network_error(network);
+		return g_strdup_printf(TEXT_DISCONNECTED_FROM, network->name, error && *error ? error : TEXT_NO_REASON);
+	}
 	return g_strdup_printf(network->state == NETWORK_CONNECTING && !session->has_connected
 		? TEXT_CONNECTING_TO_ELLIPSIS : TEXT_RECONNECTING_TO, network->name);
 }
@@ -142,7 +151,7 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	gtk_widget_set_opacity(GTK_WIDGET(avatar), network->state == NETWORK_CONNECTED ? 1.0 : 0.45);
 	/* A server that is not connected shows a spinner over its picture while it connects, or a warning when it
 	 * stopped with a reason and waits for the user */
-	gboolean is_stopped = network->state == NETWORK_DISCONNECTED && needs_user(network->error);
+	gboolean is_stopped = is_stuck(network);
 	GtkWidget *state = g_object_get_data(G_OBJECT(row), "state");
 	gtk_widget_set_visible(state, network->state != NETWORK_CONNECTED);
 	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
@@ -247,13 +256,9 @@ static const char *find_lost_connection(Window *window, gboolean *was_connected)
 }
 
 
-/* Only a refused login or certificate stops a server for good, since the connection retries anything else by
- * itself, so only those show as a problem the user has to fix */
+/* A link nothing is retrying shows as a problem, where one that retries by itself only shows the spinner */
 static void read_connection_problem(Window *window) {
-	CrimsonNetwork *network = window->network;
-	gboolean is_stopped = network && network->state == NETWORK_DISCONNECTED
-		&& !(network->session->record->is_bouncer && read_account_state(network->session) != NETWORK_CONNECTED);
-	window->is_problem = is_stopped && needs_user(network->error);
+	window->is_problem = window->network && is_stuck(window->network);
 }
 
 

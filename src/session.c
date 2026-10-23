@@ -6,6 +6,8 @@
 
 #define CACHE_DELAY_SECONDS 2
 #define WORK_KEY "work"
+/* The bouncer's word on whether it reconnects a network by itself */
+#define RETRY_ATTRIBUTE "crimson-chat/retrying"
 /* The name a bouncer announces when its owner gave it none */
 #define BOUNCER_DEFAULT_NAME "crimson-chat-bouncer"
 /* A server that can filter first lists only channels above this size, and lists all of them when that
@@ -881,4 +883,26 @@ gboolean collect_profile(CrimsonNetwork *network, int number, const IrcMessage *
 		break;
 	}
 	return TRUE;
+}
+
+
+/* Through a bouncer that is linked, what went wrong is the bouncer's own link to the network */
+static gboolean is_bouncer_link_up(CrimsonNetwork *network) {
+	return network->bouncer_id && network->client && get_irc_client_status(network->client) == IRC_CLIENT_REGISTERED;
+}
+
+
+const char *read_network_error(CrimsonNetwork *network) {
+	if (is_bouncer_link_up(network))
+		return g_hash_table_lookup(network->attributes, "error");
+	return network->error;
+}
+
+
+gboolean is_network_retrying(CrimsonNetwork *network) {
+	if (network->state == NETWORK_CONNECTING)
+		return TRUE;
+	if (is_bouncer_link_up(network))
+		return g_strcmp0(g_hash_table_lookup(network->attributes, RETRY_ATTRIBUTE), "1") == 0;
+	return network->client && will_irc_client_retry(network->client);
 }
