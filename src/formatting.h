@@ -4,6 +4,9 @@
 
 /* Pango markup for a message, with bold, italics, underline, strikethrough, monospace, colours and links */
 char *format_irc_markup(const char *text);
+/* Markdown emphasis, **bold** or __bold__ and *italics* or _italics_, as the IRC codes every client shows; a marker
+ * only counts at the edge of a word, so names like snake_case and web addresses stay as written */
+char *convert_markdown(const char *text);
 /* The text without formatting codes, for previews and notifications */
 char *strip_irc_formatting(const char *text);
 /* Addresses of pictures the text links to, which show as previews under the message */

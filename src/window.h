@@ -78,7 +78,8 @@ GtkWidget *get_room_list_widget(RoomList *list);
 void show_room_list_network(RoomList *list, CrimsonNetwork *network);
 void select_listed_room(RoomList *list, CrimsonRoom *room);
 void resort_room_list(RoomList *list);
-void set_room_list_narrow(RoomList *list, gboolean is_narrow);
+/* The list's header, which the side panel places across the rail and the list together */
+GtkWidget *get_room_list_header(RoomList *list);
 void refresh_room_list_header(RoomList *list);
 void focus_room_search(RoomList *list);
 /* Lets the room list follow whether the window has focus, for its + button */

@@ -127,9 +127,9 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	const char *url = pick_person_picture(room, nick);
 	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(avatar), sized);
-	offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick);
-	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), avatar);
+	GtkWidget *choice = offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick);
+	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), choice);
 	GtkWidget *name = gtk_label_new(nick);
 	gtk_widget_add_css_class(name, "title-1");
 	gtk_box_append(GTK_BOX(box), name);
@@ -483,9 +483,9 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 	gtk_widget_add_css_class(box, "profile");
 	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, NULL, TRUE);
 	fill_room_avatar(ADW_AVATAR(avatar), room, PROFILE_AVATAR_SIZE);
-	offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name);
-	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), avatar);
+	GtkWidget *choice = offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name);
+	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(box), choice);
 	g_autofree char *title = describe_room_title(room);
 	GtkWidget *name = gtk_label_new(title);
 	gtk_widget_add_css_class(name, "title-1");

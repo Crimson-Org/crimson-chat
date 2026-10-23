@@ -74,11 +74,6 @@ headerbar.top-bar menubutton > button {
 	transition: box-shadow 200ms ease-out;
 }
 
-.rail-button {
-	min-width: 44px;
-	min-height: 44px;
-}
-
 .rail-kind {
 	-gtk-icon-size: 14px;
 	padding: 4px;
@@ -568,4 +563,21 @@ headerbar.top-bar menubutton > button {
 	min-height: 32px;
 	padding: 0 16px;
 	border-radius: 9999px;
+}
+
+/* A picture the user can change shows a small sign in its corner while pointed at, and a remove button once their
+ * own is in place */
+.picture-choice > .picture-badge {
+	opacity: 0;
+	transition: opacity 150ms ease;
+	min-width: 28px;
+	min-height: 28px;
+	padding: 0;
+	border-radius: 9999px;
+	background-color: color-mix(in srgb, var(--window-fg-color) 18%, var(--window-bg-color));
+	box-shadow: 0 1px 4px alpha(black, 0.35);
+}
+
+.picture-choice:hover > .picture-badge {
+	opacity: 1;
 }

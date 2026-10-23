@@ -329,6 +329,8 @@ static void toggle_search(GtkToggleButton *button, RoomList *list) {
 	gtk_stack_set_transition_type(GTK_STACK(list->title_stack), is_open ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
 		: GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
 	gtk_stack_set_visible_child_name(GTK_STACK(list->title_stack), is_open ? "search" : "title");
+	/* The search field fills the header, while the title keeps its own width so the header can centre it */
+	gtk_widget_set_hexpand(list->title_stack, is_open);
 	if (is_open)
 		gtk_widget_grab_focus(list->search);
 	else
@@ -369,7 +371,7 @@ static GtkWidget *create_header(RoomList *list) {
 	gtk_stack_set_hhomogeneous(GTK_STACK(list->title_stack), FALSE);
 	gtk_stack_add_named(GTK_STACK(list->title_stack), list->title, "title");
 	gtk_stack_add_named(GTK_STACK(list->title_stack), list->search, "search");
-	gtk_widget_set_hexpand(list->title_stack, TRUE);
+	gtk_widget_set_hexpand(list->title_stack, FALSE);
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(list->header), list->title_stack);
 	list->search_button = gtk_toggle_button_new();
 	gtk_button_set_icon_name(GTK_BUTTON(list->search_button), "system-search-symbolic");
@@ -514,7 +516,7 @@ RoomList *create_room_list(Window *window) {
 	build_models(list);
 	list->box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(list->box, "room-column");
-	gtk_box_append(GTK_BOX(list->box), create_header(list));
+	create_header(list);
 	list->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(list->stack), create_list_view(list), "list");
 	gtk_stack_add_named(GTK_STACK(list->stack), create_no_rooms_page(), "no-rooms");
@@ -524,7 +526,6 @@ RoomList *create_room_list(Window *window) {
 	gtk_overlay_add_overlay(GTK_OVERLAY(pages), list->connection);
 	gtk_widget_set_vexpand(pages, TRUE);
 	gtk_box_append(GTK_BOX(list->box), pages);
-	set_room_list_narrow(list, FALSE);
 	return list;
 }
 
@@ -577,8 +578,8 @@ void resort_room_list(RoomList *list) {
 }
 
 
-void set_room_list_narrow(RoomList *list, gboolean is_narrow) {
-	gtk_widget_set_visible(list->menu_button, is_narrow);
+GtkWidget *get_room_list_header(RoomList *list) {
+	return list->header;
 }
 
 

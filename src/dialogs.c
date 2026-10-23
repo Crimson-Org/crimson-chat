@@ -183,8 +183,9 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 		gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
 		g_autofree char *sized = fill_image_size(pick_network_picture(form->network), SERVER_AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
-		offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL);
-		adw_preferences_group_add(ADW_PREFERENCES_GROUP(picture), avatar);
+		GtkWidget *choice = offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL);
+		gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
+		adw_preferences_group_add(ADW_PREFERENCES_GROUP(picture), choice);
 		adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(picture));
 	}
 	GtkWidget *server = add_group(page, TEXT_SERVER, NULL);

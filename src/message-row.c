@@ -304,7 +304,9 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 static char *build_body_markup(CrimsonMessage *message, const char *text) {
 	if (message->is_redacted)
 		return g_markup_printf_escaped("<i>%s</i>", TEXT_MESSAGE_DELETED);
-	g_autofree char *markup = format_irc_markup(text);
+	/* Markdown stars and underscores from other apps show as the emphasis they stand for */
+	g_autofree char *emphasised = convert_markdown(text);
+	g_autofree char *markup = format_irc_markup(emphasised);
 	if (message->kind != MESSAGE_ACTION)
 		return g_steal_pointer(&markup);
 	g_autofree char *sender = g_markup_escape_text(message->sender ? message->sender : "", -1);

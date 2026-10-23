@@ -319,3 +319,76 @@ char *format_day_heading(gint64 time) {
 	gboolean is_this_year = g_date_time_get_year(local) == g_date_time_get_year(now);
 	return g_date_time_format(local, is_this_year ? "%A %e %B" : "%A %e %B %Y");
 }
+
+
+static gboolean is_word_before(const char *text, const char *position) {
+	if (position == text)
+		return FALSE;
+	const char *previous = g_utf8_find_prev_char(text, position);
+	return previous && g_unichar_isalnum(g_utf8_get_char(previous));
+}
+
+
+static gboolean is_link_start(const char *position) {
+	return g_str_has_prefix(position, "http://") || g_str_has_prefix(position, "https://")
+		|| g_str_has_prefix(position, "ftp://") || g_str_has_prefix(position, "www.");
+}
+
+
+/* The closing marker ends a word: it follows a letter rather than a space and no letter follows it */
+static const char *find_closing_marker(const char *inner, char marker, gsize width) {
+	for (const char *position = inner + 1; *position; position++) {
+		if (is_link_start(position))
+			return NULL;
+		if (*position != marker || (width == 2 && position[1] != marker))
+			continue;
+		if (width == 1 && position[1] == marker) {
+			position++;
+			continue;
+		}
+		const char *after = position + width;
+		gboolean ends_word = !*after || !g_unichar_isalnum(g_utf8_get_char(after));
+		if (position[-1] != ' ' && ends_word)
+			return position;
+	}
+	return NULL;
+}
+
+
+char *convert_markdown(const char *text) {
+	if (!text)
+		return NULL;
+	GString *converted = g_string_new(NULL);
+	const char *position = text;
+	while (*position) {
+		/* Addresses keep their underscores and stars */
+		if (is_link_start(position) && !is_word_before(text, position)) {
+			const char *end = position;
+			while (*end && *end != ' ')
+				end++;
+			g_string_append_len(converted, position, end - position);
+			position = end;
+			continue;
+		}
+		char marker = *position;
+		if ((marker == '*' || marker == '_') && !is_word_before(text, position)) {
+			gsize width = position[1] == marker ? 2 : 1;
+			const char *inner = position + width;
+			const char *close = *inner && *inner != ' ' && *inner != marker
+				? find_closing_marker(inner, marker, width) : NULL;
+			if (close) {
+				char code = width == 2 ? BOLD : ITALIC;
+				g_autofree char *middle = g_strndup(inner, (gsize)(close - inner));
+				g_autofree char *nested = convert_markdown(middle);
+				g_string_append_c(converted, code);
+				g_string_append(converted, nested);
+				g_string_append_c(converted, code);
+				position = close + width;
+				continue;
+			}
+		}
+		g_string_append_c(converted, *position);
+		position++;
+	}
+	return g_string_free(converted, FALSE);
+}

@@ -132,6 +132,9 @@ static void show_new_picture(PictureChoice *choice, const char *file) {
 			fill_room_avatar(ADW_AVATAR(avatar), room, adw_avatar_get_size(ADW_AVATAR(avatar)));
 		else
 			show_avatar_image(ADW_AVATAR(avatar), url);
+		GtkWidget *remove = g_object_get_data(avatar, "picture-remove");
+		if (remove)
+			gtk_widget_set_visible(remove, file != NULL);
 	}
 	announce_network_change(network);
 	announce_room_change(network->server_room);
@@ -217,56 +220,43 @@ static void choose_picture(GtkWidget *avatar) {
 }
 
 
-static void remove_picture(GtkWidget *avatar) {
+/* The remove button only shows while the user's own picture is in place */
+static void refresh_remove_button(GtkWidget *avatar) {
+	GtkWidget *remove = g_object_get_data(G_OBJECT(avatar), "picture-remove");
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	CrimsonNetwork *network = template ? find_choice_network(template) : NULL;
+	if (remove)
+		gtk_widget_set_visible(remove, network && find_own_picture(network, template->kind, template->name));
+}
+
+
+static void finish_removing(AdwAlertDialog *alert, const char *response, GtkWidget *avatar) {
+	if (g_strcmp0(response, "remove") != 0)
+		return;
 	PictureChoice *choice = copy_choice(avatar);
 	show_new_picture(choice, NULL);
 	free_picture_choice(choice);
+	refresh_remove_button(avatar);
 }
 
 
-static void forget_menu(GtkPopover *popover, gpointer data) {
-	g_idle_add_once((GSourceOnceFunc)gtk_widget_unparent, popover);
+static void ask_to_remove(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_REMOVE_PICTURE_TITLE, TEXT_REMOVE_PICTURE_BODY);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_REMOVE, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
+	g_signal_connect(alert, "response", G_CALLBACK(finish_removing), avatar);
+	adw_dialog_present(alert, GTK_WIDGET(template->window->window));
 }
 
 
-static GtkWidget *add_menu_item(GtkWidget *items, GtkWidget *popover, const char *label, GCallback chosen,
-	GtkWidget *avatar) {
-	GtkWidget *item = gtk_button_new_with_label(label);
-	gtk_widget_add_css_class(item, "flat");
-	gtk_widget_add_css_class(item, "plain-item");
-	gtk_label_set_xalign(GTK_LABEL(gtk_button_get_child(GTK_BUTTON(item))), 0);
-	g_signal_connect_swapped(item, "clicked", G_CALLBACK(gtk_popover_popdown), popover);
-	g_signal_connect_swapped(item, "clicked", chosen, avatar);
-	gtk_box_append(GTK_BOX(items), item);
-	return item;
+static void click_picture(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
+	choose_picture(gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture)));
 }
 
 
-static void open_picture_menu(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
-	GtkWidget *avatar = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
-	PictureChoice *choice = g_object_get_data(G_OBJECT(avatar), "picture-choice");
-	CrimsonNetwork *network = find_choice_network(choice);
-	if (!network)
-		return;
-	GtkWidget *popover = gtk_popover_new();
-	gtk_widget_add_css_class(popover, "menu");
-	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-	add_menu_item(items, popover, TEXT_CHOOSE_PICTURE, G_CALLBACK(choose_picture), avatar);
-	if (find_own_picture(network, choice->kind, choice->name)) {
-		GtkWidget *remove = add_menu_item(items, popover, TEXT_REMOVE_PICTURE, G_CALLBACK(remove_picture), avatar);
-		gtk_widget_remove_css_class(remove, "plain-item");
-		gtk_widget_add_css_class(remove, "destructive-item");
-	}
-	gtk_popover_set_child(GTK_POPOVER(popover), items);
-	gtk_widget_set_parent(popover, avatar);
-	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
-	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
-	g_signal_connect(popover, "closed", G_CALLBACK(forget_menu), NULL);
-	gtk_popover_popup(GTK_POPOVER(popover));
-}
-
-
-void offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
+GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
 	const char *name) {
 	PictureChoice *choice = g_new0(PictureChoice, 1);
 	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}};
@@ -275,6 +265,27 @@ void offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *net
 	gtk_widget_set_cursor_from_name(avatar, "pointer");
 	gtk_widget_set_tooltip_text(avatar, TEXT_CHANGE_PICTURE);
 	GtkGesture *click = gtk_gesture_click_new();
-	g_signal_connect(click, "released", G_CALLBACK(open_picture_menu), NULL);
+	g_signal_connect(click, "released", G_CALLBACK(click_picture), NULL);
 	gtk_widget_add_controller(avatar, GTK_EVENT_CONTROLLER(click));
+	/* Pointing at the picture shows a picture sign in its corner, and a remove button where the user chose one */
+	GtkWidget *overlay = gtk_overlay_new();
+	gtk_widget_add_css_class(overlay, "picture-choice");
+	gtk_overlay_set_child(GTK_OVERLAY(overlay), avatar);
+	GtkWidget *sign = gtk_image_new_from_icon_name("image-x-generic-symbolic");
+	gtk_widget_add_css_class(sign, "picture-badge");
+	gtk_widget_set_halign(sign, GTK_ALIGN_END);
+	gtk_widget_set_valign(sign, GTK_ALIGN_END);
+	gtk_widget_set_can_target(sign, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), sign);
+	GtkWidget *remove = gtk_button_new_from_icon_name("user-trash-symbolic");
+	gtk_widget_add_css_class(remove, "picture-badge");
+	gtk_widget_add_css_class(remove, "circular");
+	gtk_widget_set_tooltip_text(remove, TEXT_REMOVE_PICTURE);
+	gtk_widget_set_halign(remove, GTK_ALIGN_END);
+	gtk_widget_set_valign(remove, GTK_ALIGN_START);
+	g_signal_connect_swapped(remove, "clicked", G_CALLBACK(ask_to_remove), avatar);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), remove);
+	g_object_set_data(G_OBJECT(avatar), "picture-remove", remove);
+	refresh_remove_button(avatar);
+	return overlay;
 }

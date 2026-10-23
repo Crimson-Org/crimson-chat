@@ -275,7 +275,6 @@
 #define TEXT_MEMBERS_COUNT "%u Members"
 #define TEXT_MEMBERS_ONE "%u Member"
 #define TEXT_ROOM_DETAILS "Room Details"
-#define TEXT_CHOOSE_PICTURE "Choose Picture…"
 #define TEXT_CHOOSE_PICTURE_TITLE "Choose a Picture"
 #define TEXT_REMOVE_PICTURE "Remove Picture"
 #define TEXT_CHANGE_PICTURE "Change Picture"
@@ -283,3 +282,5 @@
 #define TEXT_PICTURE_UNREADABLE "That picture couldn't be opened"
 #define TEXT_TAKE_BACK_REACTION "Take Back Reaction"
 #define TEXT_REACTED_TO "%s reacted %s to “%s”"
+#define TEXT_REMOVE_PICTURE_TITLE "Remove Your Picture?"
+#define TEXT_REMOVE_PICTURE_BODY "The picture from the server shows again."

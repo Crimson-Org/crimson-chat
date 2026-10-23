@@ -407,7 +407,6 @@ static void update_view(Window *window) {
 	gboolean has_rail = count > 1;
 	window->has_rail = has_rail;
 	gtk_widget_set_visible(window->rail, has_rail);
-	set_room_list_narrow(window->room_list, !has_rail);
 	g_autoptr(CrimsonNetwork) wanted = find_wanted_network(window);
 	if (wanted)
 		choose_network(window, wanted);
@@ -591,16 +590,6 @@ GtkWidget *create_main_menu_button(Window *window) {
 static GtkWidget *create_rail(Window *window) {
 	GtkWidget *rail = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
 	gtk_widget_add_css_class(rail, "rail");
-	GtkWidget *header = adw_header_bar_new();
-	adw_header_bar_set_show_end_title_buttons(ADW_HEADER_BAR(header), FALSE);
-	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(header), FALSE);
-	GtkWidget *menu = create_main_menu_button(window);
-	gtk_widget_add_css_class(menu, "flat");
-	gtk_widget_add_css_class(menu, "circular");
-	gtk_widget_add_css_class(menu, "rail-button");
-	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), menu);
-	gtk_widget_add_css_class(header, "top-bar");
-	gtk_box_append(GTK_BOX(rail), header);
 	window->rail_list = gtk_list_box_new();
 	gtk_widget_add_css_class(window->rail_list, "rail-list");
 	gtk_list_box_bind_model(GTK_LIST_BOX(window->rail_list), G_LIST_MODEL(window->chat->networks), create_rail_row,
@@ -891,14 +880,19 @@ static void add_window_actions(Window *window) {
 }
 
 
+/* One header spans the rail and the list, so its title sits in the middle of the whole side panel */
 static GtkWidget *create_sidebar(Window *window) {
+	GtkWidget *panel = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_append(GTK_BOX(panel), get_room_list_header(window->room_list));
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_set_vexpand(box, TRUE);
 	window->rail = create_rail(window);
 	gtk_box_append(GTK_BOX(box), window->rail);
 	GtkWidget *list = get_room_list_widget(window->room_list);
 	gtk_widget_set_hexpand(list, TRUE);
 	gtk_box_append(GTK_BOX(box), list);
-	return box;
+	gtk_box_append(GTK_BOX(panel), box);
+	return panel;
 }
 
 

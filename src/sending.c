@@ -295,7 +295,10 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 		run_command(room, command);
 		return;
 	}
-	const char *body = text[0] == '/' ? text + 1 : text;
+	/* Markdown emphasis goes out as IRC formatting, which every client shows */
+	const char *typed = text[0] == '/' ? text + 1 : text;
+	g_autofree char *emphasised = room->kind == ROOM_SERVER ? g_strdup(typed) : convert_markdown(typed);
+	const char *body = emphasised;
 	/* A server that strips the reply tag would leave the reply without context, so it quotes the person and the start
 	 * of what they said in front of it */
 	g_autofree char *quoted = NULL;
