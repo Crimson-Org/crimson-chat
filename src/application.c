@@ -221,6 +221,7 @@ static void start_up(GApplication *application) {
 		{"win.message-someone", {"<Control>n", NULL}},
 		{"win.step-room(-1)", {"<Alt>Up", "<Control>Page_Up", NULL}},
 		{"win.step-room(1)", {"<Alt>Down", "<Control>Page_Down", NULL}},
+		{"win.go-back", {"<Alt>Left", NULL}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(application), ENTRIES, G_N_ELEMENTS(ENTRIES), application);
 	for (guint index = 0; index < G_N_ELEMENTS(SHORTCUTS); index++)

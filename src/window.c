@@ -28,6 +28,8 @@
 /* How long after connecting the offer to register waits, so a login prompt from NickServ can come first */
 #define REGISTER_OFFER_DELAY_US (5 * G_USEC_PER_SEC)
 #define MOUSE_BACK_BUTTON 8
+/* How many earlier chats going back can return through */
+#define ROOM_HISTORY_LIMIT 50
 #define MINIMUM_WIDTH 452
 #define RAIL_SPINNER_SIZE 22
 #define MINIMUM_HEIGHT 668
@@ -677,9 +679,7 @@ gboolean is_room_in_view(Window *window, CrimsonRoom *room) {
 }
 
 
-void open_room(Window *window, CrimsonRoom *room) {
-	if (!room)
-		return;
+static void show_room(Window *window, CrimsonRoom *room) {
 	if (room->network != window->network)
 		choose_network(window, room->network);
 	select_listed_room(window->room_list, room);
@@ -687,6 +687,20 @@ void open_room(Window *window, CrimsonRoom *room) {
 	adw_navigation_split_view_set_show_content(window->split, TRUE);
 	save_window_choice(room->network->key, room);
 	focus_composer(window->conversation);
+}
+
+
+/* The chat being left is kept so going back returns to it, such as after a command opened the server's messages */
+void open_room(Window *window, CrimsonRoom *room) {
+	if (!room)
+		return;
+	CrimsonRoom *open = get_open_room(window);
+	if (open && open != room) {
+		if (window->room_history->len == ROOM_HISTORY_LIMIT)
+			g_ptr_array_remove_index(window->room_history, 0);
+		g_ptr_array_add(window->room_history, g_object_ref(open));
+	}
+	show_room(window, room);
 }
 
 
@@ -1152,6 +1166,42 @@ static void hide_action(GSimpleAction *action, GVariant *parameter, gpointer dat
 }
 
 
+/* A kept chat may have been left or its server removed since, so it is looked for among the servers that remain
+ * before its own server is trusted */
+static gboolean is_room_kept(Window *window, CrimsonRoom *room) {
+	GListModel *networks = G_LIST_MODEL(window->chat->networks);
+	for (guint index = 0; index < g_list_model_get_n_items(networks); index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(networks, index);
+		if (g_list_store_find(network->rooms, room, NULL))
+			return TRUE;
+	}
+	return FALSE;
+}
+
+
+/* Going back returns to the chat open before this one, and closes the chat once there is none */
+static void go_back(Window *window) {
+	while (window->room_history->len > 0) {
+		g_autoptr(CrimsonRoom) room = g_ptr_array_steal_index(window->room_history, window->room_history->len - 1);
+		if (room != get_open_room(window) && is_room_kept(window, room)) {
+			show_room(window, room);
+			return;
+		}
+	}
+	close_open_room(window);
+}
+
+
+static void press_back_button(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	go_back(window);
+}
+
+
+static void go_back_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	go_back(data);
+}
+
+
 static void add_window_actions(Window *window) {
 	static const GActionEntry ENTRIES[] = {
 		{"join-room", join_room_action, NULL, NULL, NULL, {0}},
@@ -1180,6 +1230,7 @@ static void add_window_actions(Window *window) {
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
 		{"invite-people", invite_action, NULL, NULL, NULL, {0}},
+		{"go-back", go_back_action, NULL, NULL, NULL, {0}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(window->window), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
 }
@@ -1206,12 +1257,6 @@ void close_open_room(Window *window) {
 	select_listed_room(window->room_list, NULL);
 	adw_navigation_split_view_set_show_content(window->split, FALSE);
 	save_window_choice(window->network ? window->network->key : NULL, NULL);
-}
-
-
-/* The mouse's back button closes the open chat and leaves the middle empty */
-static void go_back(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
-	close_open_room(window);
 }
 
 
@@ -1299,6 +1344,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	Window *window = g_new0(Window, 1);
 	main_window = window;
 	window->dismissed_logins = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+	window->room_history = g_ptr_array_new_with_free_func(g_object_unref);
 	window->chat = chat;
 	window->window = ADW_APPLICATION_WINDOW(adw_application_window_new(application));
 	gtk_window_set_title(GTK_WINDOW(window->window), TEXT_APPLICATION_NAME);
@@ -1330,7 +1376,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	GtkGesture *back = gtk_gesture_click_new();
 	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(back), MOUSE_BACK_BUTTON);
 	gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(back), GTK_PHASE_CAPTURE);
-	g_signal_connect(back, "pressed", G_CALLBACK(go_back), window);
+	g_signal_connect(back, "pressed", G_CALLBACK(press_back_button), window);
 	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
 	add_window_actions(window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);

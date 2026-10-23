@@ -41,6 +41,8 @@ struct Window {
 	 * closed while the app runs */
 	guint banner_source;
 	GHashTable *dismissed_logins;
+	/* The chats open before the current one, newest last, for going back */
+	GPtrArray *room_history;
 	/* The server being dragged in the rail, and the row that shows where it would land */
 	CrimsonNetwork *dragged_network;
 	GtkWidget *drop_line_row;

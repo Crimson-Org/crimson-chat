@@ -66,7 +66,7 @@ Closing the window keeps the chats connected in the tray, and Ctrl+Q quits.
 ### Keyboard
 
 Ctrl+J joins a room, Ctrl+N messages someone and Ctrl+K searches the chats.\
-Alt+Up and Alt+Down step through the rooms, and Tab completes nicks in the message field.\
+Alt+Up and Alt+Down step through the rooms, Alt+Left or the mouse back button returns to the last chat, and Tab completes nicks in the message field.\
 Commands such as /join, /msg, /me, /topic, /away and /whois work in any room, and other commands go to the server unchanged.
 
 ## Building
