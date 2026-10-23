@@ -129,6 +129,7 @@ static void finalize_room(GObject *object) {
 	g_object_unref(room->messages);
 	g_hash_table_unref(room->by_id);
 	g_hash_table_unref(room->typing);
+	g_clear_pointer(&room->batch, g_ptr_array_unref);
 	G_OBJECT_CLASS(crimson_room_parent_class)->finalize(object);
 }
 
@@ -156,6 +157,10 @@ CrimsonRoom *create_room(CrimsonNetwork *network, RoomKind kind, const char *nam
 
 
 void announce_room_change(CrimsonRoom *room) {
+	if (room->batch_depth) {
+		room->has_batch_change = TRUE;
+		return;
+	}
 	g_signal_emit(room, room_signals[SIGNAL_CHANGED], 0);
 }
 
@@ -220,23 +225,91 @@ static void redraw_messages(GListStore *messages, guint first, guint end) {
 }
 
 
+/* The message after new ones may now continue their group or lose its date line, and the one before may no longer
+ * end its group, so both are drawn again, reaching past events that may be hidden to the nearest bubbles */
+static void redraw_around(CrimsonRoom *room, guint position, guint added) {
+	guint last = position + added;
+	while (last < g_list_model_get_n_items(G_LIST_MODEL(room->messages)) && is_message_note(room, last))
+		last++;
+	redraw_messages(room->messages, position + added, last + 1);
+	guint first = position;
+	while (first > 0 && is_message_note(room, first - 1))
+		first--;
+	redraw_messages(room->messages, first ? first - 1 : 0, position);
+}
+
+
+static void add_message_run(CrimsonRoom *room, GPtrArray *batch, guint start, guint end, guint position) {
+	g_list_store_splice(room->messages, position, 0, batch->pdata + start, end - start);
+	redraw_around(room, position, end - start);
+}
+
+
+static int compare_message_times(gconstpointer first, gconstpointer second) {
+	gint64 one = (*(CrimsonMessage *const *)first)->time, other = (*(CrimsonMessage *const *)second)->time;
+	return (one > other) - (one < other);
+}
+
+
+/* A page no newer than all held messages goes before them, even when it shares the first one's moment, and
+ * otherwise each run of the page that falls between the same two held messages goes in at once */
+static void add_batch(CrimsonRoom *room, GPtrArray *batch) {
+	g_ptr_array_sort(batch, compare_message_times);
+	GListModel *messages = G_LIST_MODEL(room->messages);
+	CrimsonMessage *newest = g_ptr_array_index(batch, batch->len - 1);
+	g_autoptr(CrimsonMessage) first = g_list_model_get_item(messages, 0);
+	if (first && newest->time <= first->time) {
+		add_message_run(room, batch, 0, batch->len, 0);
+		return;
+	}
+	for (guint start = 0, end; start < batch->len; start = end) {
+		guint position = find_insert_position(room, ((CrimsonMessage *)g_ptr_array_index(batch, start))->time);
+		g_autoptr(CrimsonMessage) next = g_list_model_get_item(messages, position);
+		for (end = start + 1; end < batch->len; end++) {
+			if (next && ((CrimsonMessage *)g_ptr_array_index(batch, end))->time >= next->time)
+				break;
+		}
+		add_message_run(room, batch, start, end, position);
+	}
+}
+
+
+guint begin_room_batch(CrimsonRoom *room) {
+	if (!room->batch_depth++)
+		room->batch = g_ptr_array_new_with_free_func(g_object_unref);
+	return room->batch->len;
+}
+
+
+guint end_room_batch(CrimsonRoom *room, guint start) {
+	guint shown = 0;
+	for (guint index = start; room->batch && index < room->batch->len; index++)
+		shown += !((CrimsonMessage *)g_ptr_array_index(room->batch, index))->is_membership;
+	if (!room->batch_depth || --room->batch_depth)
+		return shown;
+	g_autoptr(GPtrArray) batch = g_steal_pointer(&room->batch);
+	if (batch->len)
+		add_batch(room, batch);
+	if (room->has_batch_change) {
+		room->has_batch_change = FALSE;
+		announce_room_change(room);
+	}
+	return shown;
+}
+
+
 gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 	if (message->id && g_hash_table_contains(room->by_id, message->id))
 		return FALSE;
 	if (message->id)
 		g_hash_table_insert(room->by_id, g_strdup(message->id), message);
-	guint position = find_insert_position(room, message->time);
-	g_list_store_insert(room->messages, position, message);
-	/* The message after a new one may now continue its group or lose its date line, and the one before may no longer
-	 * end its group, so both are drawn again, reaching past events that may be hidden to the nearest bubbles */
-	guint last = position + 1;
-	while (last < g_list_model_get_n_items(G_LIST_MODEL(room->messages)) && is_message_note(room, last))
-		last++;
-	redraw_messages(room->messages, position + 1, last + 1);
-	guint first = position;
-	while (first > 0 && is_message_note(room, first - 1))
-		first--;
-	redraw_messages(room->messages, first ? first - 1 : 0, position);
+	if (room->batch_depth) {
+		g_ptr_array_add(room->batch, g_object_ref(message));
+	} else {
+		guint position = find_insert_position(room, message->time);
+		g_list_store_insert(room->messages, position, message);
+		redraw_around(room, position, 1);
+	}
 	if (message->time >= room->last_time && message->kind != MESSAGE_EVENT) {
 		room->last_time = message->time;
 		g_free(room->preview);

@@ -6,6 +6,7 @@
 #include "formatting.h"
 #include "settings-dialog.h"
 #include "settings.h"
+#include "state.h"
 #include "sounds.h"
 #include "window.h"
 #include "wizards.h"
@@ -172,6 +173,7 @@ static void open_room_action(GSimpleAction *action, GVariant *parameter, gpointe
 /* The window is never destroyed, since connections closing queue work for it that would then find it gone */
 static void finish_quitting(gpointer application) {
 	stop_chat(chat);
+	finish_saving_state();
 	g_application_quit(application);
 }
 

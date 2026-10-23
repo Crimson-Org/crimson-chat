@@ -90,6 +90,11 @@ struct _CrimsonRoom {
 	 * line the list shows for it and when it came */
 	char *new_reaction, *new_reaction_text;
 	gint64 new_reaction_time;
+	/* The messages of the history pages being received, added together once the last page ends, and whether the
+	 * room changed meanwhile */
+	GPtrArray *batch;
+	guint batch_depth;
+	gboolean has_batch_change;
 };
 
 /* The profile keys of the IRCv3 metadata registry that people set for themselves, which the app keeps and sets
@@ -156,6 +161,11 @@ CrimsonRoom *create_room(CrimsonNetwork *network, RoomKind kind, const char *nam
 void announce_room_change(CrimsonRoom *room);
 /* Puts a message in time order, or returns FALSE when the room already holds its id */
 gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message);
+/* Holds the messages of a history page and the room's changes until the page ends, so a chat takes the page in one
+ * change. Beginning returns where the page starts among the held messages, and ending returns how many messages
+ * the page added that show whatever the setting for joins and leaves */
+guint begin_room_batch(CrimsonRoom *room);
+guint end_room_batch(CrimsonRoom *room, guint start);
 CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id);
 CrimsonMessage *get_last_message(CrimsonRoom *room);
 /* Counts the unread messages again after the read marker or the messages changed */

@@ -18,8 +18,10 @@
 /* A history batch being received for one room */
 typedef struct {
 	CrimsonRoom *room;
-	gboolean is_end;
-	guint count_before;
+	gboolean is_end, is_batching;
+	/* Where the page starts among the room's held messages, and how many lines it added that show whatever the
+	 * setting for joins and leaves */
+	guint batch_start, shown;
 	/* The oldest line of the page, shown or not, where the next page starts */
 	gint64 oldest_time;
 	char *oldest_id;
@@ -525,7 +527,9 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 			load->room = ensure_room(network, is_irc_channel_name(get_network_state(network), target) ? ROOM_CHANNEL
 				: ROOM_PRIVATE, target);
 		load->is_end = has_irc_tag(message, "draft/chathistory-end");
-		load->count_before = load->room ? g_list_model_get_n_items(G_LIST_MODEL(load->room->messages)) : 0;
+		load->is_batching = load->room != NULL;
+		if (load->room)
+			load->batch_start = begin_room_batch(load->room);
 		g_hash_table_insert(work->history, g_strdup(reference + 1), load);
 	} else if (g_strcmp0(type, "netsplit") == 0 || g_strcmp0(type, "netjoin") == 0) {
 		/* Room names to how many people the split took or brought back, with the batch's kind under an empty
@@ -548,6 +552,8 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 
 void free_history_load(gpointer data) {
 	HistoryLoad *load = data;
+	if (load->is_batching)
+		end_room_batch(load->room, load->batch_start);
 	g_free(load->oldest_id);
 	g_free(load);
 }
@@ -566,8 +572,7 @@ static void note_oldest_line(HistoryLoad *load, const IrcMessage *message) {
 /* Asks for the page before this one when this page showed too little, returning whether it did */
 static gboolean continue_history(HistoryLoad *load) {
 	CrimsonRoom *room = load->room;
-	guint shown = g_list_model_get_n_items(G_LIST_MODEL(room->messages)) - load->count_before;
-	if (load->is_end || shown >= SHOWN_PER_PAGE || !load->oldest_time)
+	if (load->is_end || load->shown >= SHOWN_PER_PAGE || !load->oldest_time)
 		return FALSE;
 	g_autoptr(GDateTime) time = g_date_time_new_from_unix_utc_usec(load->oldest_time);
 	g_autofree char *moment = format_irc_time(time);
@@ -628,6 +633,10 @@ static void finish_batch(CrimsonNetwork *network, const IrcMessage *message, His
 		return;
 	}
 	HistoryLoad *load = g_hash_table_lookup(work->history, reference);
+	if (load && load->is_batching) {
+		load->is_batching = FALSE;
+		load->shown = end_room_batch(load->room, load->batch_start);
+	}
 	if (load && load->room && continue_history(load)) {
 		g_hash_table_remove(work->history, reference);
 		return;

@@ -10,6 +10,7 @@
 #include "sounds.h"
 #include "window.h"
 #include "pictures.h"
+#include "shown-messages.h"
 
 #define FADE_DURATION_MS 160
 #define ACTIVITY_SECONDS 120
@@ -17,9 +18,20 @@
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
-/* How many of a room's latest messages the list holds when the room opens, and how many more each time the top is
- * reached, so a room opens as fast with thousands of lines as with a hundred */
-#define SHOWN_MESSAGES_PAGE 100
+/* The list builds a row for each message it holds, so a room opens with enough of its latest messages to fill the
+ * chat, counting on rows at least this tall */
+#define SHORTEST_ROW_HEIGHT 32
+#define FILL_SPARE_ROWS 4
+/* A room being opened builds this many rows a frame, which keeps each frame short while it fills the chat */
+#define SETTLE_ROWS_PER_FRAME 6
+/* Each row added above the others makes the list go over all of them again, so older messages come in a screenful
+ * at a time once scrolling has paused this long within this many screens of the top */
+#define REVEAL_PAUSE_MS 150
+#define REVEAL_MARGIN_PAGES 2
+/* The server is asked for older messages once fewer than this wait hidden above */
+#define PREFETCH_HIDDEN 40
+/* How long a newly opened room without messages waits for its history before it fades in without them */
+#define HISTORY_WAIT_US (150 * 1000)
 #define CONTEXT_BEFORE_TARGET 10
 #define MEMBERS_WIDTH 260
 /* The member list lies over the chat instead of beside it when the chat would keep less than this, and the chat
@@ -49,15 +61,21 @@ struct Conversation {
 	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *list_view, *scroller;
 	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
 	GtkWidget *jump_button, *jump_icons, *jump_count;
-	/* A still image of the chat that is leaving, which slides away while the real view already holds the next */
-	GtkWidget *still;
+	/* A still image of the chat that is leaving, lying over the next one while it is built and then fading away */
+	GtkWidget *view, *still;
+	AdwAnimation *fade;
+	/* The opened room waits a frame to show the click, builds its rows under the still and then fades in */
+	guint settle_tick, reveal_source, read_source;
+	guint settle_frames;
+	gint64 opened_at;
+	gboolean is_settling, is_attached;
 	/* A narrow window slides whole pages itself, so the chat view does not slide on top of that */
 	gboolean is_narrow;
 	GtkWidget *member_view, *empty_note, *members_title;
 	GtkStringList *members;
 	GtkNoSelection *messages;
 	/* The room's latest messages, and those without the joins and leaves the setting hides, which are kept */
-	GtkSliceListModel *recent_messages;
+	CrimsonShownMessages *recent_messages;
 	GtkFilterListModel *shown_messages;
 	gboolean shows_events;
 	Composer *composer;
@@ -118,9 +136,20 @@ static void forget_frames(GtkWidget *list_view, Conversation *conversation) {
 }
 
 
-static void mark_read_when_seen(Conversation *conversation) {
-	if (conversation->room && conversation->is_pinned && is_room_in_view(conversation->window, conversation->room))
+static gboolean mark_read_now(gpointer data) {
+	Conversation *conversation = data;
+	conversation->read_source = 0;
+	if (conversation->room && conversation->is_pinned && !conversation->is_settling
+		&& is_room_in_view(conversation->window, conversation->room))
 		mark_room_read(conversation->room);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* Marking read tells the server and redraws the room's badge, so it waits until the frame is drawn */
+static void mark_read_when_seen(Conversation *conversation) {
+	if (!conversation->read_source)
+		conversation->read_source = g_idle_add(mark_read_now, conversation);
 }
 
 
@@ -132,6 +161,62 @@ static void pin_to_bottom(Conversation *conversation) {
 }
 
 
+/* The earliest shown row may lose its day line or start of a group to the messages coming in above it */
+static void reveal_before_shown(Conversation *conversation, guint position) {
+	g_autoptr(CrimsonMessage) first = g_list_model_get_item(G_LIST_MODEL(conversation->messages), 0);
+	reveal_messages_from(conversation->recent_messages, position);
+	if (first)
+		announce_message_change(first);
+}
+
+
+static gboolean is_near_top(Conversation *conversation) {
+	GtkAdjustment *scroll = get_scroll(conversation);
+	return gtk_adjustment_get_value(scroll) < gtk_adjustment_get_page_size(scroll) * REVEAL_MARGIN_PAGES;
+}
+
+
+/* Enough of the latest messages to fill the chat */
+static guint count_filling_messages(Conversation *conversation) {
+	int height = gtk_widget_get_height(conversation->scroller);
+	if (height <= 0)
+		height = gtk_widget_get_height(GTK_WIDGET(conversation->window->window));
+	return (guint)MAX(height, 0) / SHORTEST_ROW_HEIGHT + FILL_SPARE_ROWS;
+}
+
+
+static void reveal_when_near_top(Conversation *conversation);
+
+
+/* The server is asked for more before the messages in memory run out, and the next screenful follows another pause
+ * while the top is still near, since hidden joins and leaves may have filled this one */
+static gboolean reveal_after_pause(gpointer data) {
+	Conversation *conversation = data;
+	conversation->reveal_source = 0;
+	CrimsonShownMessages *shown = conversation->recent_messages;
+	if (conversation->settle_tick || conversation->is_settling || !conversation->room || !shown
+		|| !is_near_top(conversation))
+		return G_SOURCE_REMOVE;
+	guint hidden = count_hidden_messages(shown);
+	if (hidden < PREFETCH_HIDDEN)
+		load_older_history(conversation->room);
+	guint page = count_filling_messages(conversation);
+	if (hidden)
+		reveal_before_shown(conversation, hidden > page ? hidden - page : 0);
+	if (count_hidden_messages(shown))
+		reveal_when_near_top(conversation);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* Each movement starts the pause again, and the list growing above starts it for the next screenful */
+static void reveal_when_near_top(Conversation *conversation) {
+	g_clear_handle_id(&conversation->reveal_source, g_source_remove);
+	if (conversation->recent_messages && is_near_top(conversation))
+		conversation->reveal_source = g_timeout_add(REVEAL_PAUSE_MS, reveal_after_pause, conversation);
+}
+
+
 /* Rows measure themselves as they appear and move the view, so only the user's own scrolling unpins it */
 static void follow_scroll(GtkAdjustment *scroll, Conversation *conversation) {
 	if (conversation->has_user_scrolled) {
@@ -140,6 +225,7 @@ static void follow_scroll(GtkAdjustment *scroll, Conversation *conversation) {
 		gtk_widget_set_visible(conversation->jump_button, !conversation->is_pinned);
 	}
 	mark_read_when_seen(conversation);
+	reveal_when_near_top(conversation);
 }
 
 
@@ -150,21 +236,9 @@ static gboolean note_user_scroll(GtkEventControllerScroll *controller, double x,
 }
 
 
-/* Older messages already in memory come back a page at a time, and only past the oldest is the server asked */
-static void reveal_older_messages(Conversation *conversation) {
-	guint offset = gtk_slice_list_model_get_offset(conversation->recent_messages);
-	if (!offset) {
-		load_older_history(conversation->room);
-		return;
-	}
-	gtk_slice_list_model_set_offset(conversation->recent_messages, offset > SHOWN_MESSAGES_PAGE
-		? offset - SHOWN_MESSAGES_PAGE : 0);
-}
-
-
 static void reach_edge(GtkScrolledWindow *scroller, GtkPositionType position, Conversation *conversation) {
 	if (position == GTK_POS_TOP && conversation->room)
-		reveal_older_messages(conversation);
+		reveal_when_near_top(conversation);
 	else if (position == GTK_POS_BOTTOM && conversation->has_user_scrolled)
 		pin_to_bottom(conversation);
 }
@@ -304,10 +378,8 @@ static void show_message(const char *message_id, gpointer data) {
 	guint position = 0;
 	/* A message older than the ones held comes into the list first, with a few before it for context */
 	guint index = 0;
-	if (target && g_list_store_find(conversation->room->messages, target, &index)
-		&& index < gtk_slice_list_model_get_offset(conversation->recent_messages))
-		gtk_slice_list_model_set_offset(conversation->recent_messages, index > CONTEXT_BEFORE_TARGET
-			? index - CONTEXT_BEFORE_TARGET : 0);
+	if (target && conversation->recent_messages && g_list_store_find(conversation->room->messages, target, &index))
+		reveal_before_shown(conversation, index > CONTEXT_BEFORE_TARGET ? index - CONTEXT_BEFORE_TARGET : 0);
 	if (target && find_shown_position(conversation, target, &position)) {
 		conversation->is_pinned = FALSE;
 		conversation->has_user_scrolled = TRUE;
@@ -527,15 +599,14 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	g_signal_connect(factory, "unbind", G_CALLBACK(unbind_message), conversation);
 	conversation->shows_events = get_settings()->shows_events;
 	GtkCustomFilter *filter = gtk_custom_filter_new(is_message_shown, conversation, NULL);
-	/* The slice reaches to the end of the room as it grows, sized so its offset and size can never overflow */
-	conversation->recent_messages = gtk_slice_list_model_new(NULL, 0, G_MAXINT);
-	conversation->shown_messages = gtk_filter_list_model_new(G_LIST_MODEL(g_object_ref(conversation->recent_messages)),
-		GTK_FILTER(filter));
+	conversation->shown_messages = gtk_filter_list_model_new(NULL, GTK_FILTER(filter));
 	conversation->messages = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(conversation->shown_messages)));
 	conversation->list_view = gtk_list_view_new(GTK_SELECTION_MODEL(g_object_ref(conversation->messages)), factory);
 	gtk_widget_add_css_class(conversation->list_view, "messages");
 	conversation->scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(conversation->scroller), GTK_POLICY_NEVER,
+	/* Never stopping sideways scrolling keeps the window from measuring the width of each row's text whenever its
+	 * size is checked */
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(conversation->scroller), GTK_POLICY_EXTERNAL,
 		GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(conversation->scroller), conversation->list_view);
 	gtk_widget_set_vexpand(conversation->scroller, TRUE);
@@ -587,6 +658,7 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	g_signal_connect(overlay, "get-child-position", G_CALLBACK(position_overlay_child), conversation);
 	g_signal_connect_swapped(scroll, "value-changed", G_CALLBACK(replace_sticky_avatar), conversation);
 	g_signal_connect_swapped(scroll, "notify::upper", G_CALLBACK(replace_sticky_avatar), conversation);
+	g_signal_connect_swapped(scroll, "notify::upper", G_CALLBACK(reveal_when_near_top), conversation);
 	g_signal_connect_swapped(conversation->messages, "items-changed", G_CALLBACK(replace_sticky_avatar),
 		conversation);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->empty_note);
@@ -874,15 +946,22 @@ static gboolean fill_members(gpointer data) {
 	g_autofree char *title = ranked->len ? g_strdup_printf(ranked->len == 1 ? TEXT_MEMBERS_ONE : TEXT_MEMBERS_COUNT,
 		ranked->len) : g_strdup(TEXT_MEMBERS_TITLE);
 	adw_window_title_set_title(ADW_WINDOW_TITLE(conversation->members_title), title);
-	gtk_string_list_splice(conversation->members, 0, g_list_model_get_n_items(G_LIST_MODEL(conversation->members)),
-		(const char *const *)nicks->pdata);
+	/* Most room changes leave the members as they were, and filling the list again would draw all its rows again */
+	GListModel *members = G_LIST_MODEL(conversation->members);
+	guint count = g_list_model_get_n_items(members);
+	gboolean is_same = count == ranked->len;
+	for (guint index = 0; is_same && index < count; index++)
+		is_same = g_str_equal(gtk_string_list_get_string(conversation->members, index),
+			g_ptr_array_index(nicks, index));
+	if (!is_same)
+		gtk_string_list_splice(conversation->members, 0, count, (const char *const *)nicks->pdata);
 	return G_SOURCE_REMOVE;
 }
 
 
 static void refresh_members_later(Conversation *conversation) {
 	gboolean is_shown = adw_overlay_split_view_get_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split));
-	if (is_shown && !conversation->member_source)
+	if (is_shown && !conversation->member_source && !conversation->is_settling)
 		conversation->member_source = g_idle_add(fill_members, conversation);
 }
 
@@ -910,7 +989,7 @@ static GtkWidget *create_member_panel(Conversation *conversation) {
 	conversation->member_view = gtk_list_view_new(GTK_SELECTION_MODEL(selection), factory);
 	gtk_widget_add_css_class(conversation->member_view, "member-list");
 	GtkWidget *scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_EXTERNAL, GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), conversation->member_view);
 	gtk_widget_set_vexpand(scroller, TRUE);
 	gtk_box_append(GTK_BOX(panel), scroller);
@@ -1060,33 +1139,31 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 }
 
 
-/* Shows a still image of the open chat in its place, so the chat can change underneath while the image slides */
+/* Lays a still image of the chat over it, so the chat can change underneath while the image fades */
 static gboolean freeze_open_chat(Conversation *conversation) {
-	GtkWidget *page = gtk_stack_get_visible_child(GTK_STACK(conversation->stack));
-	if (conversation->is_narrow || page == conversation->still || gtk_widget_get_width(page) <= 0
-		|| !gtk_widget_get_mapped(page) || g_strcmp0(gtk_stack_get_visible_child_name(GTK_STACK(conversation->stack)),
-		"room") != 0)
+	GtkWidget *view = conversation->view;
+	if (conversation->is_narrow || gtk_widget_get_width(view) <= 0 || !gtk_widget_get_mapped(view))
 		return FALSE;
-	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(page);
+	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(view);
 	g_autoptr(GdkPaintable) image = gdk_paintable_get_current_image(live);
+	adw_animation_reset(conversation->fade);
 	gtk_picture_set_paintable(GTK_PICTURE(conversation->still), image);
-	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), GTK_STACK_TRANSITION_TYPE_NONE);
-	gtk_stack_set_visible_child(GTK_STACK(conversation->stack), conversation->still);
+	gtk_widget_set_opacity(conversation->still, 1);
+	gtk_widget_set_visible(conversation->still, TRUE);
 	return TRUE;
 }
 
 
-/* The wide window fades quickly from one chat to the next, while the narrow window's own page slide moves it */
-static void fade_to(Conversation *conversation, const char *name) {
-	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), conversation->is_narrow
-		? GTK_STACK_TRANSITION_TYPE_NONE : GTK_STACK_TRANSITION_TYPE_CROSSFADE);
-	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), name);
-}
+static void refresh_members_later(Conversation *conversation);
 
 
-static void forget_still(GtkStack *stack, GParamSpec *spec, Conversation *conversation) {
-	if (!gtk_stack_get_transition_running(stack))
-		gtk_picture_set_paintable(GTK_PICTURE(conversation->still), NULL);
+static void finish_fade(Conversation *conversation) {
+	gtk_widget_set_visible(conversation->still, FALSE);
+	gtk_picture_set_paintable(GTK_PICTURE(conversation->still), NULL);
+	conversation->is_settling = FALSE;
+	mark_read_when_seen(conversation);
+	refresh_members_later(conversation);
+	reveal_when_near_top(conversation);
 }
 
 
@@ -1114,17 +1191,23 @@ Conversation *create_conversation(Window *window) {
 	conversation->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");
+	conversation->view = gtk_overlay_new();
+	gtk_overlay_set_child(GTK_OVERLAY(conversation->view), conversation->stack);
 	conversation->still = gtk_picture_new();
 	gtk_picture_set_content_fit(GTK_PICTURE(conversation->still), GTK_CONTENT_FIT_FILL);
-	gtk_stack_add_named(GTK_STACK(conversation->stack), conversation->still, "still");
-	gtk_stack_set_transition_duration(GTK_STACK(conversation->stack), FADE_DURATION_MS);
-	g_signal_connect(conversation->stack, "notify::transition-running", G_CALLBACK(forget_still), conversation);
+	gtk_widget_set_can_target(conversation->still, FALSE);
+	gtk_widget_set_visible(conversation->still, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(conversation->view), conversation->still);
+	AdwAnimationTarget *target = adw_property_animation_target_new(G_OBJECT(conversation->still), "opacity");
+	conversation->fade = adw_timed_animation_new(conversation->still, 1, 0, FADE_DURATION_MS, target);
+	adw_timed_animation_set_easing(ADW_TIMED_ANIMATION(conversation->fade), ADW_EASE_OUT_CUBIC);
+	g_signal_connect_swapped(conversation->fade, "done", G_CALLBACK(finish_fade), conversation);
 	return conversation;
 }
 
 
 GtkWidget *get_conversation_widget(Conversation *conversation) {
-	return conversation->stack;
+	return conversation->view;
 }
 
 
@@ -1281,8 +1364,10 @@ static void follow_event_setting(Conversation *conversation) {
 	if (shows_events == conversation->shows_events)
 		return;
 	conversation->shows_events = shows_events;
+	GListModel *attached = gtk_filter_list_model_get_model(conversation->shown_messages);
+	g_autoptr(GListModel) kept = attached ? g_object_ref(attached) : NULL;
 	gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
-	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->recent_messages));
+	gtk_filter_list_model_set_model(conversation->shown_messages, kept);
 }
 
 
@@ -1297,6 +1382,7 @@ void refresh_conversation(Conversation *conversation) {
 	show_empty_note(conversation);
 	refresh_members_later(conversation);
 	mark_read_when_seen(conversation);
+	reveal_when_near_top(conversation);
 }
 
 
@@ -1339,17 +1425,83 @@ static void follow_room(CrimsonRoom *room, Conversation *conversation) {
 }
 
 
-/* A newly opened room counts as read once it has been on screen */
-static gboolean mark_read_once_shown(gpointer data) {
-	mark_read_when_seen(data);
+/* The list takes the room's first rows in one change, so it can reuse the rows of the last room */
+static void attach_room_messages(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	g_clear_object(&conversation->recent_messages);
+	if (room)
+		conversation->recent_messages = create_shown_messages(G_LIST_MODEL(room->messages), SETTLE_ROWS_PER_FRAME,
+			count_filling_messages(conversation));
+	gtk_filter_list_model_set_model(conversation->shown_messages, G_LIST_MODEL(conversation->recent_messages));
+	conversation->is_attached = TRUE;
+	show_empty_note(conversation);
+	pin_to_bottom(conversation);
+}
+
+
+/* Hidden joins and leaves take no room, so the chat is filled by what it shows, which the list has measured by the
+ * next frame */
+static gboolean is_chat_unfilled(Conversation *conversation) {
+	GtkAdjustment *scroll = get_scroll(conversation);
+	double page = gtk_adjustment_get_page_size(scroll);
+	if (page <= 0)
+		return g_list_model_get_n_items(G_LIST_MODEL(conversation->messages)) < count_filling_messages(conversation);
+	return gtk_adjustment_get_upper(scroll) < page;
+}
+
+
+static gboolean is_waiting_for_history(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	return room && room->is_loading_history && !g_list_model_get_n_items(G_LIST_MODEL(room->messages))
+		&& g_get_monotonic_time() - conversation->opened_at < HISTORY_WAIT_US;
+}
+
+
+/* The first frame after a click only shows the click. Then the room's rows are built a few a frame under the still,
+ * after a moment's wait for the history of a room without messages, and the still fades once the chat is full */
+static gboolean settle_room(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+	Conversation *conversation = data;
+	if (conversation->is_settling && ++conversation->settle_frames == 1)
+		return G_SOURCE_CONTINUE;
+	if (!conversation->is_attached) {
+		if (!is_waiting_for_history(conversation))
+			attach_room_messages(conversation);
+		return G_SOURCE_CONTINUE;
+	}
+	CrimsonShownMessages *shown = conversation->recent_messages;
+	guint hidden = shown ? count_hidden_messages(shown) : 0;
+	if (hidden && is_chat_unfilled(conversation)) {
+		reveal_before_shown(conversation, hidden > SETTLE_ROWS_PER_FRAME ? hidden - SETTLE_ROWS_PER_FRAME : 0);
+		return G_SOURCE_CONTINUE;
+	}
+	conversation->settle_tick = 0;
+	if (conversation->is_settling)
+		adw_animation_play(conversation->fade);
+	else
+		reveal_when_near_top(conversation);
 	return G_SOURCE_REMOVE;
+}
+
+
+static void stop_settling(Conversation *conversation) {
+	if (conversation->settle_tick)
+		gtk_widget_remove_tick_callback(conversation->view, conversation->settle_tick);
+	conversation->settle_tick = 0;
+	conversation->settle_frames = 0;
+	conversation->is_attached = FALSE;
 }
 
 
 void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	if (conversation->room == room)
 		return;
-	freeze_open_chat(conversation);
+	gboolean is_frozen = freeze_open_chat(conversation);
+	stop_settling(conversation);
+	/* Without a still over it the last room's messages would show under the next one's name */
+	if (!is_frozen)
+		gtk_filter_list_model_set_model(conversation->shown_messages, NULL);
+	conversation->is_settling = is_frozen;
+	conversation->opened_at = g_get_monotonic_time();
 	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
@@ -1364,26 +1516,20 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	conversation->was_unread = room && room->unread_count > 0;
 	conversation->has_read_line = conversation->was_unread;
 	conversation->read_line = conversation->was_unread ? room->read_time : 0;
-	guint count = room ? g_list_model_get_n_items(G_LIST_MODEL(room->messages)) : 0;
-	gtk_slice_list_model_set_model(conversation->recent_messages, NULL);
-	gtk_slice_list_model_set_offset(conversation->recent_messages, count > SHOWN_MESSAGES_PAGE
-		? count - SHOWN_MESSAGES_PAGE : 0);
-	gtk_slice_list_model_set_model(conversation->recent_messages, room ? G_LIST_MODEL(room->messages) : NULL);
-	fade_to(conversation, room ? "room" : "empty");
+	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
 	follow_activity(conversation, previous);
+	/* History is asked for first, so a room still loading does not show itself as empty for a moment */
+	if (room && !room->has_history)
+		request_latest_history(room);
+	conversation->settle_tick = gtk_widget_add_tick_callback(conversation->view, settle_room, conversation, NULL);
 	if (!room)
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);
 	fill_header(conversation);
 	follow_connection(conversation);
-	/* History is asked for first, so a room still loading does not show itself as empty for a moment */
-	if (!room->has_history)
-		request_latest_history(room);
-	show_empty_note(conversation);
 	place_member_panel(conversation);
 	refresh_members_later(conversation);
-	pin_to_bottom(conversation);
-	run_after_frame(conversation->list_view, mark_read_once_shown, conversation);
+	mark_read_when_seen(conversation);
 }
 
 

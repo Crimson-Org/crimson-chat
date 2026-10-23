@@ -13,6 +13,8 @@
 #define BURST_LINES 5.0
 #define LINES_PER_SECOND 1.0
 #define CLOSE_DEADLINE_SECONDS 5
+/* Each chunk read is handled after any waiting redraw, so a steady stream of lines never holds up a window */
+#define READ_PRIORITY (G_PRIORITY_HIGH_IDLE + 30)
 
 struct IrcStream {
 	gint references;
@@ -137,7 +139,7 @@ static void read_more(IrcStream *stream) {
 	if (stream->is_closing || stream->has_failed)
 		return;
 	g_input_stream_read_async(g_io_stream_get_input_stream(stream->connection), stream->chunk, sizeof stream->chunk,
-		G_PRIORITY_DEFAULT, stream->reading, finish_reading, hold_stream(stream));
+		READ_PRIORITY, stream->reading, finish_reading, hold_stream(stream));
 }
 
 

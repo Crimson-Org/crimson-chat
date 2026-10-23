@@ -1,3 +1,4 @@
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <libsoup/soup.h>
 #include <string.h>
 
@@ -6,6 +7,9 @@
 #define LARGEST_IMAGE_BYTES (10 * 1024 * 1024)
 #define SIZE_PLACEHOLDER "{size}"
 #define TIMEOUT_SECONDS 20
+/* No picture shows larger than this on a sharp screen, so a bigger one is scaled down while it is decoded instead
+ * of handed at full size to the window to upload while it draws */
+#define LARGEST_SHOWN_PIXELS 640
 /* Some picture hosts refuse requests that do not name the program asking */
 #define USER_AGENT "CrimsonChat/" APPLICATION_VERSION
 
@@ -56,10 +60,40 @@ static void hand_out_texture(const char *url, GdkTexture *texture) {
 }
 
 
-/* Decoding a large picture takes long enough to hold up drawing, so it happens on a worker thread */
+static void fit_picture(GdkPixbufLoader *loader, int width, int height, gpointer data) {
+	double scale = (double)LARGEST_SHOWN_PIXELS / MAX(width, height);
+	if (scale < 1)
+		gdk_pixbuf_loader_set_size(loader, MAX(1, (int)(width * scale)), MAX(1, (int)(height * scale)));
+}
+
+
+static GdkTexture *decode_fitted_picture(GBytes *bytes) {
+	g_autoptr(GdkPixbufLoader) loader = gdk_pixbuf_loader_new();
+	g_signal_connect(loader, "size-prepared", G_CALLBACK(fit_picture), NULL);
+	gboolean is_written = gdk_pixbuf_loader_write_bytes(loader, bytes, NULL);
+	if (!gdk_pixbuf_loader_close(loader, NULL) || !is_written)
+		return NULL;
+	GdkPixbuf *pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+	if (!pixbuf)
+		return NULL;
+	g_autoptr(GBytes) pixels = gdk_pixbuf_read_pixel_bytes(pixbuf);
+	return gdk_memory_texture_new(gdk_pixbuf_get_width(pixbuf), gdk_pixbuf_get_height(pixbuf),
+		gdk_pixbuf_get_has_alpha(pixbuf) ? GDK_MEMORY_R8G8B8A8 : GDK_MEMORY_R8G8B8, pixels,
+		(gsize)gdk_pixbuf_get_rowstride(pixbuf));
+}
+
+
+/* Decoding a large picture takes long enough to hold up drawing, so it happens on a worker thread, and a format the
+ * picture loaders lack is still read at full size by the toolkit */
+static GdkTexture *decode_picture(GBytes *bytes, GError **error) {
+	GdkTexture *texture = decode_fitted_picture(bytes);
+	return texture ? texture : gdk_texture_new_from_bytes(bytes, error);
+}
+
+
 static void decode_texture(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
 	GError *error = NULL;
-	GdkTexture *texture = gdk_texture_new_from_bytes(data, &error);
+	GdkTexture *texture = decode_picture(data, &error);
 	if (texture)
 		g_task_return_pointer(task, texture, g_object_unref);
 	else
@@ -78,7 +112,7 @@ static void read_own_picture(GTask *task, gpointer source, gpointer data, GCance
 		return;
 	}
 	g_autoptr(GBytes) bytes = g_bytes_new_take(contents, length);
-	GdkTexture *texture = gdk_texture_new_from_bytes(bytes, &error);
+	GdkTexture *texture = decode_picture(bytes, &error);
 	if (texture)
 		g_task_return_pointer(task, texture, g_object_unref);
 	else

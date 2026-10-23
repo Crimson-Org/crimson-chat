@@ -14,3 +14,5 @@ void save_sidebar_width(int width);
 void save_registration_dismissed(const char *network_key);
 gboolean is_registration_dismissed(const char *network_key);
 int load_sidebar_width(int fallback);
+/* Writes what is still waiting to be saved before the program ends */
+void finish_saving_state(void);
