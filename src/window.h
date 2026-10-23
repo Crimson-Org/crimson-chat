@@ -24,7 +24,7 @@ struct Window {
 	char *lost_name, *lost_message;
 	/* The server whose connection the corner is about, so switching servers does not count as reconnecting */
 	CrimsonNetwork *lost_network;
-	gboolean is_problem, is_login_problem;
+	gboolean is_problem;
 	AdwNavigationSplitView *split;
 	GtkWidget *rail, *rail_list;
 	RoomList *room_list;
@@ -44,6 +44,9 @@ void open_room(Window *window, CrimsonRoom *room);
 CrimsonRoom *get_open_room(Window *window);
 /* Closes the open chat, deselects it and leaves the middle empty */
 void close_open_room(Window *window);
+/* What a server that is not connected waits for, as the rail, the list and the send button say it, or NULL when it
+ * is connected */
+char *describe_connection_wait(CrimsonNetwork *network);
 void choose_network(Window *window, CrimsonNetwork *network);
 /* Everything about one server, and the other servers to switch to when there is no rail to show them */
 GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network);

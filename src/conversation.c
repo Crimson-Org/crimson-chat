@@ -788,10 +788,8 @@ static void fill_header(Conversation *conversation) {
 
 static void follow_connection(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
-	Session *session = room ? room->network->session : NULL;
-	gboolean is_down = room && room->kind != ROOM_SERVER && (room->network->state != NETWORK_CONNECTED
-		|| (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED));
-	set_composer_waiting(conversation->composer, is_down);
+	g_autofree char *wait = room && room->kind != ROOM_SERVER ? describe_connection_wait(room->network) : NULL;
+	set_composer_waiting(conversation->composer, wait);
 }
 
 

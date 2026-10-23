@@ -428,6 +428,10 @@ headerbar.top-bar menubutton > button {
 	min-height: 44px;
 }
 
+.emoji-button image {
+	-gtk-icon-size: 22px;
+}
+
 .send-button {
 	min-width: 44px;
 	min-height: 44px;

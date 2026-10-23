@@ -349,7 +349,9 @@ void mention_in_composer(Composer *composer, const char *nick) {
 }
 
 
-void set_composer_waiting(Composer *composer, gboolean is_waiting) {
+void set_composer_waiting(Composer *composer, const char *message) {
+	gboolean is_waiting = message != NULL;
+	gtk_widget_set_tooltip_text(composer->send_button, message ? message : TEXT_SEND);
 	if (composer->is_waiting == is_waiting)
 		return;
 	composer->is_waiting = is_waiting;

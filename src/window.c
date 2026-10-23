@@ -117,6 +117,19 @@ static gboolean needs_user(const char *error) {
 }
 
 
+char *describe_connection_wait(CrimsonNetwork *network) {
+	Session *session = network->session;
+	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED)
+		return g_strdup_printf(TEXT_RECONNECTING_TO, describe_account_name(session));
+	if (network->state == NETWORK_CONNECTED)
+		return NULL;
+	if (needs_user(network->error))
+		return g_strdup_printf(TEXT_LOGIN_FAILED_ON, network->name, network->error);
+	return g_strdup_printf(network->state == NETWORK_CONNECTING && !session->has_connected
+		? TEXT_CONNECTING_TO_ELLIPSIS : TEXT_RECONNECTING_TO, network->name);
+}
+
+
 static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	AdwAvatar *avatar = g_object_get_data(G_OBJECT(row), "avatar");
 	GtkWidget *badge = g_object_get_data(G_OBJECT(row), "badge");
@@ -134,10 +147,8 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	gtk_widget_set_visible(state, network->state != NETWORK_CONNECTED);
 	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
 	/* A connected server only names itself, and one that is not says what the corner of the list says about it */
-	const char *state_text = network->state == NETWORK_CONNECTING ? TEXT_CONNECTING
-		: needs_user(network->error) ? network->error : TEXT_RECONNECTING;
-	g_autofree char *tooltip = network->state == NETWORK_CONNECTED ? g_strdup(network->name)
-		: g_strdup_printf("%s\n%s", network->name, state_text);
+	g_autofree char *wait = describe_connection_wait(network);
+	g_autofree char *tooltip = wait ? g_strdup(wait) : g_strdup(network->name);
 	gtk_widget_set_tooltip_text(row, tooltip);
 }
 
@@ -243,7 +254,6 @@ static void read_connection_problem(Window *window) {
 	gboolean is_stopped = network && network->state == NETWORK_DISCONNECTED
 		&& !(network->session->record->is_bouncer && read_account_state(network->session) != NETWORK_CONNECTED);
 	window->is_problem = is_stopped && needs_user(network->error);
-	window->is_login_problem = window->is_problem && !strstr(network->error, "ertificate");
 }
 
 
@@ -285,9 +295,7 @@ static void refresh_connection(Window *window) {
 	}
 	read_connection_problem(window);
 	g_free(window->lost_message);
-	window->lost_message = window->is_problem ? g_strdup_printf(window->is_login_problem ? TEXT_LOGIN_FAILED_ON
-		: TEXT_PROBLEM_ON, lost, window->network->error) : g_strdup_printf(was_connected ? TEXT_RECONNECTING_TO
-		: TEXT_CONNECTING_TO_ELLIPSIS, lost);
+	window->lost_message = describe_connection_wait(window->network);
 	g_free(window->lost_name);
 	window->lost_name = was_connected ? g_strdup(lost) : NULL;
 	/* A problem shows at once, since nothing is coming to fix it, and so does a server that was already down when
