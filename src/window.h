@@ -122,7 +122,8 @@ CrimsonRoom *step_listed_room(RoomList *list, int step);
 /* Conversation */
 Conversation *create_conversation(Window *window);
 GtkWidget *get_conversation_widget(Conversation *conversation);
-void show_conversation_room(Conversation *conversation, CrimsonRoom *room);
+/* Going back slides the chat in from the left, the way a narrow window returns to the list */
+void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gboolean is_going_back);
 /* Builds the chats of the server's rooms with the latest activity in quiet moments, so they show at once */
 void build_rooms_ahead(Conversation *conversation, CrimsonNetwork *network);
 CrimsonRoom *get_conversation_room(Conversation *conversation);

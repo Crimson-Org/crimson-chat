@@ -1592,7 +1592,7 @@ static void freeze_shown_page(Conversation *conversation) {
 }
 
 
-void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
+void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gboolean is_going_back) {
 	if (conversation->room == room)
 		return;
 	/* A narrow window already showing a chat has no page slide to move the next one in, so it slides here */
@@ -1613,8 +1613,9 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 	adw_animation_reset(conversation->typing_animation);
 	conversation->typing_rise = 0;
 	conversation->shows_typing_faces = FALSE;
-	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), slides_page ? GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT
-		: GTK_STACK_TRANSITION_TYPE_NONE);
+	GtkStackTransitionType slide = is_going_back ? GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT
+		: GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT;
+	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), slides_page ? slide : GTK_STACK_TRANSITION_TYPE_NONE);
 	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
 	follow_activity(conversation, previous);
 	conversation->view = NULL;

@@ -583,7 +583,7 @@ static void finish_removal(AdwAlertDialog *alert, const char *response, gpointer
 void forget_network_in_window(Window *window, CrimsonNetwork *network) {
 	CrimsonRoom *open = get_open_room(window);
 	if (open && open->network == network)
-		show_conversation_room(window->conversation, NULL);
+		show_conversation_room(window->conversation, NULL, FALSE);
 	if (window->network == network)
 		choose_network(window, NULL);
 }

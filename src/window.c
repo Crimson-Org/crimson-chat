@@ -679,11 +679,11 @@ gboolean is_room_in_view(Window *window, CrimsonRoom *room) {
 }
 
 
-static void show_room(Window *window, CrimsonRoom *room) {
+static void show_room(Window *window, CrimsonRoom *room, gboolean is_going_back) {
 	if (room->network != window->network)
 		choose_network(window, room->network);
 	select_listed_room(window->room_list, room);
-	show_conversation_room(window->conversation, room);
+	show_conversation_room(window->conversation, room, is_going_back);
 	adw_navigation_split_view_set_show_content(window->split, TRUE);
 	save_window_choice(room->network->key, room);
 	focus_composer(window->conversation);
@@ -700,7 +700,7 @@ void open_room(Window *window, CrimsonRoom *room) {
 			g_ptr_array_remove_index(window->room_history, 0);
 		g_ptr_array_add(window->room_history, g_object_ref(open));
 	}
-	show_room(window, room);
+	show_room(window, room, FALSE);
 }
 
 
@@ -1041,7 +1041,7 @@ static void remove_network_action(GSimpleAction *action, GVariant *parameter, gp
 
 static void leave_room_now(Window *window, CrimsonRoom *room) {
 	if (get_open_room(window) == room) {
-		show_conversation_room(window->conversation, NULL);
+		show_conversation_room(window->conversation, NULL, FALSE);
 		adw_navigation_split_view_set_show_content(window->split, FALSE);
 	}
 	leave_room(room);
@@ -1184,7 +1184,7 @@ static void go_back(Window *window) {
 	while (window->room_history->len > 0) {
 		g_autoptr(CrimsonRoom) room = g_ptr_array_steal_index(window->room_history, window->room_history->len - 1);
 		if (room != get_open_room(window) && is_room_kept(window, room)) {
-			show_room(window, room);
+			show_room(window, room, TRUE);
 			return;
 		}
 	}
@@ -1192,13 +1192,34 @@ static void go_back(Window *window) {
 }
 
 
+/* The press is claimed so a narrow window's page view does not also go back to the list */
 static void press_back_button(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 	go_back(window);
 }
 
 
 static void go_back_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	go_back(data);
+}
+
+
+/* Back to the list starts over, so a chat opened from there goes back to the list again */
+static void follow_shown_content(AdwNavigationSplitView *split, GParamSpec *spec, Window *window) {
+	if (!adw_navigation_split_view_get_show_content(split))
+		g_ptr_array_set_size(window->room_history, 0);
+}
+
+
+/* A narrow window's back button asks the page view to go back, so the chat answers that request itself */
+static void take_over_back_button(Window *window) {
+	static const GActionEntry ENTRIES[] = {
+		{"pop", go_back_action, NULL, NULL, NULL, {0}},
+	};
+	GSimpleActionGroup *group = g_simple_action_group_new();
+	g_action_map_add_action_entries(G_ACTION_MAP(group), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
+	gtk_widget_insert_action_group(get_conversation_widget(window->conversation), "navigation", G_ACTION_GROUP(group));
+	g_object_unref(group);
 }
 
 
@@ -1253,7 +1274,7 @@ static GtkWidget *create_sidebar(Window *window) {
 
 
 void close_open_room(Window *window) {
-	show_conversation_room(window->conversation, NULL);
+	show_conversation_room(window->conversation, NULL, FALSE);
 	select_listed_room(window->room_list, NULL);
 	adw_navigation_split_view_set_show_content(window->split, FALSE);
 	save_window_choice(window->network ? window->network->key : NULL, NULL);
@@ -1379,6 +1400,8 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	g_signal_connect(back, "pressed", G_CALLBACK(press_back_button), window);
 	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
 	add_window_actions(window);
+	take_over_back_button(window);
+	g_signal_connect(window->split, "notify::show-content", G_CALLBACK(follow_shown_content), window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
 	static const TrayEntry TRAY_ENTRIES[] = {
 		{TEXT_SHOW_WINDOW, "app.show"},
