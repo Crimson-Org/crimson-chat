@@ -55,6 +55,7 @@ void close_database(Database *database);
 GPtrArray *load_users(Database *database);
 gint64 add_user(Database *database, const char *name, const char *password_hash, gboolean is_admin);
 gboolean change_user_password(Database *database, const char *name, const char *password_hash);
+gboolean make_user_admin(Database *database, const char *name);
 void free_user_record(UserRecord *record);
 
 void add_invite(Database *database, const char *token, int uses, gint64 created_by);

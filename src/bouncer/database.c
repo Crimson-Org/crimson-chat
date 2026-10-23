@@ -138,6 +138,14 @@ gboolean change_user_password(Database *database, const char *name, const char *
 }
 
 
+gboolean make_user_admin(Database *database, const char *name) {
+	sqlite3_stmt *statement = prepare(database, "UPDATE users SET is_admin = 1 WHERE name = ?");
+	bind_text(statement, 1, name);
+	finish_change(database, statement);
+	return sqlite3_changes(database->connection) > 0;
+}
+
+
 void free_invite_record(InviteRecord *record) {
 	g_free(record->token);
 	g_free(record->created);
