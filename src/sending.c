@@ -2,7 +2,7 @@
 
 #include "../lang/en.h"
 #include "formatting.h"
-#include "session.h"
+#include "questions.h"
 #include "settings.h"
 
 /* Room for the sender's own nick, user and host, which the server adds when it passes a line on */
@@ -166,6 +166,7 @@ static void message_someone(CrimsonNetwork *network, const char *rest, const cha
 	g_autofree char *target = take_argument(&rest);
 	if (!*target)
 		return;
+	note_user_target(network, target);
 	IrcState *state = get_network_state(network);
 	/* Talking to a service happens in the server's messages, where its answers arrive */
 	gboolean is_service = is_service_nick(target);
@@ -174,8 +175,6 @@ static void message_someone(CrimsonNetwork *network, const char *rest, const cha
 	if (!room) {
 		g_autofree char *line = g_strdup_printf("%s %s :%s", command, target, rest);
 		send_raw(network, line);
-		if (is_service)
-			network->session->chat->events.room_opened(network->server_room, network->session->chat->data);
 		return;
 	}
 	if (*rest)
@@ -205,7 +204,6 @@ static gboolean run_room_command(CrimsonRoom *room, const char *name, const char
 		note_user_target(network, rest);
 		send_irc_client_command(network->client, "INVITE", rest, room->name, NULL);
 	} else if (g_str_equal(name, "whois")) {
-		get_network_work(network)->whois_room = room;
 		note_user_target(network, rest);
 		send_irc_client_command(network->client, "WHOIS", rest, NULL);
 	} else {
@@ -290,15 +288,7 @@ static char *describe_reply_excerpt(CrimsonMessage *message) {
 }
 
 
-void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to) {
-	if (!room->network->client || !*text)
-		return;
-	if (text[0] == '/' && text[1] != '/') {
-		g_autofree char *command = g_strdup(text + 1);
-		g_strchomp(command);
-		run_command(room, command);
-		return;
-	}
+static void send_typed_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to) {
 	/* Markdown emphasis goes out as IRC formatting, which every client shows */
 	const char *typed = text[0] == '/' ? text + 1 : text;
 	g_autofree char *emphasised = room->kind == ROOM_SERVER ? g_strdup(typed) : convert_markdown(typed);
@@ -314,6 +304,23 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 		send_raw(room->network, body);
 	else
 		send_text_as(room, "PRIVMSG", body, FALSE, reply_to);
+}
+
+
+void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to) {
+	CrimsonNetwork *network = room->network;
+	if (!network->client || !*text)
+		return;
+	gboolean is_command = text[0] == '/' && text[1] != '/';
+	/* Commands and lines typed to the server wait for every reply, while a message only learns where it could not go */
+	start_question(network, room, is_command || room->kind == ROOM_SERVER);
+	if (is_command) {
+		g_autofree char *command = g_strdup(text + 1);
+		g_strchomp(command);
+		run_command(room, command);
+	} else
+		send_typed_text(room, text, reply_to);
+	finish_question(network);
 }
 
 
@@ -336,7 +343,9 @@ void send_reaction(CrimsonRoom *room, CrimsonMessage *message, const char *react
 void redact_message(CrimsonRoom *room, CrimsonMessage *message) {
 	if (!message->id || !can_network(room->network, "draft/message-redaction"))
 		return;
+	start_question(room->network, NULL, TRUE);
 	send_irc_client_command(room->network->client, "REDACT", room->name, message->id, NULL);
+	finish_question(room->network);
 }
 
 
@@ -396,8 +405,10 @@ void join_channel(CrimsonNetwork *network, const char *name, const char *key) {
 	NetworkWork *work = get_network_work(network);
 	g_free(work->opening_room);
 	work->opening_room = g_strdup(channel);
+	start_question(network, NULL, TRUE);
 	note_user_target(network, channel);
 	send_irc_client_command(network->client, "JOIN", channel, key, NULL);
+	finish_question(network);
 }
 
 

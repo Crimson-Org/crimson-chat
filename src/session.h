@@ -11,7 +11,8 @@ typedef struct Chat Chat;
 typedef struct {
 	void (*notify)(CrimsonRoom *room, CrimsonMessage *message, gpointer data);
 	void (*certificate_refused)(Session *session, const char *hash, gpointer data);
-	void (*show_problem)(const char *text, gpointer data);
+	/* A short line for the user, such as a problem or the server's answer to something they sent */
+	void (*show_message)(const char *text, gpointer data);
 	/* A room the user asked for, such as a channel just joined or a private chat just opened */
 	void (*room_opened)(CrimsonRoom *room, gpointer data);
 	/* A bouncer created an invite, with its token, its uses or * for unlimited, and its website's port */
@@ -86,6 +87,19 @@ typedef enum {
 /* Hears how a registration went, with the server's own words, possibly several times as its replies arrive */
 typedef void (*RegistrationReply)(RegistrationResult result, const char *message, gpointer data);
 
+/* Something the user sent, whose replies from the server are theirs to hear */
+typedef struct {
+	/* The label the server repeats on its replies, or the PING token sent around them where it has no labels */
+	char *label;
+	/* The folded person or room it was about, or NULL */
+	char *target;
+	/* The monotonic moment after which replies are no longer its answers */
+	gint64 until;
+	/* PONGs seen for its token, the first opening its replies and the second closing them */
+	guint pongs;
+	gboolean is_answered, was_typed_in_server, has_shown_answer;
+} Question;
+
 /* Work in progress on a network, kept per connection */
 typedef struct {
 	/* Batch references to the history loads and multiline messages being collected */
@@ -94,7 +108,12 @@ typedef struct {
 	GHashTable *splits;
 	/* Pending own messages by label, waiting for their echo */
 	GHashTable *pending;
-	CrimsonRoom *whois_room;
+	/* What the user sent that may still get replies, oldest first, the one being sent now and how deeply its
+	 * sending nests, and labeled reply batches to the labels they answer */
+	GPtrArray *questions;
+	Question *asking;
+	guint asking_depth;
+	GHashTable *answer_batches;
 	/* A channel the user asked to join, opened once the server confirms it */
 	char *opening_room;
 	guint typing_source;
@@ -121,9 +140,6 @@ typedef struct {
 	gpointer registration_data;
 	char *registering_account, *registering_password, *code_command;
 	gboolean is_nickserv_registration;
-	/* Who the user last sent something to and when, since only a refusal of that is the user's to hear about */
-	char *user_target;
-	gint64 user_target_time;
 	/* People and rooms the server said it cannot reach, by folded name, to the moment requests the app makes on its
 	 * own may try them again */
 	GHashTable *refused_targets;
@@ -149,10 +165,12 @@ void save_chat_accounts(Chat *chat);
 /* Saves the room list soon, so many changes in a row write the file once */
 void save_chat_cache_later(Chat *chat);
 NetworkWork *get_network_work(CrimsonNetwork *network);
-/* Remembers what the user just sent something to */
-void note_user_target(CrimsonNetwork *network, const char *target);
-/* Notes that the server cannot reach a person or room, and says whether the user had just sent them something */
-gboolean refuse_target(CrimsonNetwork *network, const char *target);
+/* A person or room name as the network compares them */
+char *fold_network_name(CrimsonNetwork *network, const char *name);
+/* Notes that the server cannot reach a person or room */
+void refuse_target(CrimsonNetwork *network, const char *target);
+/* Lets requests the app makes on its own try a person or room again */
+void forgive_target(CrimsonNetwork *network, const char *target);
 /* Whether requests the app makes on its own, such as typing notices, should leave a target alone for now */
 gboolean is_target_refused(CrimsonNetwork *network, const char *target);
 /* The one bouncer the user is connected to, if any */

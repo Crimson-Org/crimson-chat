@@ -28,6 +28,8 @@ struct IrcClient {
 	guint reconnect_source, retry_seconds, pending_requests;
 	char *trying_nick;
 	GHashTable *batches;
+	/* The label every line sent gets until it is cleared, so the server's replies to them can be told apart */
+	char *label;
 };
 
 static void start_connecting(IrcClient *client);
@@ -133,6 +135,7 @@ void free_irc_client(IrcClient *client) {
 	free_irc_state(client->state);
 	g_free(client->refused_certificate);
 	g_free(client->trying_nick);
+	g_free(client->label);
 	g_hash_table_unref(client->batches);
 	g_free(client);
 }
@@ -553,8 +556,22 @@ void change_irc_client_settings(IrcClient *client, const IrcClientSettings *sett
 
 
 void send_irc_client_message(IrcClient *client, const IrcMessage *message) {
-	if (client->stream)
+	if (!client->stream)
+		return;
+	/* Lines inside a batch go without, since the batch's opening line has the label for all of them */
+	if (!client->label || has_irc_tag(message, "label") || has_irc_tag(message, "batch")) {
 		send_irc_message(client->stream, message);
+		return;
+	}
+	g_autoptr(IrcMessage) labeled = copy_irc_message(message);
+	set_irc_tag(labeled, "label", client->label);
+	send_irc_message(client->stream, labeled);
+}
+
+
+void label_irc_client_lines(IrcClient *client, const char *label) {
+	g_free(client->label);
+	client->label = g_strdup(label);
 }
 
 

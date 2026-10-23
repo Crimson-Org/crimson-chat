@@ -2,14 +2,13 @@
 
 #include "../lang/en.h"
 #include "formatting.h"
-#include "session.h"
+#include "questions.h"
 
 #define CACHE_DELAY_SECONDS 2
 #define WORK_KEY "work"
 /* How long what the server said about a person or room is trusted before the app asks again, both that it cannot
- * reach them and what their profile holds, and how recent a message the user sent must be for a refusal to answer it */
+ * reach them and what their profile holds */
 #define ANSWER_KEEP_SECONDS 120
-#define USER_TARGET_SECONDS 30
 #define NICKSERV "NickServ"
 /* The bouncer's word on whether it reconnects a network by itself */
 #define RETRY_ATTRIBUTE "crimson-chat/retrying"
@@ -88,7 +87,8 @@ static void free_network_work(NetworkWork *work) {
 	g_hash_table_unref(work->splits);
 	g_hash_table_unref(work->refused_targets);
 	g_hash_table_unref(work->profiles);
-	g_free(work->user_target);
+	g_ptr_array_unref(work->questions);
+	g_hash_table_unref(work->answer_batches);
 	g_free(work->opening_room);
 	g_clear_handle_id(&work->typing_source, g_source_remove);
 	if (work->registration_reply)
@@ -111,42 +111,36 @@ NetworkWork *get_network_work(CrimsonNetwork *network) {
 	work->splits = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_hash_table_unref);
 	work->refused_targets = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	work->profiles = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)free_kept_profile);
+	work->questions = g_ptr_array_new_with_free_func(free_question);
+	work->answer_batches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	g_object_set_data_full(G_OBJECT(network), WORK_KEY, work, (GDestroyNotify)free_network_work);
 	return work;
 }
 
 
-static char *fold_target(CrimsonNetwork *network, const char *target) {
+char *fold_network_name(CrimsonNetwork *network, const char *name) {
 	IrcState *state = get_network_state(network);
-	return state ? fold_state_name(state, target) : g_ascii_strdown(target, -1);
+	return state ? fold_state_name(state, name) : g_ascii_strdown(name, -1);
 }
 
 
-void note_user_target(CrimsonNetwork *network, const char *target) {
+void refuse_target(CrimsonNetwork *network, const char *target) {
 	NetworkWork *work = get_network_work(network);
-	g_free(work->user_target);
-	work->user_target = fold_target(network, target);
-	work->user_target_time = g_get_monotonic_time();
-	/* Sending them something is the user trying again, so the app may too */
-	g_hash_table_remove(work->refused_targets, work->user_target);
+	gint64 until = g_get_monotonic_time() + ANSWER_KEEP_SECONDS * G_USEC_PER_SEC;
+	g_hash_table_replace(work->refused_targets, fold_network_name(network, target), GSIZE_TO_POINTER((gsize)until));
 }
 
 
-gboolean refuse_target(CrimsonNetwork *network, const char *target) {
+void forgive_target(CrimsonNetwork *network, const char *target) {
 	NetworkWork *work = get_network_work(network);
-	char *folded = fold_target(network, target);
-	gint64 now = g_get_monotonic_time();
-	gboolean is_users = g_strcmp0(folded, work->user_target) == 0
-		&& now - work->user_target_time < USER_TARGET_SECONDS * G_USEC_PER_SEC;
-	gint64 until = now + ANSWER_KEEP_SECONDS * G_USEC_PER_SEC;
-	g_hash_table_replace(work->refused_targets, folded, GSIZE_TO_POINTER((gsize)until));
-	return is_users;
+	g_autofree char *folded = fold_network_name(network, target);
+	g_hash_table_remove(work->refused_targets, folded);
 }
 
 
 gboolean is_target_refused(CrimsonNetwork *network, const char *target) {
 	NetworkWork *work = get_network_work(network);
-	g_autofree char *folded = fold_target(network, target);
+	g_autofree char *folded = fold_network_name(network, target);
 	gint64 until = GPOINTER_TO_SIZE(g_hash_table_lookup(work->refused_targets, folded));
 	return until && g_get_monotonic_time() < until;
 }
@@ -335,7 +329,7 @@ static void report_failure(Session *session, IrcClient *client, IrcClientStatus 
 		return;
 	session->has_reported_failure = TRUE;
 	g_autofree char *text = g_strdup_printf(TEXT_ACCOUNT_PROBLEM, describe_account_name(session), reason);
-	session->chat->events.show_problem(text, session->chat->data);
+	session->chat->events.show_message(text, session->chat->data);
 }
 
 
@@ -569,7 +563,7 @@ static void handle_control_received(IrcClient *client, const IrcMessage *message
 		session->web_port = g_strdup(get_irc_parameter(message, 1));
 		announce_account_change(session->item);
 	} else if (g_str_equal(message->command, "FAIL"))
-		session->chat->events.show_problem(get_irc_parameter(message, count_irc_parameters(message) - 1),
+		session->chat->events.show_message(get_irc_parameter(message, count_irc_parameters(message) - 1),
 			session->chat->data);
 }
 
@@ -581,7 +575,7 @@ static void handle_control_status(IrcClient *client, IrcClientStatus status, con
 	report_failure(session, client, status, reason);
 	announce_account_change(session->item);
 	if (status == IRC_CLIENT_REGISTERED && !has_irc_cap(get_irc_client_state(client), "soju.im/bouncer-networks"))
-		session->chat->events.show_problem(TEXT_NOT_A_BOUNCER, session->chat->data);
+		session->chat->events.show_message(TEXT_NOT_A_BOUNCER, session->chat->data);
 	if (status == IRC_CLIENT_REGISTERED && !has_irc_cap(get_irc_client_state(client), "soju.im/bouncer-networks-notify"))
 		send_irc_client_command(client, "BOUNCER", "LISTNETWORKS", NULL);
 	if (status == IRC_CLIENT_DISCONNECTED && get_irc_client_failure(client) == IRC_FAILURE_CERTIFICATE)
@@ -917,7 +911,7 @@ void cancel_profile(CrimsonNetwork *network, gpointer data) {
 void request_profile(CrimsonNetwork *network, const char *nick, ProfileReady ready, gpointer data) {
 	NetworkWork *work = get_network_work(network);
 	cancel_profile(network, work->profile_data);
-	g_autofree char *folded = fold_target(network, nick);
+	g_autofree char *folded = fold_network_name(network, nick);
 	KeptProfile *kept = g_hash_table_lookup(work->profiles, folded);
 	if (kept && g_get_monotonic_time() - kept->time < ANSWER_KEEP_SECONDS * G_USEC_PER_SEC) {
 		ready(kept->profile, data);
@@ -951,7 +945,7 @@ static void finish_profile(CrimsonNetwork *network, Profile *profile) {
 		ready(profile, data);
 	KeptProfile *kept = g_new0(KeptProfile, 1);
 	*kept = (KeptProfile){profile, g_get_monotonic_time()};
-	g_hash_table_replace(work->profiles, fold_target(network, profile->nick), kept);
+	g_hash_table_replace(work->profiles, fold_network_name(network, profile->nick), kept);
 }
 
 

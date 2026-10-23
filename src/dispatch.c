@@ -2,7 +2,7 @@
 
 #include "../lang/en.h"
 #include "formatting.h"
-#include "session.h"
+#include "questions.h"
 #include "settings.h"
 
 #define TYPING_ACTIVE_SECONDS 6
@@ -46,6 +46,36 @@ static void add_status(CrimsonRoom *room, const IrcMessage *message, const char 
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_STATUS, NULL, text, read_message_time(message));
 	insert_room_message(room, line);
 	announce_room_change(room);
+}
+
+
+/* The server's answer to something the user sent brings its messages into the room list as news, and the first
+ * line of it shows at once unless the user sent it from those messages */
+static void show_answer(CrimsonNetwork *network, Question *question, const char *text) {
+	CrimsonRoom *room = network->server_room;
+	if (!room->is_listed) {
+		room->is_listed = TRUE;
+		save_chat_cache_later(network->session->chat);
+	}
+	count_unread(room);
+	announce_room_change(room);
+	if (!question->has_shown_answer && !question->was_typed_in_server)
+		network->session->chat->events.show_message(text, network->session->chat->data);
+	question->has_shown_answer = TRUE;
+}
+
+
+/* What the server itself says goes with its messages, as news when it answers the user */
+static void add_server_line(CrimsonNetwork *network, const IrcMessage *message, const char *text) {
+	Question *question = find_question(network, message);
+	if (!question) {
+		add_status(network->server_room, message, text);
+		return;
+	}
+	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_NOTICE, NULL, text, read_message_time(message));
+	line->arrival_time = g_get_monotonic_time();
+	insert_room_message(network->server_room, line);
+	show_answer(network, question, text);
 }
 
 
@@ -236,6 +266,9 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	if (load)
 		return;
 	offer_login(network, line);
+	Question *question = room == network->server_room && !line->is_own ? find_question(network, message) : NULL;
+	if (question)
+		show_answer(network, question, line->text);
 	count_unread(room);
 	announce_room_change(room);
 	save_chat_cache_later(network->session->chat);
@@ -701,18 +734,11 @@ static char *join_parameters(const IrcMessage *message, guint first) {
 
 static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) {
 	const char *command = message->command;
-	NetworkWork *work = get_network_work(network);
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
 	g_autofree char *text = join_parameters(message, 1);
 	if ((g_strv_contains(WHOIS_REPLIES, command) || number == 401 || number == 402)
 		&& collect_profile(network, number, message))
 		return;
-	if (g_strv_contains(WHOIS_REPLIES, command)) {
-		add_status(work->whois_room ? work->whois_room : network->server_room, message, text);
-		if (g_str_equal(command, "318"))
-			work->whois_room = NULL;
-		return;
-	}
 	if (number == 332) {
 		CrimsonRoom *room = find_room(network, get_irc_parameter(message, 1));
 		if (room) {
@@ -740,18 +766,12 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 		if (number == QUIET[index])
 			return;
 	}
-	add_status(network->server_room, message, text);
 	/* A person or room that refuses messages, such as one missing or open only to registered accounts, is left
-	 * alone for a while, and only shows as a problem when the user just acted on it rather than the app on its own,
-	 * as typing notices do */
+	 * alone for a while by what the app sends on its own, such as typing notices */
 	const char *target = get_irc_parameter(message, 1);
-	gboolean is_refusal = number == 401 || number == 403 || number == 404 || number == 477;
-	if (is_refusal && target && !refuse_target(network, target))
-		return;
-	/* A missing message of the day and a taken nick during registration are routine, and an unknown command
-	 * answers something the app sent on its own, not something the user did */
-	if (number >= 400 && number < 600 && number != 421 && number != 422 && number != 433)
-		network->session->chat->events.show_problem(get_last_irc_parameter(message), network->session->chat->data);
+	if ((number == 401 || number == 403 || number == 404 || number == 477) && target)
+		refuse_target(network, target);
+	add_server_line(network, message, text);
 }
 
 
@@ -760,9 +780,7 @@ static void deliver_standard_reply(CrimsonNetwork *network, const IrcMessage *me
 	 * them, since the user did not do anything */
 	if (g_strcmp0(get_irc_parameter(message, 0), "METADATA") == 0)
 		return;
-	add_status(network->server_room, message, get_last_irc_parameter(message));
-	if (g_str_equal(message->command, "FAIL"))
-		network->session->chat->events.show_problem(get_last_irc_parameter(message), network->session->chat->data);
+	add_server_line(network, message, get_last_irc_parameter(message));
 }
 
 
@@ -839,6 +857,7 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 	const char *batch = get_irc_tag(message, "batch");
 	HistoryLoad *load = batch ? g_hash_table_lookup(work->history, batch) : NULL;
 	if (g_str_equal(message->command, "BATCH")) {
+		follow_answers(network, message);
 		const char *reference = get_irc_parameter(message, 0);
 		if (reference && *reference == '+')
 			start_batch(network, message);
@@ -846,6 +865,7 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 			finish_batch(network, message, load);
 		return;
 	}
+	follow_answers(network, message);
 	if (batch && gather_multiline(network, message))
 		return;
 	if (load && !load->room)

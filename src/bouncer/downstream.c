@@ -730,10 +730,23 @@ static void forward_supported(Downstream *downstream, const IrcMessage *message)
 }
 
 
+/* A PING the network answers comes back after the network's replies to what the client sent before it, which
+ * tells the client where those replies end */
+static void handle_ping(Downstream *downstream, const IrcMessage *message) {
+	Upstream *upstream = downstream->upstream;
+	if (downstream->is_registered && upstream && get_irc_client_status(upstream->client) == IRC_CLIENT_REGISTERED)
+		forward_to_upstream(upstream, downstream, message);
+	else
+		send_from_bouncer(downstream, "PONG", BOUNCER_NAME, get_last_irc_parameter(message), NULL);
+}
+
+
 static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
 	Downstream *downstream = data;
 	const char *command = message->command;
-	if (g_str_equal(command, "QUIT"))
+	if (g_str_equal(command, "PING"))
+		handle_ping(downstream, message);
+	else if (g_str_equal(command, "QUIT"))
 		close_downstream(downstream);
 	else if (g_str_equal(command, "CAP"))
 		handle_cap(downstream, message);
@@ -782,6 +795,7 @@ void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *addr
 	downstream->caps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	downstream->login = g_string_new(NULL);
 	downstream->stream = create_irc_stream(connection, handle_message, handle_closed, downstream);
+	pass_irc_stream_pings(downstream->stream);
 	bouncer->downstreams = g_list_prepend(bouncer->downstreams, downstream);
 	downstream->registration_source = g_timeout_add_seconds(REGISTRATION_SECONDS, drop_unregistered, downstream);
 }

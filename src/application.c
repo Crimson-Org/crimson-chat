@@ -68,7 +68,7 @@ static void refuse_certificate(Session *session, const char *hash, gpointer data
 }
 
 
-static void show_problem(const char *text, gpointer data) {
+static void show_message(const char *text, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
 		show_toast(window, text);
@@ -190,7 +190,7 @@ static void quit(GSimpleAction *action, GVariant *parameter, gpointer applicatio
 static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
-	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_problem, open_requested_room,
+	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, open_requested_room,
 		share_invite, forget_network, withdraw_notification};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {

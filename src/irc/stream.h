@@ -15,6 +15,8 @@ IrcStream *create_irc_stream(GIOStream *connection, IrcStreamReceived received, 
 	gpointer data);
 /* Servers drop clients that send too fast, so a stream to a server spaces out its lines after a short burst */
 void limit_irc_stream_rate(IrcStream *stream);
+/* A bouncer hands its clients' PING to the owner instead of answering, so it can pass them on in order */
+void pass_irc_stream_pings(IrcStream *stream);
 
 void send_irc_message(IrcStream *stream, const IrcMessage *message);
 void send_irc_command(IrcStream *stream, const char *command, ...) G_GNUC_NULL_TERMINATED;

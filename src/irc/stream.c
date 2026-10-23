@@ -25,7 +25,7 @@ struct IrcStream {
 	GQueue outgoing;
 	/* The line being written, which the output stream reads until the write finishes */
 	GBytes *current;
-	gboolean is_writing, is_closing, has_failed, has_finished, is_ping_sent, is_rate_limited;
+	gboolean is_writing, is_closing, has_failed, has_finished, is_ping_sent, is_rate_limited, passes_pings;
 	gint64 last_received;
 	double send_credit;
 	gint64 credit_time;
@@ -86,7 +86,7 @@ static void handle_line(IrcStream *stream, const char *line, gsize length) {
 		return;
 	stream->last_received = g_get_monotonic_time();
 	stream->is_ping_sent = FALSE;
-	if (g_str_equal(message->command, "PING")) {
+	if (g_str_equal(message->command, "PING") && !stream->passes_pings) {
 		g_autoptr(IrcMessage) answer = copy_irc_message(message);
 		g_free(answer->command);
 		answer->command = g_strdup("PONG");
@@ -95,7 +95,8 @@ static void handle_line(IrcStream *stream, const char *line, gsize length) {
 		send_irc_message(stream, answer);
 		return;
 	}
-	if (g_str_equal(message->command, "PONG"))
+	/* Only the keepalive's own answer ends here, since other tokens mark where the owner's replies end */
+	if (g_str_equal(message->command, "PONG") && g_strcmp0(get_last_irc_parameter(message), KEEPALIVE_TOKEN) == 0)
 		return;
 	stream->received(stream, message, stream->data);
 }
@@ -255,6 +256,11 @@ IrcStream *create_irc_stream(GIOStream *connection, IrcStreamReceived received, 
 
 void limit_irc_stream_rate(IrcStream *stream) {
 	stream->is_rate_limited = TRUE;
+}
+
+
+void pass_irc_stream_pings(IrcStream *stream) {
+	stream->passes_pings = TRUE;
 }
 
 

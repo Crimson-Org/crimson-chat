@@ -61,6 +61,8 @@ void change_irc_client_settings(IrcClient *client, const IrcClientSettings *sett
 
 void send_irc_client_message(IrcClient *client, const IrcMessage *message);
 void send_irc_client_command(IrcClient *client, const char *command, ...) G_GNUC_NULL_TERMINATED;
+/* Tags every line sent from now on with this label, until it is cleared with NULL */
+void label_irc_client_lines(IrcClient *client, const char *label);
 
 IrcState *get_irc_client_state(IrcClient *client);
 const IrcClientSettings *get_irc_client_settings(IrcClient *client);
