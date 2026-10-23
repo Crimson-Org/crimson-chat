@@ -1020,14 +1020,49 @@ static void remove_network_action(GSimpleAction *action, GVariant *parameter, gp
 }
 
 
+static void leave_room_now(Window *window, CrimsonRoom *room) {
+	if (get_open_room(window) == room) {
+		show_conversation_room(window->conversation, NULL);
+		adw_navigation_split_view_set_show_content(window->split, FALSE);
+	}
+	leave_room(room);
+}
+
+
+/* The room is found again by its server and name once the user answers, since it may have gone meanwhile */
+static void finish_leave_question(AdwAlertDialog *alert, const char *response, Window *window) {
+	if (g_strcmp0(response, "leave") != 0)
+		return;
+	GVariant *network_key = g_object_get_data(G_OBJECT(alert), "network-key");
+	CrimsonNetwork *network = find_keyed_network(window, network_key);
+	CrimsonRoom *room = network ? find_room(network, g_object_get_data(G_OBJECT(alert), "room-name")) : NULL;
+	if (room)
+		leave_room_now(window, room);
+}
+
+
+/* Leaving a room or deleting a chat cannot be undone, so it is asked first */
+static void ask_to_leave_room(Window *window, CrimsonRoom *room) {
+	gboolean is_channel = room->kind == ROOM_CHANNEL;
+	AdwDialog *alert = adw_alert_dialog_new(is_channel ? TEXT_LEAVE_ROOM_TITLE : TEXT_DELETE_CHAT_TITLE,
+		is_channel ? TEXT_LEAVE_ROOM_BODY : TEXT_DELETE_CHAT_BODY);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "leave",
+		is_channel ? TEXT_LEAVE : TEXT_DELETE, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "leave", ADW_RESPONSE_DESTRUCTIVE);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
+	g_object_set_data_full(G_OBJECT(alert), "network-key",
+		g_variant_ref_sink(g_variant_new_string(room->network->key)), (GDestroyNotify)g_variant_unref);
+	g_object_set_data_full(G_OBJECT(alert), "room-name", g_strdup(room->name), g_free);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_leave_question), window);
+	adw_dialog_present(alert, GTK_WIDGET(window->window));
+}
+
+
 static void leave_room_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
 	CrimsonRoom *room = get_open_room(window);
-	if (!room || room->kind == ROOM_SERVER)
-		return;
-	show_conversation_room(window->conversation, NULL);
-	adw_navigation_split_view_set_show_content(window->split, FALSE);
-	leave_room(room);
+	if (room && room->kind != ROOM_SERVER)
+		ask_to_leave_room(window, room);
 }
 
 
@@ -1059,13 +1094,8 @@ static void leave_chat_action(GSimpleAction *action, GVariant *parameter, gpoint
 	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
 	CrimsonNetwork *network = find_keyed_network(window, network_key);
 	CrimsonRoom *room = network ? find_room(network, name) : NULL;
-	if (!room)
-		return;
-	if (get_open_room(window) == room) {
-		show_conversation_room(window->conversation, NULL);
-		adw_navigation_split_view_set_show_content(window->split, FALSE);
-	}
-	leave_room(room);
+	if (room && room->kind != ROOM_SERVER)
+		ask_to_leave_room(window, room);
 }
 
 

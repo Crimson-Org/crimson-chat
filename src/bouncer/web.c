@@ -10,6 +10,8 @@
 #define FAILED_LOGIN_DELAY_MILLISECONDS 1000
 #define DEFAULT_HTTPS_PORT "443"
 #define SHORTEST_PASSWORD 8
+/* Lists show this many accounts, invites or pictures a page, however many there are */
+#define ITEMS_PER_PAGE 50
 #define COOKIE_NAME "crimson_session"
 #define UPLOAD_LINE_START "POST /avatar"
 #define DOWNLOAD_ADDRESS "https://github.com/Crimson-Org/crimson-chat/releases/latest"
@@ -52,6 +54,14 @@ static const char STYLE[] =
 	"color:var(--accent);font-weight:700}"
 	".actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions form{display:flex;gap:8px;margin:0}"
 	".actions input{width:11em;padding:6px 12px}.danger{background:#8e0a1d}"
+	".tabs{display:flex;gap:6px;flex-wrap:wrap;margin-top:16px}.tabs a{padding:6px 14px;border-radius:999px;"
+	"color:var(--fg);text-decoration:none;border:1px solid var(--line)}.tabs a[aria-current]{background:var(--accent);"
+	"color:#fff;border-color:transparent}"
+	".search{margin:20px 0 4px}.search input{flex:1;min-width:12em}.search button{margin-top:0}"
+	".pager{display:flex;gap:12px;align-items:center;justify-content:center;margin-top:20px}"
+	".counts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px}.counts a{display:block;"
+	"padding:16px;border-radius:14px;background:rgba(127,127,127,.1);color:var(--fg);text-decoration:none}"
+	".counts b{display:block;font-size:28px}"
 	".pictures{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:16px;margin-top:16px}"
 	".picture{text-align:center}.picture img{width:96px;height:96px;border-radius:50%;object-fit:cover;"
 	"display:block;margin:0 auto 6px;background:rgba(127,127,127,.15)}.picture p{margin:0 0 8px}";
@@ -281,24 +291,138 @@ static char *describe_uses(int uses) {
 }
 
 
-static void add_invite_list(WebAnswer *answer, WebRequest *request) {
-	add_text(answer, "<section id=\"invites\"><h2>Invites</h2><p>Anyone with an invite link can make an account.</p>"
-		"<form method=\"post\" action=\"/invites\" class=\"row\"><select name=\"uses\" aria-label=\"Uses\">"
-		"<option value=\"1\">One person</option><option value=\"5\">Five people</option>"
-		"<option value=\"25\">Twenty-five people</option><option value=\"-1\">Anyone with the link</option>"
-		"</select><button>Create Invite</button></form>");
+/* Notices a change leaves on the page it returns to, named in its address so a reload repeats nothing */
+static const struct {
+	const char *key, *text;
+} NOTICES[] = {
+	{"password", "Your password changed."},
+	{"account-password", "The password changed."},
+	{"admin", "The admin rights changed."},
+	{"removed", "The account was deleted."},
+	{"pictures", "The pictures were deleted."},
+	{"picture", "The picture was deleted."},
+	{"short", "Use at least 8 characters for the password."},
+};
+
+
+static const char *find_notice(WebRequest *request) {
+	const char *key = request->query ? g_hash_table_lookup(request->query, "notice") : NULL;
+	for (guint index = 0; key && index < G_N_ELEMENTS(NOTICES); index++)
+		if (g_str_equal(key, NOTICES[index].key))
+			return NOTICES[index].text;
+	return NULL;
+}
+
+
+static const char *read_query(WebRequest *request, const char *name) {
+	const char *value = request->query ? g_hash_table_lookup(request->query, name) : NULL;
+	return value ? value : "";
+}
+
+
+/* Pages count from 1 in addresses and from 0 here */
+static guint read_page(WebRequest *request) {
+	guint64 page = g_ascii_strtoull(read_query(request, "page"), NULL, 10);
+	return page > 1 ? (guint)(page - 1) : 0;
+}
+
+
+/* The address of one page of a list, which forms send back so a change returns to the page it was made on */
+static char *describe_list_address(const char *path, const char *search, guint page) {
+	g_autofree char *escaped = g_uri_escape_string(search, NULL, FALSE);
+	return g_strdup_printf("%s?q=%s&page=%u", path, escaped, page + 1);
+}
+
+
+static gboolean matches_search(const char *name, const char *search) {
+	if (!*search)
+		return TRUE;
+	g_autofree char *folded_name = g_utf8_casefold(name, -1);
+	g_autofree char *folded_search = g_utf8_casefold(search, -1);
+	return strstr(folded_name, folded_search) != NULL;
+}
+
+
+static void add_search(WebAnswer *answer, const char *path, const char *search, const char *label) {
+	add_text(answer, "<form method=\"get\" action=\"%s\" class=\"row search\"><input name=\"q\" value=\"%s\" "
+		"type=\"search\" placeholder=\"%s\" aria-label=\"%s\"><button class=\"small\">Search</button></form>", path,
+		search, label, label);
+}
+
+
+static void add_pager(WebAnswer *answer, const char *path, const char *search, guint page, guint total) {
+	guint pages = MAX(1, (total + ITEMS_PER_PAGE - 1) / ITEMS_PER_PAGE);
+	if (pages == 1)
+		return;
+	add_text(answer, "<nav class=\"pager\">");
+	if (page > 0) {
+		g_autofree char *previous = describe_list_address(path, search, page - 1);
+		add_text(answer, "<a class=\"button quiet small\" href=\"%s\">Previous</a>", previous);
+	}
+	add_text(answer, "<span>Page %u of %u</span>", page + 1, pages);
+	if (page + 1 < pages) {
+		g_autofree char *next = describe_list_address(path, search, page + 1);
+		add_text(answer, "<a class=\"button quiet small\" href=\"%s\">Next</a>", next);
+	}
+	add_text(answer, "</nav>");
+}
+
+
+/* Every admin page has the same header, which names where the admin is and links the other pages */
+static void start_admin_page(WebAnswer *answer, WebRequest *request, BouncerUser *user, const char *title) {
+	begin_page(answer, title, TRUE);
+	add_text(answer, "<header><div><h1>%s</h1><p>%s, signed in as <b>%s</b>%s</p></div>"
+		"<form method=\"post\" action=\"/logout\"><button class=\"quiet small\">Sign Out</button></form></header>",
+		title, request->bouncer->name, user->name, user->is_admin ? ", an admin" : "");
+	if (user->is_admin) {
+		static const char *const LINKS[][2] = {
+			{"/", "Home"}, {"/accounts", "Accounts"}, {"/invites", "Invites"}, {"/pictures", "Pictures"},
+		};
+		add_text(answer, "<nav class=\"tabs\">");
+		for (guint index = 0; index < G_N_ELEMENTS(LINKS); index++)
+			add_text(answer, "<a href=\"%s\"%s>%s</a>", LINKS[index][0],
+				g_str_equal(request->path, LINKS[index][0]) ? " aria-current=\"page\"" : "", LINKS[index][1]);
+		add_text(answer, "</nav>");
+	}
+	const char *notice = find_notice(request);
+	if (notice)
+		add_text(answer, "<p class=\"notice\">%s</p>", notice);
+}
+
+
+/* A hidden field naming the list page a form was sent from */
+static void add_back_field(WebAnswer *answer, const char *back) {
+	add_text(answer, "<input type=\"hidden\" name=\"back\" value=\"%s\">", back);
+}
+
+
+static void show_invites(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
+	start_admin_page(answer, request, admin, "Invites");
 	g_autoptr(GPtrArray) invites = load_invites(request->bouncer->database);
-	if (invites->len)
-		add_text(answer, "<div class=\"list\" style=\"margin-top:16px\">");
-	for (guint index = 0; index < invites->len; index++) {
+	guint page = read_page(request);
+	g_autofree char *back = describe_list_address("/invites", "", page);
+	add_text(answer, "<p>Anyone with an invite link can make an account. There are %u now.</p>"
+		"<form method=\"post\" action=\"/invites/create\" class=\"row\">", invites->len);
+	add_back_field(answer, back);
+	add_text(answer, "<select name=\"uses\" aria-label=\"Uses\"><option value=\"1\">One person</option>"
+		"<option value=\"5\">Five people</option><option value=\"25\">Twenty-five people</option>"
+		"<option value=\"-1\">Anyone with the link</option></select><button>Create Invite</button></form>");
+	guint first = page * ITEMS_PER_PAGE;
+	if (first < invites->len)
+		add_text(answer, "<div class=\"list\">");
+	for (guint index = first; index < invites->len && index < first + ITEMS_PER_PAGE; index++) {
 		InviteRecord *invite = g_ptr_array_index(invites, index);
 		g_autofree char *uses = describe_uses(invite->uses_left);
 		add_text(answer, "<div class=\"item\"><div><code>https://%s/invite?token=%s</code><p>%s</p></div>"
-			"<form method=\"post\" action=\"/invites/delete\"><input type=\"hidden\" name=\"token\" value=\"%s\">"
-			"<button class=\"quiet small\">Delete</button></form></div>", request->host ? request->host : "",
-			invite->token, uses, invite->token);
+			"<form method=\"post\" action=\"/invites/delete\"><input type=\"hidden\" name=\"token\" value=\"%s\">",
+			request->host ? request->host : "", invite->token, uses, invite->token);
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"quiet small\">Delete</button></form></div>");
 	}
-	g_string_append(answer->body, invites->len ? "</div></section>" : "</section>");
+	if (first < invites->len)
+		add_text(answer, "</div>");
+	add_pager(answer, "/invites", "", page, invites->len);
+	end_page(answer);
 }
 
 
@@ -316,93 +440,146 @@ static char *describe_networks(BouncerUser *user) {
 }
 
 
-static guint count_user_pictures(GPtrArray *pictures, gint64 user_id) {
-	guint count = 0;
-	for (guint index = 0; index < pictures->len; index++)
-		count += ((AvatarFile *)g_ptr_array_index(pictures, index))->user_id == user_id;
-	return count;
+/* How many pictures each user has, counted once for the whole page */
+static GHashTable *count_pictures_by_user(GPtrArray *pictures) {
+	GHashTable *counts = g_hash_table_new_full(g_int64_hash, g_int64_equal, g_free, NULL);
+	for (guint index = 0; index < pictures->len; index++) {
+		gint64 user_id = ((AvatarFile *)g_ptr_array_index(pictures, index))->user_id;
+		guint count = GPOINTER_TO_UINT(g_hash_table_lookup(counts, &user_id));
+		g_hash_table_replace(counts, g_memdup2(&user_id, sizeof user_id), GUINT_TO_POINTER(count + 1));
+	}
+	return counts;
 }
 
 
 /* What an admin can do to an account, where nobody changes their own admin rights or deletes themselves, so the
  * bouncer always keeps an admin */
-static void add_account_actions(WebAnswer *answer, BouncerUser *account, gboolean is_self, guint pictures) {
+static void add_account_actions(WebAnswer *answer, BouncerUser *account, gboolean is_self, guint pictures,
+	const char *back) {
 	add_text(answer, "<div class=\"actions\">");
-	if (!is_self)
+	if (!is_self) {
 		add_text(answer, "<form method=\"post\" action=\"/accounts/admin\"><input type=\"hidden\" name=\"id\" "
-			"value=\"%" G_GINT64_FORMAT "\"><input type=\"hidden\" name=\"admin\" value=\"%s\">"
-			"<button class=\"quiet small\">%s</button></form>", account->id, account->is_admin ? "0" : "1",
+			"value=\"%" G_GINT64_FORMAT "\"><input type=\"hidden\" name=\"admin\" value=\"%s\">", account->id,
+			account->is_admin ? "0" : "1");
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"quiet small\">%s</button></form>",
 			account->is_admin ? "Remove Admin" : "Make Admin");
+	}
 	add_text(answer, "<form method=\"post\" action=\"/accounts/password\"><input type=\"hidden\" name=\"id\" "
 		"value=\"%" G_GINT64_FORMAT "\"><input name=\"password\" type=\"password\" placeholder=\"New password\" "
-		"aria-label=\"New password for %s\" autocomplete=\"new-password\" minlength=\"8\" required>"
-		"<button class=\"quiet small\">Set Password</button></form>", account->id, account->name);
-	if (pictures)
+		"aria-label=\"New password for %s\" autocomplete=\"new-password\" minlength=\"8\" required>", account->id,
+		account->name);
+	add_back_field(answer, back);
+	add_text(answer, "<button class=\"quiet small\">Set Password</button></form>");
+	if (pictures) {
 		add_text(answer, "<form method=\"post\" action=\"/accounts/pictures\"><input type=\"hidden\" name=\"id\" "
-			"value=\"%" G_GINT64_FORMAT "\"><button class=\"quiet small\">Delete Pictures</button></form>",
-			account->id);
-	if (!is_self)
+			"value=\"%" G_GINT64_FORMAT "\">", account->id);
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"quiet small\">Delete Pictures</button></form>");
+	}
+	if (!is_self) {
 		add_text(answer, "<form method=\"post\" action=\"/accounts/delete\"><input type=\"hidden\" name=\"id\" "
-			"value=\"%" G_GINT64_FORMAT "\"><button class=\"small danger\">Delete Account</button></form>",
-			account->id);
+			"value=\"%" G_GINT64_FORMAT "\">", account->id);
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"small danger\">Delete Account</button></form>");
+	}
 	add_text(answer, "</div>");
 }
 
 
-static void add_account_list(WebAnswer *answer, WebRequest *request, BouncerUser *admin, GPtrArray *pictures) {
+static void show_accounts(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
+	start_admin_page(answer, request, admin, "Accounts");
+	const char *search = read_query(request, "q");
+	guint page = read_page(request);
+	g_autofree char *back = describe_list_address("/accounts", search, page);
 	GPtrArray *users = request->bouncer->users;
-	add_text(answer, "<section id=\"accounts\"><h2>Accounts</h2><p>%u %s on this bouncer.</p>"
-		"<div class=\"list\">", users->len, users->len == 1 ? "account" : "accounts");
+	g_autoptr(GPtrArray) found = g_ptr_array_new();
 	for (guint index = 0; index < users->len; index++) {
 		BouncerUser *account = g_ptr_array_index(users, index);
+		if (matches_search(account->name, search))
+			g_ptr_array_add(found, account);
+	}
+	add_search(answer, "/accounts", search, "Search accounts by name");
+	add_text(answer, "<p>%u of %u %s.</p>", found->len, users->len, users->len == 1 ? "account" : "accounts");
+	g_autoptr(GPtrArray) pictures = list_avatars(request->bouncer);
+	g_autoptr(GHashTable) counts = count_pictures_by_user(pictures);
+	guint first = page * ITEMS_PER_PAGE;
+	if (first < found->len)
+		add_text(answer, "<div class=\"list\">");
+	for (guint index = first; index < found->len && index < first + ITEMS_PER_PAGE; index++) {
+		BouncerUser *account = g_ptr_array_index(found, index);
 		g_autofree char *networks = describe_networks(account);
-		guint count = count_user_pictures(pictures, account->id);
+		guint count = GPOINTER_TO_UINT(g_hash_table_lookup(counts, &account->id));
 		add_text(answer, "<div class=\"item\"><div><p><b>%s</b>", account->name);
 		if (account->is_admin)
 			add_text(answer, "<span class=\"tag\">Admin</span>");
 		if (account == admin)
 			add_text(answer, "<span class=\"tag\">You</span>");
 		add_text(answer, "</p><p>%s</p><p>%u %s</p></div>", networks, count, count == 1 ? "picture" : "pictures");
-		add_account_actions(answer, account, account == admin, count);
+		add_account_actions(answer, account, account == admin, count, back);
 		add_text(answer, "</div>");
 	}
-	add_text(answer, "</div></section>");
+	if (first < found->len)
+		add_text(answer, "</div>");
+	add_pager(answer, "/accounts", search, page, found->len);
+	end_page(answer);
 }
 
 
-static void add_picture_list(WebAnswer *answer, WebRequest *request, GPtrArray *pictures) {
-	add_text(answer, "<section id=\"pictures\"><h2>Pictures</h2>");
-	if (!pictures->len) {
-		add_text(answer, "<p>Nobody has uploaded a picture yet.</p></section>");
-		return;
-	}
+static void show_pictures(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
+	start_admin_page(answer, request, admin, "Pictures");
+	const char *search = read_query(request, "q");
+	guint page = read_page(request);
+	g_autofree char *back = describe_list_address("/pictures", search, page);
+	g_autoptr(GPtrArray) pictures = list_avatars(request->bouncer);
+	g_autoptr(GPtrArray) found = g_ptr_array_new();
 	goffset total = 0;
-	for (guint index = 0; index < pictures->len; index++)
-		total += ((AvatarFile *)g_ptr_array_index(pictures, index))->bytes;
-	g_autofree char *size = g_format_size((guint64)total);
-	add_text(answer, "<div class=\"row\" style=\"align-items:center;justify-content:space-between\">"
-		"<p style=\"margin:0\">%u %s, %s in all.</p><form method=\"post\" action=\"/pictures/clear\">"
-		"<button class=\"small danger\">Delete All Pictures</button></form></div><div class=\"pictures\">",
-		pictures->len, pictures->len == 1 ? "picture" : "pictures", size);
 	for (guint index = 0; index < pictures->len; index++) {
 		AvatarFile *file = g_ptr_array_index(pictures, index);
 		BouncerUser *owner = find_user(request->bouncer, file->user_id);
-		add_text(answer, "<div class=\"picture\"><img src=\"/avatars/%s\" alt=\"\" loading=\"lazy\"><p>%s</p>"
-			"<form method=\"post\" action=\"/pictures/delete\"><input type=\"hidden\" name=\"name\" value=\"%s\">"
-			"<button class=\"quiet small\">Delete</button></form></div>", file->name,
-			owner ? owner->name : "A removed account", file->name);
+		total += file->bytes;
+		if (matches_search(owner ? owner->name : "", search))
+			g_ptr_array_add(found, file);
 	}
-	add_text(answer, "</div></section>");
+	g_autofree char *size = g_format_size((guint64)total);
+	add_search(answer, "/pictures", search, "Search pictures by owner");
+	add_text(answer, "<div class=\"row\" style=\"align-items:center;justify-content:space-between\">"
+		"<p style=\"margin:0\">%u of %u %s, %s in all.</p>", found->len, pictures->len,
+		pictures->len == 1 ? "picture" : "pictures", size);
+	if (pictures->len) {
+		add_text(answer, "<form method=\"post\" action=\"/pictures/clear\">");
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"small danger\">Delete All Pictures</button></form>");
+	}
+	add_text(answer, "</div><div class=\"pictures\">");
+	guint first = page * ITEMS_PER_PAGE;
+	for (guint index = first; index < found->len && index < first + ITEMS_PER_PAGE; index++) {
+		AvatarFile *file = g_ptr_array_index(found, index);
+		BouncerUser *owner = find_user(request->bouncer, file->user_id);
+		add_text(answer, "<div class=\"picture\"><img src=\"/avatars/%s\" alt=\"\" loading=\"lazy\"><p>%s</p>"
+			"<form method=\"post\" action=\"/pictures/delete\"><input type=\"hidden\" name=\"name\" value=\"%s\">",
+			file->name, owner ? owner->name : "A removed account", file->name);
+		add_back_field(answer, back);
+		add_text(answer, "<button class=\"quiet small\">Delete</button></form></div>");
+	}
+	add_text(answer, "</div>");
+	add_pager(answer, "/pictures", search, page, found->len);
+	end_page(answer);
 }
 
 
-static void show_home(WebAnswer *answer, WebRequest *request, BouncerUser *user, const char *notice) {
-	begin_page(answer, request->bouncer->name, user->is_admin);
-	add_text(answer, "<header><div><h1>%s</h1><p>Signed in as <b>%s</b>%s</p></div>"
-		"<form method=\"post\" action=\"/logout\"><button class=\"quiet small\">Sign Out</button></form></header>",
-		request->bouncer->name, user->name, user->is_admin ? ", an admin" : "");
-	if (notice)
-		add_text(answer, "<p class=\"notice\">%s</p>", notice);
+/* The home page shows the user's own login, and an admin the size of each list with a link to it */
+static void show_home(WebAnswer *answer, WebRequest *request, BouncerUser *user, const char *problem) {
+	start_admin_page(answer, request, user, "Home");
+	if (problem)
+		add_text(answer, "<p class=\"notice error\">%s</p>", problem);
+	if (user->is_admin) {
+		g_autoptr(GPtrArray) invites = load_invites(request->bouncer->database);
+		g_autoptr(GPtrArray) pictures = list_avatars(request->bouncer);
+		add_text(answer, "<div class=\"counts\"><a href=\"/accounts\"><b>%u</b>Accounts</a>"
+			"<a href=\"/invites\"><b>%u</b>Invites</a><a href=\"/pictures\"><b>%u</b>Pictures</a></div>",
+			request->bouncer->users->len, invites->len, pictures->len);
+	}
 	add_text(answer, "<section><h2>Connect</h2><p>Add this bouncer in Crimson Chat with these details.</p>");
 	add_connection_details(answer, request, user->name);
 	add_text(answer, "</section><section id=\"password\"><h2>Your Password</h2>"
@@ -412,12 +589,6 @@ static void show_home(WebAnswer *answer, WebRequest *request, BouncerUser *user,
 		"autocomplete=\"new-password\" minlength=\"8\" required><label for=\"repeat\">Repeat new password</label>"
 		"<input id=\"repeat\" name=\"repeat\" type=\"password\" autocomplete=\"new-password\" minlength=\"8\" "
 		"required><button>Change Password</button></form></section>");
-	if (user->is_admin) {
-		g_autoptr(GPtrArray) pictures = list_avatars(request->bouncer);
-		add_account_list(answer, request, user, pictures);
-		add_invite_list(answer, request);
-		add_picture_list(answer, request, pictures);
-	}
 	end_page(answer);
 }
 
@@ -494,38 +665,56 @@ static void register_invited(WebAnswer *answer, WebRequest *request) {
 }
 
 
+/* The list page a form came from, or the fallback when it names anything else, so no form can send a browser
+ * elsewhere */
+static const char *read_back(WebRequest *request, const char *fallback) {
+	static const char *const LISTS[] = {"/accounts?", "/invites?", "/pictures?"};
+	const char *back = read_field(request, "back");
+	for (const char *letter = back; *letter; letter++)
+		if ((guchar)*letter < ' ')
+			return fallback;
+	for (guint index = 0; index < G_N_ELEMENTS(LISTS); index++)
+		if (g_str_has_prefix(back, LISTS[index]))
+			return back;
+	return fallback;
+}
+
+
+static void return_to_list(WebAnswer *answer, WebRequest *request, const char *fallback, const char *notice) {
+	const char *place = read_back(request, fallback);
+	g_autofree char *address = notice ? g_strdup_printf("%s%cnotice=%s", place, strchr(place, '?') ? '&' : '?',
+		notice) : g_strdup(place);
+	redirect(answer, address);
+}
+
+
+/* Deleting asks first on a page of its own, whose button sends the same request again marked as confirmed */
+static gboolean is_confirmed(WebAnswer *answer, WebRequest *request, const char *question, const char *detail) {
+	if (g_str_equal(read_field(request, "confirmed"), "1"))
+		return TRUE;
+	const char *back = read_back(request, "/");
+	start_page(answer, question);
+	add_text(answer, "<h1>%s</h1><p>%s</p><form method=\"post\" action=\"%s\">"
+		"<input type=\"hidden\" name=\"id\" value=\"%s\"><input type=\"hidden\" name=\"confirmed\" value=\"1\">",
+		question, detail, request->path, read_field(request, "id"));
+	add_back_field(answer, back);
+	add_text(answer, "<div class=\"row\"><button class=\"danger\">Delete</button>"
+		"<a class=\"button quiet\" href=\"%s\">Cancel</a></div></form>", back);
+	end_page(answer);
+	return FALSE;
+}
+
+
 static void create_web_invite(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	int uses = (int)g_ascii_strtoll(read_field(request, "uses"), NULL, 10);
 	g_free(create_invite(request->bouncer, admin, uses == 0 ? 1 : uses));
-	redirect(answer, "/#invites");
+	return_to_list(answer, request, "/invites?", NULL);
 }
 
 
 static void delete_web_invite(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	delete_invite(request->bouncer->database, read_field(request, "token"));
-	redirect(answer, "/#invites");
-}
-
-
-/* Notices a change leaves on the home page it returns to, named in its address so a reload repeats nothing */
-static const struct {
-	const char *key, *text;
-} NOTICES[] = {
-	{"password", "Your password changed."},
-	{"account-password", "The password changed."},
-	{"admin", "The admin rights changed."},
-	{"removed", "The account was deleted."},
-	{"pictures", "The pictures were deleted."},
-	{"picture", "The picture was deleted."},
-};
-
-
-static const char *find_notice(WebRequest *request) {
-	const char *key = request->query ? g_hash_table_lookup(request->query, "notice") : NULL;
-	for (guint index = 0; key && index < G_N_ELEMENTS(NOTICES); index++)
-		if (g_str_equal(key, NOTICES[index].key))
-			return NOTICES[index].text;
-	return NULL;
+	return_to_list(answer, request, "/invites?", NULL);
 }
 
 
@@ -546,20 +735,6 @@ static void change_own_password(WebAnswer *answer, WebRequest *request, BouncerU
 }
 
 
-/* Deleting asks first on a page of its own, whose button sends the same request again marked as confirmed */
-static gboolean is_confirmed(WebAnswer *answer, WebRequest *request, const char *question, const char *detail) {
-	if (g_str_equal(read_field(request, "confirmed"), "1"))
-		return TRUE;
-	start_page(answer, question);
-	add_text(answer, "<h1>%s</h1><p>%s</p><form method=\"post\" action=\"%s\">"
-		"<input type=\"hidden\" name=\"id\" value=\"%s\"><input type=\"hidden\" name=\"confirmed\" value=\"1\">"
-		"<div class=\"row\"><button class=\"danger\">Delete</button><a class=\"button quiet\" href=\"/\">Cancel</a>"
-		"</div></form>", question, detail, request->path, read_field(request, "id"));
-	end_page(answer);
-	return FALSE;
-}
-
-
 static BouncerUser *find_chosen_user(WebRequest *request) {
 	return find_user(request->bouncer, g_ascii_strtoll(read_field(request, "id"), NULL, 10));
 }
@@ -569,27 +744,26 @@ static void change_admin(WebAnswer *answer, WebRequest *request, BouncerUser *ad
 	BouncerUser *account = find_chosen_user(request);
 	if (account && account != admin)
 		set_user_admin(account, g_str_equal(read_field(request, "admin"), "1"));
-	redirect(answer, account && account != admin ? "/?notice=admin#accounts" : "/#accounts");
+	return_to_list(answer, request, "/accounts?", account && account != admin ? "admin" : NULL);
 }
 
 
 static void change_account_password(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	BouncerUser *account = find_chosen_user(request);
 	const char *password = read_field(request, "password");
-	const char *problem = find_password_problem(password, password);
-	if (!account || problem) {
-		show_home(answer, request, admin, problem);
+	if (!account || find_password_problem(password, password)) {
+		return_to_list(answer, request, "/accounts?", account ? "short" : NULL);
 		return;
 	}
 	set_user_password(account, password);
-	redirect(answer, "/?notice=account-password#accounts");
+	return_to_list(answer, request, "/accounts?", "account-password");
 }
 
 
 static void delete_account_pictures(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	BouncerUser *account = find_chosen_user(request);
 	if (!account) {
-		redirect(answer, "/#accounts");
+		return_to_list(answer, request, "/accounts?", NULL);
 		return;
 	}
 	g_autofree char *question = g_strdup_printf("Delete the pictures of %s?", account->name);
@@ -597,14 +771,14 @@ static void delete_account_pictures(WebAnswer *answer, WebRequest *request, Boun
 		"upload another."))
 		return;
 	remove_user_avatars(request->bouncer, account->id);
-	redirect(answer, "/?notice=pictures#accounts");
+	return_to_list(answer, request, "/accounts?", "pictures");
 }
 
 
 static void delete_account(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	BouncerUser *account = find_chosen_user(request);
 	if (!account || account == admin) {
-		redirect(answer, "/#accounts");
+		return_to_list(answer, request, "/accounts?", NULL);
 		return;
 	}
 	g_autofree char *question = g_strdup_printf("Delete %s?", account->name);
@@ -612,13 +786,13 @@ static void delete_account(WebAnswer *answer, WebRequest *request, BouncerUser *
 		"deleted for good."))
 		return;
 	remove_user(account);
-	redirect(answer, "/?notice=removed#accounts");
+	return_to_list(answer, request, "/accounts?", "removed");
 }
 
 
 static void delete_picture(WebAnswer *answer, WebRequest *request, BouncerUser *admin) {
 	remove_avatar(request->bouncer, read_field(request, "name"));
-	redirect(answer, "/?notice=picture#pictures");
+	return_to_list(answer, request, "/pictures?", "picture");
 }
 
 
@@ -629,7 +803,7 @@ static void delete_all_pictures(WebAnswer *answer, WebRequest *request, BouncerU
 	g_autoptr(GPtrArray) pictures = list_avatars(request->bouncer);
 	for (guint index = 0; index < pictures->len; index++)
 		remove_avatar(request->bouncer, ((AvatarFile *)g_ptr_array_index(pictures, index))->name);
-	redirect(answer, "/?notice=pictures#pictures");
+	return_to_list(answer, request, "/pictures?", "pictures");
 }
 
 
@@ -638,7 +812,7 @@ static const struct {
 	const char *path;
 	void (*act)(WebAnswer *answer, WebRequest *request, BouncerUser *admin);
 } ADMIN_ACTIONS[] = {
-	{"/invites", create_web_invite},
+	{"/invites/create", create_web_invite},
 	{"/invites/delete", delete_web_invite},
 	{"/accounts/admin", change_admin},
 	{"/accounts/password", change_account_password},
@@ -649,17 +823,33 @@ static const struct {
 };
 
 
-static gboolean run_admin_action(WebAnswer *answer, WebRequest *request, BouncerUser *user) {
-	for (guint index = 0; index < G_N_ELEMENTS(ADMIN_ACTIONS); index++) {
-		if (!g_str_equal(request->path, ADMIN_ACTIONS[index].path))
-			continue;
-		if (user && user->is_admin)
-			ADMIN_ACTIONS[index].act(answer, request, user);
-		else
-			redirect(answer, "/");
-		return TRUE;
-	}
-	return FALSE;
+/* The lists only admins may see, by address */
+static const struct {
+	const char *path;
+	void (*act)(WebAnswer *answer, WebRequest *request, BouncerUser *admin);
+} ADMIN_PAGES[] = {
+	{"/accounts", show_accounts},
+	{"/invites", show_invites},
+	{"/pictures", show_pictures},
+};
+
+
+/* Finds what the address names, for admins only, and sends anyone else home */
+static gboolean run_admin_action(WebAnswer *answer, WebRequest *request, BouncerUser *user, gboolean is_post) {
+	void (*act)(WebAnswer *answer, WebRequest *request, BouncerUser *admin) = NULL;
+	for (guint index = 0; is_post && index < G_N_ELEMENTS(ADMIN_ACTIONS); index++)
+		if (g_str_equal(request->path, ADMIN_ACTIONS[index].path))
+			act = ADMIN_ACTIONS[index].act;
+	for (guint index = 0; !is_post && index < G_N_ELEMENTS(ADMIN_PAGES); index++)
+		if (g_str_equal(request->path, ADMIN_PAGES[index].path))
+			act = ADMIN_PAGES[index].act;
+	if (!act)
+		return FALSE;
+	if (user && user->is_admin)
+		act(answer, request, user);
+	else
+		redirect(answer, "/");
+	return TRUE;
 }
 
 
@@ -777,11 +967,11 @@ static void route_request(WebAnswer *answer, WebRequest *request) {
 		sign_out(answer, request);
 	} else if (g_str_equal(path, "/password") && is_post && user) {
 		change_own_password(answer, request, user);
-	} else if (is_post && run_admin_action(answer, request, user)) {
+	} else if (run_admin_action(answer, request, user, is_post)) {
 		return;
 	} else if (g_str_equal(path, "/")) {
 		if (user)
-			show_home(answer, request, user, find_notice(request));
+			show_home(answer, request, user, NULL);
 		else
 			show_sign_in(answer, request, NULL);
 	} else {
