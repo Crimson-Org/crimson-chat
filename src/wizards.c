@@ -2,6 +2,7 @@
 
 #include "../lang/en.h"
 #include "dialogs.h"
+#include "images.h"
 #include "room-picker.h"
 #include "wizards.h"
 
@@ -17,13 +18,14 @@
 
 /* Well known networks with broad IRCv3 support, from the ircv3.net network table, all reached over TLS */
 static const struct {
-	const char *name, *host, *about;
+	const char *name, *host, *about, *picture;
 } KNOWN_NETWORKS[] = {
-	{"Libera.Chat", "irc.libera.chat", TEXT_LIBERA_ABOUT},
-	{"Ergo", "irc.ergo.chat", TEXT_ERGO_ABOUT},
-	{"hackint", "irc.hackint.org", TEXT_HACKINT_ABOUT},
-	{"tilde.chat", "irc.tilde.chat", TEXT_TILDE_ABOUT},
-	{"Snoonet", "irc.snoonet.org", TEXT_SNOONET_ABOUT},
+	{CRIMSON_SERVER_NAME, CRIMSON_SERVER_HOST, TEXT_CRIMSON_ABOUT, CRIMSON_SERVER_PICTURE},
+	{"Libera.Chat", "irc.libera.chat", TEXT_LIBERA_ABOUT, NULL},
+	{"Ergo", "irc.ergo.chat", TEXT_ERGO_ABOUT, NULL},
+	{"hackint", "irc.hackint.org", TEXT_HACKINT_ABOUT, NULL},
+	{"tilde.chat", "irc.tilde.chat", TEXT_TILDE_ABOUT, NULL},
+	{"Snoonet", "irc.snoonet.org", TEXT_SNOONET_ABOUT, NULL},
 };
 
 /* The answers a guide has collected so far */
@@ -451,7 +453,7 @@ static void pick_network(GtkListBox *list, GtkListBoxRow *row, Guide *guide) {
 }
 
 
-static GtkWidget *create_network_row(const char *name, const char *about, gboolean is_custom) {
+static GtkWidget *create_network_row(const char *name, const char *about, const char *picture, gboolean is_custom) {
 	GtkWidget *row = adw_action_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), name);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), about);
@@ -460,6 +462,8 @@ static GtkWidget *create_network_row(const char *name, const char *about, gboole
 		: adw_avatar_new(NETWORK_AVATAR_SIZE, name, TRUE);
 	if (is_custom)
 		gtk_widget_set_size_request(avatar, NETWORK_AVATAR_SIZE, NETWORK_AVATAR_SIZE);
+	else if (picture)
+		show_avatar_image(ADW_AVATAR(avatar), picture);
 	adw_action_row_add_prefix(ADW_ACTION_ROW(row), avatar);
 	adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name("go-next-symbolic"));
 	return row;
@@ -472,8 +476,8 @@ void show_server_guide(Window *window) {
 	GtkWidget *list = create_boxed_list();
 	for (guint index = 0; index < G_N_ELEMENTS(KNOWN_NETWORKS); index++)
 		gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(KNOWN_NETWORKS[index].name,
-			KNOWN_NETWORKS[index].about, FALSE));
-	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, TRUE));
+			KNOWN_NETWORKS[index].about, KNOWN_NETWORKS[index].picture, FALSE));
+	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, NULL, TRUE));
 	g_signal_connect(list, "row-activated", G_CALLBACK(pick_network), guide);
 	adw_navigation_view_push(guide->pages, create_step(TEXT_PICK_NETWORK_TITLE, NULL,
 		"crimson-chats-symbolic", list, NULL, guide->bouncer ? TEXT_HELP_PICK_ON_BOUNCER : TEXT_HELP_PICK));

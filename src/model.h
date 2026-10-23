@@ -90,6 +90,11 @@ struct _CrimsonRoom {
 	gint64 new_reaction_time;
 };
 
+/* The Crimson project's own server, suggested first and shown with the app's icon */
+#define CRIMSON_SERVER_NAME "Crimson"
+#define CRIMSON_SERVER_HOST "chat.skenliv.se"
+#define CRIMSON_SERVER_PICTURE "icon:io.github.CrimsonOrg.CrimsonChat"
+
 #define CRIMSON_TYPE_NETWORK (crimson_network_get_type())
 G_DECLARE_FINAL_TYPE(CrimsonNetwork, crimson_network, CRIMSON, NETWORK, GObject)
 

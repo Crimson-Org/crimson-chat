@@ -2,6 +2,8 @@
 
 #include <adwaita.h>
 
+/* An address that names an icon the app ships instead of a picture on the web */
+#define ICON_PICTURE_PREFIX "icon:"
 /* Loads a picture from the web once and shares it, so each avatar or preview downloads a single time */
 void show_avatar_image(AdwAvatar *avatar, const char *url);
 typedef void (*ImageReady)(GObject *owner);

@@ -161,6 +161,16 @@ void show_avatar_image(AdwAvatar *avatar, const char *url) {
 		return;
 	adw_avatar_set_custom_image(avatar, NULL);
 	g_object_set_data(G_OBJECT(avatar), "image-url", NULL);
+	/* An icon the app ships, drawn from the icon theme so it stays sharp at every size */
+	if (url && g_str_has_prefix(url, ICON_PICTURE_PREFIX)) {
+		GtkIconTheme *theme = gtk_icon_theme_get_for_display(gtk_widget_get_display(GTK_WIDGET(avatar)));
+		int size = adw_avatar_get_size(avatar);
+		g_autoptr(GtkIconPaintable) icon = gtk_icon_theme_lookup_icon(theme, url + strlen(ICON_PICTURE_PREFIX), NULL,
+			size, gtk_widget_get_scale_factor(GTK_WIDGET(avatar)), GTK_TEXT_DIR_NONE, 0);
+		adw_avatar_set_custom_image(avatar, GDK_PAINTABLE(icon));
+		g_object_set_data_full(G_OBJECT(avatar), "image-url", g_strdup(url), g_free);
+		return;
+	}
 	if (is_secure_link(url))
 		request_image(GTK_WIDGET(avatar), url);
 }

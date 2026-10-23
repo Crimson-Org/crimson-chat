@@ -131,6 +131,7 @@
 
 /* Guides for adding a server or a bouncer */
 #define TEXT_PICK_NETWORK_TITLE "Pick a Server"
+#define TEXT_CRIMSON_ABOUT "The Crimson community"
 #define TEXT_LIBERA_ABOUT "Open source projects"
 #define TEXT_ERGO_ABOUT "History and reactions"
 #define TEXT_HACKINT_ABOUT "Hackers and makers"

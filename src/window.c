@@ -594,6 +594,23 @@ GtkWidget *create_main_menu_button(Window *window) {
 }
 
 
+/* Right-clicking the rail beside its servers offers to add another */
+static void open_rail_space_menu(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
+	GtkWidget *list = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
+	if (gtk_list_box_get_row_at_y(GTK_LIST_BOX(list), (int)y))
+		return;
+	g_autoptr(GMenu) menu = g_menu_new();
+	g_menu_append(menu, TEXT_ADD_SERVER, "app.add-server");
+	GtkWidget *popover = gtk_popover_menu_new_from_model(G_MENU_MODEL(menu));
+	gtk_widget_set_parent(popover, list);
+	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &(GdkRectangle){(int)x, (int)y, 1, 1});
+	gtk_widget_set_halign(popover, GTK_ALIGN_START);
+	g_signal_connect(popover, "closed", G_CALLBACK(forget_rail_menu), NULL);
+	gtk_popover_popup(GTK_POPOVER(popover));
+}
+
+
 static GtkWidget *create_rail(Window *window) {
 	GtkWidget *rail = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
 	gtk_widget_add_css_class(rail, "rail");
@@ -602,6 +619,12 @@ static GtkWidget *create_rail(Window *window) {
 	gtk_list_box_bind_model(GTK_LIST_BOX(window->rail_list), G_LIST_MODEL(window->chat->networks), create_rail_row,
 		window, NULL);
 	g_signal_connect(window->rail_list, "row-selected", G_CALLBACK(pick_rail_row), window);
+	/* The list fills the rail, so its empty space below the servers takes a right click too */
+	gtk_widget_set_vexpand(window->rail_list, TRUE);
+	GtkGesture *space_click = gtk_gesture_click_new();
+	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(space_click), GDK_BUTTON_SECONDARY);
+	g_signal_connect(space_click, "pressed", G_CALLBACK(open_rail_space_menu), window);
+	gtk_widget_add_controller(window->rail_list, GTK_EVENT_CONTROLLER(space_click));
 	GtkWidget *scroller = gtk_scrolled_window_new();
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), window->rail_list);

@@ -29,6 +29,7 @@ Crimson Chat looks and feels like a modern messenger, and its bouncer keeps your
 ### A messenger layout
 
 The first start welcomes you with a choice between a bouncer and a server, followed by a short guide for either.\
+The guide suggests Crimson's own server, chat.skenliv.se, first, followed by well known networks with good IRCv3 support.\
 Once a server connects, it lists its rooms busiest first, so you can tick several and join them at once.\
 Each server's rooms and private chats sit in one list, newest first, with rooms as rounded squares and people as circles.\
 A rail of servers appears down the left only when you use more than one.\

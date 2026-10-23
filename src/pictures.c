@@ -56,9 +56,21 @@ const char *find_own_picture(CrimsonNetwork *network, PictureKind kind, const ch
 }
 
 
+/* The address a server is reached at, kept by the bouncer for its networks and in the account otherwise */
+static const char *read_network_host(CrimsonNetwork *network) {
+	if (network->bouncer_id)
+		return g_hash_table_lookup(network->attributes, "host");
+	return network->session ? network->session->record->host : NULL;
+}
+
+
 const char *pick_network_picture(CrimsonNetwork *network) {
 	const char *own = find_own_picture(network, PICTURE_SERVER, NULL);
-	return own ? own : network->icon_url;
+	if (own)
+		return own;
+	if (network->icon_url)
+		return network->icon_url;
+	return g_strcmp0(read_network_host(network), CRIMSON_SERVER_HOST) == 0 ? CRIMSON_SERVER_PICTURE : NULL;
 }
 
 
