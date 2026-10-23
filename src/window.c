@@ -315,12 +315,16 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	gtk_widget_set_halign(overlay, GTK_ALIGN_CENTER);
 	GtkWidget *avatar = adw_avatar_new(RAIL_AVATAR_SIZE, NULL, TRUE);
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), avatar);
+	/* The badge sits on a slightly larger circle in the rail's colour, which parts it from the picture */
 	GtkWidget *badge = gtk_label_new(NULL);
 	gtk_widget_add_css_class(badge, "unread-badge");
-	gtk_widget_add_css_class(badge, "rail-badge");
-	gtk_widget_set_halign(badge, GTK_ALIGN_END);
-	gtk_widget_set_valign(badge, GTK_ALIGN_END);
-	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), badge);
+	GtkWidget *ring = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(ring, "rail-badge");
+	gtk_widget_set_halign(ring, GTK_ALIGN_END);
+	gtk_widget_set_valign(ring, GTK_ALIGN_END);
+	gtk_box_append(GTK_BOX(ring), badge);
+	g_object_bind_property(badge, "visible", ring, "visible", G_BINDING_SYNC_CREATE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), ring);
 	GtkWidget *state = gtk_stack_new();
 	show_after_wait(state, G_CALLBACK(dim_rail_avatar), avatar);
 	GtkWidget *spinner = adw_spinner_new();

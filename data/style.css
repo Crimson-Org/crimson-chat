@@ -87,11 +87,12 @@ headerbar.title-bar {
 	background-color: var(--rail-bg);
 }
 
-/* A border in the rail's colour parts the badge from the picture, and the margin puts it where it sat on the bare
- * picture */
+/* The circle in the rail's colour under a server's badge, placed where the badge sat on the bare picture */
 .rail-badge {
 	margin: -3px -5px;
-	border: 2px solid var(--rail-bg);
+	padding: 2px;
+	border-radius: 9999px;
+	background-color: var(--rail-bg);
 }
 
 /* Unread counters, crimson when they hold a mention */
