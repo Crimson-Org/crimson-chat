@@ -10,6 +10,8 @@
 
 #define SETTINGS_WIDTH 480
 #define SETTINGS_HEIGHT 640
+/* An override ending within this many days names its weekday rather than its date */
+#define OVERRIDE_WEEKDAY_DAYS 6
 
 /* A switch bound to one field of the copy the dialog changes, kept only when the user saves */
 typedef struct {
@@ -23,9 +25,17 @@ static void change_switch(AdwSwitchRow *row, GParamSpec *spec, gboolean *value) 
 }
 
 
+/* Rows never wrap, even in the narrowest window, and cut off what does not fit instead */
+static void keep_row_on_one_line(GtkWidget *row) {
+	adw_action_row_set_title_lines(ADW_ACTION_ROW(row), 1);
+	adw_action_row_set_subtitle_lines(ADW_ACTION_ROW(row), 1);
+}
+
+
 static void add_switches(GtkWidget *group, const SwitchSetting *switches, guint count) {
 	for (guint index = 0; index < count; index++) {
 		GtkWidget *row = adw_switch_row_new();
+		keep_row_on_one_line(row);
 		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), switches[index].title);
 		if (switches[index].detail)
 			adw_action_row_set_subtitle(ADW_ACTION_ROW(row), switches[index].detail);
@@ -78,6 +88,7 @@ static void add_theme_row(GtkWidget *group, const char *title, char **theme, con
 			selected = index;
 	}
 	GtkWidget *row = adw_combo_row_new();
+	keep_row_on_one_line(row);
 	g_object_set_data_full(G_OBJECT(row), "theme-ids", ids, (GDestroyNotify)g_strfreev);
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
 	adw_combo_row_set_model(ADW_COMBO_ROW(row), G_LIST_MODEL(names));
@@ -117,6 +128,7 @@ static void fill_appearance(GtkWidget *stack, Settings *settings) {
 	static const char *const STYLES[] = {TEXT_FOLLOW_SYSTEM, TEXT_LIGHT, TEXT_DARK, NULL};
 	g_autoptr(GtkStringList) styles = gtk_string_list_new(STYLES);
 	GtkWidget *style = adw_combo_row_new();
+	keep_row_on_one_line(style);
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(style), TEXT_STYLE);
 	adw_combo_row_set_model(ADW_COMBO_ROW(style), G_LIST_MODEL(styles));
 	adw_combo_row_set_selected(ADW_COMBO_ROW(style), settings->style);
@@ -139,15 +151,18 @@ static const char *find_network_name(const char *key) {
 }
 
 
-/* Names the server and whether the override is on or off, with the moment it ends, on the day when not today */
+/* Names the server and whether the override is on or off, with the moment it ends, short enough for one line: the
+ * time alone today, the weekday within a week and the date after that */
 static char *describe_override(const NotificationOverride *override) {
 	const char *state = override->is_enabled ? TEXT_OVERRIDE_ON : TEXT_OVERRIDE_OFF;
 	g_autofree char *when = NULL;
 	if (override->until) {
 		g_autofree char *clock = format_clock_time(override->until);
-		g_autofree char *day = format_day_heading(override->until);
+		g_autoptr(GDateTime) end = g_date_time_new_from_unix_local(override->until / G_USEC_PER_SEC);
+		gboolean is_this_week = override->until - g_get_real_time() < OVERRIDE_WEEKDAY_DAYS * G_TIME_SPAN_DAY;
+		g_autofree char *day = g_date_time_format(end, is_this_week ? "%a" : "%e %b");
 		when = is_same_day(override->until, g_get_real_time()) ? g_steal_pointer(&clock)
-			: g_strdup_printf("%s %s", day, clock);
+			: g_strdup_printf("%s %s", g_strstrip(day), clock);
 	}
 	g_autofree char *status = when ? g_strdup_printf(TEXT_OVERRIDE_UNTIL, state, when) : g_strdup(state);
 	return g_strdup_printf(TEXT_OVERRIDE_ROOM, find_network_name(override->network_key), status);
@@ -176,6 +191,7 @@ static void add_overrides(GtkWidget *page, Settings *settings) {
 	for (guint index = 0; index < settings->notification_overrides->len; index++) {
 		NotificationOverride *override = g_ptr_array_index(settings->notification_overrides, index);
 		GtkWidget *row = adw_action_row_new();
+		keep_row_on_one_line(row);
 		adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
 		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), override->room_name);
 		g_autofree char *description = describe_override(override);
@@ -184,9 +200,9 @@ static void add_overrides(GtkWidget *page, Settings *settings) {
 		GtkWidget *remove = gtk_button_new_from_icon_name("edit-delete-symbolic");
 		gtk_widget_set_valign(remove, GTK_ALIGN_CENTER);
 		gtk_widget_add_css_class(remove, "flat");
-		gtk_widget_set_tooltip_text(remove, TEXT_DEFAULT_NOTIFICATIONS);
+		gtk_widget_set_tooltip_text(remove, TEXT_RESTORE_NOTIFICATIONS);
 		gtk_accessible_update_property(GTK_ACCESSIBLE(remove), GTK_ACCESSIBLE_PROPERTY_LABEL,
-			TEXT_DEFAULT_NOTIFICATIONS, -1);
+			TEXT_RESTORE_NOTIFICATIONS, -1);
 		g_signal_connect(remove, "clicked", G_CALLBACK(remove_override_row), row);
 		adw_action_row_add_suffix(ADW_ACTION_ROW(row), remove);
 		adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);

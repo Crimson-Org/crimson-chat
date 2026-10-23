@@ -257,6 +257,24 @@ static GtkWidget *create_notifications_page(GtkWidget *popover, const char *titl
 }
 
 
+/* A room set apart from the defaults only offers to restore them, while any other offers the submenu that switches
+ * its notifications the other way */
+static void add_notifications_item(GtkWidget *items, GtkWidget *pages, GtkWidget *popover, CrimsonRoom *room) {
+	if (find_notification_override(get_settings(), room->network->key, room->name)) {
+		GtkWidget *restore = add_menu_item(items, popover, TEXT_RESTORE_NOTIFICATIONS, "plain-item");
+		g_signal_connect(restore, "clicked", G_CALLBACK(use_default_notifications), popover);
+		return;
+	}
+	gboolean enables = !is_room_notified(room);
+	g_object_set_data(G_OBJECT(popover), ENABLES_KEY, GINT_TO_POINTER(enables));
+	const char *title = enables ? TEXT_ENABLE_NOTIFICATIONS : TEXT_DISABLE_NOTIFICATIONS;
+	GtkWidget *notifications = create_menu_item(title, "plain-item", "go-next-symbolic", FALSE);
+	g_signal_connect(notifications, "clicked", G_CALLBACK(open_notifications_page), NULL);
+	gtk_box_append(GTK_BOX(items), notifications);
+	gtk_stack_add_named(GTK_STACK(pages), create_notifications_page(popover, title), "notifications");
+}
+
+
 /* Right-clicking a room or private chat offers its card or the person's profile first, then its notifications,
  * then leaving it */
 static void open_row_menu(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
@@ -280,17 +298,7 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 		GtkWidget *details = add_menu_item(items, popover, room->kind == ROOM_CHANNEL ? TEXT_ROOM_DETAILS
 			: TEXT_VIEW_PROFILE, "plain-item");
 		set_room_action(details, "win.chat-details", room);
-		gboolean enables = !is_room_notified(room);
-		g_object_set_data(G_OBJECT(popover), ENABLES_KEY, GINT_TO_POINTER(enables));
-		const char *title = enables ? TEXT_ENABLE_NOTIFICATIONS : TEXT_DISABLE_NOTIFICATIONS;
-		GtkWidget *notifications = create_menu_item(title, "plain-item", "go-next-symbolic", FALSE);
-		g_signal_connect(notifications, "clicked", G_CALLBACK(open_notifications_page), NULL);
-		gtk_box_append(GTK_BOX(items), notifications);
-		gtk_stack_add_named(GTK_STACK(pages), create_notifications_page(popover, title), "notifications");
-		if (find_notification_override(get_settings(), room->network->key, room->name)) {
-			GtkWidget *defaults = add_menu_item(items, popover, TEXT_DEFAULT_NOTIFICATIONS, "plain-item");
-			g_signal_connect(defaults, "clicked", G_CALLBACK(use_default_notifications), popover);
-		}
+		add_notifications_item(items, pages, popover, room);
 	}
 	/* Leaving cannot be undone from here, so the item is red */
 	GtkWidget *leave = add_menu_item(items, popover, is_server ? TEXT_HIDE : room->kind == ROOM_CHANNEL
