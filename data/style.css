@@ -742,17 +742,20 @@ headerbar.title-bar {
 	box-shadow: none;
 }
 
+/* The first and last members keep the same 6px gap from the list's ends as from its sides */
 .member-list {
 	background: none;
+	padding: 5px 0;
 }
 
 .member-list > row {
+	padding: 0;
 	border-radius: 10px;
 	margin: 1px 6px;
 }
 
 .member-row {
-	padding: 6px 8px;
+	padding: 3px 8px;
 	font-size: 17px;
 }
 
