@@ -696,7 +696,7 @@ headerbar.title-bar {
 }
 
 .emoji-button image {
-	-gtk-icon-size: 22px;
+	-gtk-icon-size: 32px;
 }
 
 /* The send button grows past its size and settles as it arrives, and shrinks quickly as it goes */
