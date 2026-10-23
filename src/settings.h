@@ -8,13 +8,13 @@ typedef enum {
 	STYLE_DARK,
 } Style;
 
-/* A room or private chat whose notifications are switched on or off apart from the defaults */
+/* A room or private chat whose notifications or badges are switched on or off apart from the defaults */
 typedef struct {
 	char *network_key, *room_name;
 	gboolean is_enabled;
 	/* The real time in microseconds when the override ends, or 0 for one that never does */
 	gint64 until;
-} NotificationOverride;
+} RoomOverride;
 
 /* The choices in Settings, kept in the user's config folder */
 typedef struct {
@@ -23,9 +23,10 @@ typedef struct {
 	char *light_theme, *dark_theme;
 	gboolean shows_events, shows_images, shows_typing, sends_typing, sends_read_markers;
 	gboolean notifies_mentions, notifies_private, notifies_room_messages, plays_sounds, closes_to_tray, uses_24_hours;
+	gboolean shows_mention_badges, shows_private_badges, shows_room_badges;
 	/* Comma separated words that count as a mention besides the user's own nick */
 	char *highlight_words;
-	GPtrArray *notification_overrides;
+	GPtrArray *notification_overrides, *badge_overrides;
 } Settings;
 
 Settings *get_settings(void);
@@ -37,8 +38,8 @@ Settings *copy_settings(const Settings *source);
 void free_settings(Settings *copy);
 void use_settings(const Settings *chosen);
 /* The override still in force for a room, or NULL once it has ended or there is none */
-const NotificationOverride *find_notification_override(const Settings *chosen, const char *network_key,
-	const char *room_name);
+const RoomOverride *find_room_override(GPtrArray *overrides, const char *network_key, const char *room_name);
 /* Overrides take effect and are saved at once, outside the Settings form */
-void set_notification_override(const char *network_key, const char *room_name, gboolean is_enabled, gint64 until);
-void clear_notification_override(const char *network_key, const char *room_name);
+void set_room_override(GPtrArray *overrides, const char *network_key, const char *room_name, gboolean is_enabled,
+	gint64 until);
+void clear_room_override(GPtrArray *overrides, const char *network_key, const char *room_name);

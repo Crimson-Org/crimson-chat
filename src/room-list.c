@@ -95,9 +95,10 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	g_autofree char *line = describe_room_preview(room);
 	gboolean shows_typing = is_room_typing(room) && get_settings()->shows_typing;
 	show_room_line(preview, line, shows_typing);
-	style_unread_badge(badge, room->unread_count, room->has_mention || room->new_reaction);
+	gboolean shows_badge = shows_room_badge(room);
+	style_unread_badge(badge, shows_badge ? room->unread_count : 0, room->has_mention || room->new_reaction);
 	/* An unseen reaction to the user's message shows as itself where no unread lines are counted */
-	if (room->new_reaction && !room->unread_count) {
+	if (shows_badge && room->new_reaction && !room->unread_count) {
 		gtk_label_set_text(GTK_LABEL(badge), room->new_reaction);
 		gtk_widget_set_visible(badge, TRUE);
 	}
@@ -182,7 +183,7 @@ static void set_room_action(GtkWidget *item, const char *action, CrimsonRoom *ro
 static void override_notifications(GtkWidget *popover, gint64 until) {
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(popover), ROOM_KEY);
 	gboolean enables = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(popover), ENABLES_KEY));
-	set_notification_override(room->network->key, room->name, enables, until);
+	set_room_override(get_settings()->notification_overrides, room->network->key, room->name, enables, until);
 	gtk_popover_popdown(GTK_POPOVER(popover));
 }
 
@@ -201,7 +202,7 @@ static void override_notifications_for_minutes(GtkWidget *source, GtkWidget *pop
 
 static void use_default_notifications(GtkButton *item, GtkWidget *popover) {
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(popover), ROOM_KEY);
-	clear_notification_override(room->network->key, room->name);
+	clear_room_override(get_settings()->notification_overrides, room->network->key, room->name);
 }
 
 
@@ -260,7 +261,7 @@ static GtkWidget *create_notifications_page(GtkWidget *popover, const char *titl
 /* A room set apart from the defaults only offers to restore them, while any other offers the submenu that switches
  * its notifications the other way */
 static void add_notifications_item(GtkWidget *items, GtkWidget *pages, GtkWidget *popover, CrimsonRoom *room) {
-	if (find_notification_override(get_settings(), room->network->key, room->name)) {
+	if (find_room_override(get_settings()->notification_overrides, room->network->key, room->name)) {
 		GtkWidget *restore = add_menu_item(items, popover, TEXT_RESTORE_NOTIFICATIONS, "plain-item");
 		g_signal_connect(restore, "clicked", G_CALLBACK(use_default_notifications), popover);
 		return;
@@ -272,6 +273,32 @@ static void add_notifications_item(GtkWidget *items, GtkWidget *pages, GtkWidget
 	g_signal_connect(notifications, "clicked", G_CALLBACK(open_notifications_page), NULL);
 	gtk_box_append(GTK_BOX(items), notifications);
 	gtk_stack_add_named(GTK_STACK(pages), create_notifications_page(popover, title), "notifications");
+}
+
+
+static void switch_badges(GtkButton *item, CrimsonRoom *room) {
+	set_room_override(get_settings()->badge_overrides, room->network->key, room->name, !is_room_badged(room), 0);
+	announce_room_change(room);
+	refresh_window_later(get_main_window());
+}
+
+
+static void use_default_badges(GtkButton *item, CrimsonRoom *room) {
+	clear_room_override(get_settings()->badge_overrides, room->network->key, room->name);
+	announce_room_change(room);
+	refresh_window_later(get_main_window());
+}
+
+
+/* Badges switch the other way at once, or back to the defaults for a room already set apart */
+static void add_badges_item(GtkWidget *items, GtkWidget *popover, CrimsonRoom *room) {
+	gboolean is_overridden = find_room_override(get_settings()->badge_overrides, room->network->key, room->name)
+		!= NULL;
+	const char *title = is_overridden ? TEXT_RESTORE_BADGES : is_room_badged(room) ? TEXT_DISABLE_BADGES
+		: TEXT_ENABLE_BADGES;
+	GtkWidget *badges = add_menu_item(items, popover, title, "plain-item");
+	g_object_set_data_full(G_OBJECT(badges), ROOM_KEY, g_object_ref(room), g_object_unref);
+	g_signal_connect(badges, "clicked", G_CALLBACK(is_overridden ? use_default_badges : switch_badges), room);
 }
 
 
@@ -299,6 +326,7 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 			: TEXT_VIEW_PROFILE, "plain-item");
 		set_room_action(details, "win.chat-details", room);
 		add_notifications_item(items, pages, popover, room);
+		add_badges_item(items, popover, room);
 	}
 	set_room_action(add_menu_item(items, popover, TEXT_MARK_READ, "plain-item"), "win.mark-read", room);
 	/* Leaving cannot be undone from here, so the item is red */

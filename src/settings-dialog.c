@@ -153,7 +153,7 @@ static const char *find_network_name(const char *key) {
 
 /* Names the server and whether the override is on or off, with the moment it ends, short enough for one line: the
  * time alone today, the weekday within a week and the date after that */
-static char *describe_override(const NotificationOverride *override) {
+static char *describe_override(const RoomOverride *override) {
 	const char *state = override->is_enabled ? TEXT_OVERRIDE_ON : TEXT_OVERRIDE_OFF;
 	g_autofree char *when = NULL;
 	if (override->until) {
@@ -169,27 +169,27 @@ static char *describe_override(const NotificationOverride *override) {
 }
 
 
-static void show_overrides_hint(GtkWidget *group, Settings *settings) {
-	gboolean is_empty = settings->notification_overrides->len == 0;
+static void show_overrides_hint(GtkWidget *group, GPtrArray *overrides) {
+	gboolean is_empty = overrides->len == 0;
 	adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), is_empty ? TEXT_OVERRIDES_EMPTY : NULL);
 }
 
 
 static void remove_override_row(GtkButton *button, GtkWidget *row) {
 	GtkWidget *group = gtk_widget_get_ancestor(row, ADW_TYPE_PREFERENCES_GROUP);
-	Settings *settings = g_object_get_data(G_OBJECT(group), "settings");
-	g_ptr_array_remove(settings->notification_overrides, g_object_get_data(G_OBJECT(row), "override"));
+	GPtrArray *overrides = g_object_get_data(G_OBJECT(group), "overrides");
+	g_ptr_array_remove(overrides, g_object_get_data(G_OBJECT(row), "override"));
 	adw_preferences_group_remove(ADW_PREFERENCES_GROUP(group), row);
-	show_overrides_hint(group, settings);
+	show_overrides_hint(group, overrides);
 }
 
 
 /* Each room or chat set apart from the defaults, which a button returns to them once the form is saved */
-static void add_overrides(GtkWidget *page, Settings *settings) {
+static void add_overrides(GtkWidget *page, GPtrArray *overrides, const char *restore) {
 	GtkWidget *group = add_group(page, TEXT_OVERRIDES_GROUP);
-	g_object_set_data(G_OBJECT(group), "settings", settings);
-	for (guint index = 0; index < settings->notification_overrides->len; index++) {
-		NotificationOverride *override = g_ptr_array_index(settings->notification_overrides, index);
+	g_object_set_data(G_OBJECT(group), "overrides", overrides);
+	for (guint index = 0; index < overrides->len; index++) {
+		RoomOverride *override = g_ptr_array_index(overrides, index);
 		GtkWidget *row = adw_action_row_new();
 		keep_row_on_one_line(row);
 		adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
@@ -200,14 +200,13 @@ static void add_overrides(GtkWidget *page, Settings *settings) {
 		GtkWidget *remove = gtk_button_new_from_icon_name("edit-delete-symbolic");
 		gtk_widget_set_valign(remove, GTK_ALIGN_CENTER);
 		gtk_widget_add_css_class(remove, "flat");
-		gtk_widget_set_tooltip_text(remove, TEXT_RESTORE_NOTIFICATIONS);
-		gtk_accessible_update_property(GTK_ACCESSIBLE(remove), GTK_ACCESSIBLE_PROPERTY_LABEL,
-			TEXT_RESTORE_NOTIFICATIONS, -1);
+		gtk_widget_set_tooltip_text(remove, restore);
+		gtk_accessible_update_property(GTK_ACCESSIBLE(remove), GTK_ACCESSIBLE_PROPERTY_LABEL, restore, -1);
 		g_signal_connect(remove, "clicked", G_CALLBACK(remove_override_row), row);
 		adw_action_row_add_suffix(ADW_ACTION_ROW(row), remove);
 		adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), row);
 	}
-	show_overrides_hint(group, settings);
+	show_overrides_hint(group, overrides);
 }
 
 
@@ -230,7 +229,20 @@ static void fill_notifications(GtkWidget *stack, Settings *settings) {
 		{TEXT_PLAY_SOUNDS, NULL, &settings->plays_sounds},
 	};
 	add_switches(sound, SOUND, G_N_ELEMENTS(SOUND));
-	add_overrides(page, settings);
+	add_overrides(page, settings->notification_overrides, TEXT_RESTORE_NOTIFICATIONS);
+}
+
+
+static void fill_badges(GtkWidget *stack, Settings *settings) {
+	GtkWidget *page = add_page(stack, TEXT_BADGES, "mail-unread-symbolic");
+	GtkWidget *group = add_group(page, TEXT_BADGE_GROUP);
+	const SwitchSetting BADGES[] = {
+		{TEXT_NOTIFY_MENTIONS, TEXT_NOTIFY_MENTIONS_DETAIL, &settings->shows_mention_badges},
+		{TEXT_NOTIFY_PRIVATE, NULL, &settings->shows_private_badges},
+		{TEXT_NOTIFY_ROOM_MESSAGES, NULL, &settings->shows_room_badges},
+	};
+	add_switches(group, BADGES, G_N_ELEMENTS(BADGES));
+	add_overrides(page, settings->badge_overrides, TEXT_RESTORE_BADGES);
 }
 
 
@@ -245,11 +257,27 @@ static void fill_privacy(GtkWidget *stack, Settings *settings) {
 }
 
 
+/* All rows in the room list draw again, since their badges and previews follow the settings */
+static void announce_every_room(Window *window) {
+	guint network_count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
+	for (guint network_index = 0; network_index < network_count; network_index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), network_index);
+		guint room_count = g_list_model_get_n_items(G_LIST_MODEL(network->rooms));
+		for (guint room_index = 0; room_index < room_count; room_index++) {
+			g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), room_index);
+			announce_room_change(room);
+		}
+	}
+}
+
+
 static void save_settings_form(GtkButton *button, AdwDialog *dialog) {
 	use_settings(g_object_get_data(G_OBJECT(dialog), "draft"));
 	Window *window = get_main_window();
-	if (window)
+	if (window) {
+		announce_every_room(window);
 		refresh_window_later(window);
+	}
 	adw_dialog_close(dialog);
 }
 
@@ -266,6 +294,7 @@ void show_settings(GtkWidget *parent) {
 	fill_general(stack, draft);
 	fill_appearance(stack, draft);
 	fill_notifications(stack, draft);
+	fill_badges(stack, draft);
 	fill_privacy(stack, draft);
 	GtkWidget *save = NULL;
 	GtkWidget *header = create_form_header(dialog, TEXT_SAVE, &save);

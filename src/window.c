@@ -5,6 +5,7 @@
 #include "common/startup.h"
 #include "dialogs.h"
 #include "images.h"
+#include "notifications.h"
 #include "profile.h"
 #include "register.h"
 #include "room-picker.h"
@@ -186,7 +187,7 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	g_autofree char *icon = fill_image_size(pick_network_picture(network), RAIL_AVATAR_SIZE * 2);
 	show_avatar_image(avatar, icon);
 	gboolean has_mention = FALSE;
-	guint unread = count_network_unread(network, &has_mention);
+	guint unread = count_network_badges(network, &has_mention);
 	style_unread_badge(badge, unread, has_mention);
 	/* The picture dims along with the spinner, once the wait has lasted, and a warning shows at once */
 	GtkWidget *state_shown = g_object_get_data(G_OBJECT(row), "state");
@@ -544,7 +545,7 @@ static void refresh_tray_attention(Window *window) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	for (guint index = 0; index < count && !has_mention; index++) {
 		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
-		count_network_unread(network, &has_mention);
+		count_network_badges(network, &has_mention);
 	}
 	set_tray_attention(window->tray, has_mention);
 }

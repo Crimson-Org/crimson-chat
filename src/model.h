@@ -183,7 +183,6 @@ gboolean is_service_nick(const char *nick);
 CrimsonRoom *find_room(CrimsonNetwork *network, const char *name);
 CrimsonRoom *ensure_room(CrimsonNetwork *network, RoomKind kind, const char *name);
 void remove_room(CrimsonNetwork *network, CrimsonRoom *room);
-guint count_network_unread(CrimsonNetwork *network, gboolean *has_mention);
 /* Forgets the unseen reaction once the room is read, and says whether there was one */
 gboolean clear_new_reaction(CrimsonRoom *room);
 IrcState *get_network_state(CrimsonNetwork *network);

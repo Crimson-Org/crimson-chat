@@ -161,7 +161,6 @@ void connect_session(Session *session);
 const char *describe_account_name(Session *session);
 NetworkState read_account_state(Session *session);
 const char *read_account_error(Session *session);
-guint count_account_unread(Session *session, gboolean *has_mention);
 void trust_certificate(Session *session, const char *hash);
 void save_chat_accounts(Chat *chat);
 /* Saves the room list soon, so many changes in a row write the file once */

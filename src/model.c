@@ -428,22 +428,6 @@ void remove_room(CrimsonNetwork *network, CrimsonRoom *room) {
 }
 
 
-guint count_network_unread(CrimsonNetwork *network, gboolean *has_mention) {
-	guint total = 0;
-	*has_mention = FALSE;
-	guint count = g_list_model_get_n_items(G_LIST_MODEL(network->rooms));
-	for (guint index = 0; index < count; index++) {
-		g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
-		/* What the server says stays out of the list, so it adds nothing to the badges either */
-		if (room->kind == ROOM_SERVER)
-			continue;
-		total += room->unread_count;
-		*has_mention |= room->has_mention || room->new_reaction;
-	}
-	return total;
-}
-
-
 gboolean clear_new_reaction(CrimsonRoom *room) {
 	if (!room->new_reaction)
 		return FALSE;

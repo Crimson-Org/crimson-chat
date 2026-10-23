@@ -659,18 +659,6 @@ const char *read_account_error(Session *session) {
 }
 
 
-guint count_account_unread(Session *session, gboolean *has_mention) {
-	guint total = 0;
-	*has_mention = FALSE;
-	for (guint index = 0; index < session->networks->len; index++) {
-		gboolean network_mention = FALSE;
-		total += count_network_unread(g_ptr_array_index(session->networks, index), &network_mention);
-		*has_mention |= network_mention;
-	}
-	return total;
-}
-
-
 void start_chat(Chat *chat) {
 	chat->has_started = TRUE;
 	g_autoptr(GPtrArray) records = load_accounts();
