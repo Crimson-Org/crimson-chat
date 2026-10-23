@@ -151,9 +151,10 @@ static CrimsonMessage *get_message_at(Conversation *conversation, guint position
 }
 
 
+/* The line needs something read above it, so a chat with no earlier activity shows none */
 static gboolean starts_unread(Conversation *conversation, CrimsonMessage *message, CrimsonMessage *previous) {
 	gint64 line = conversation->read_line;
-	return conversation->has_read_line && message->time > line && (!previous || previous->time <= line);
+	return conversation->has_read_line && previous && message->time > line && previous->time <= line;
 }
 
 

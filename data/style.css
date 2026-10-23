@@ -83,10 +83,11 @@ headerbar.title-bar {
 }
 
 /* Unread counters, crimson when they hold a mention */
+/* A circle that fits two digits, with more shown as 99+ */
 .unread-badge {
-	min-width: 24px;
-	min-height: 24px;
-	padding: 0 6px;
+	min-width: 26px;
+	min-height: 26px;
+	padding: 0 3px;
 	border-radius: 9999px;
 	background-color: alpha(currentColor, 0.28);
 	color: #ffffff;
@@ -142,8 +143,11 @@ headerbar.title-bar {
 	background-color: alpha(currentColor, 0.16);
 }
 
+/* Every chat row keeps one height, taller than its two lines with a badge or reaction in them, so nothing it shows
+ * changes its shape */
 .room-row {
 	padding: 9px 10px;
+	min-height: 54px;
 }
 
 .room-name {
