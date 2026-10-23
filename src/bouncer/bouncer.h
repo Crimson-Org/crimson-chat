@@ -94,6 +94,10 @@ Bouncer *create_bouncer(Database *database, GTlsCertificate *certificate, const 
 BouncerUser *register_user(Bouncer *bouncer, const char *name, const char *password);
 gboolean is_valid_user_name(const char *name);
 BouncerUser *find_user(Bouncer *bouncer, gint64 id);
+void set_user_admin(BouncerUser *user, gboolean is_admin);
+void set_user_password(BouncerUser *user, const char *password);
+/* Disconnects the user and deletes their account, networks, history and pictures */
+void remove_user(BouncerUser *user);
 gboolean listen_bouncer(Bouncer *bouncer, const char *irc_address, const char *web_address, GError **error);
 BouncerUser *log_in_user(Bouncer *bouncer, const char *name, const char *password);
 Upstream *find_upstream(BouncerUser *user, const char *network_id);
@@ -126,6 +130,17 @@ char *store_avatar(Bouncer *bouncer, BouncerUser *user, Upstream *upstream, cons
 	const char *content_type, const char *base_url, GError **error);
 /* A kept picture by its name, or NULL */
 GBytes *load_avatar(Bouncer *bouncer, const char *name, const char **content_type);
+/* A kept picture's file name, the user it belongs to and its size */
+typedef struct {
+	char *name;
+	gint64 user_id;
+	goffset bytes;
+} AvatarFile;
+void free_avatar_file(AvatarFile *file);
+/* Every kept picture, grouped by the user it belongs to */
+GPtrArray *list_avatars(Bouncer *bouncer);
+gboolean remove_avatar(Bouncer *bouncer, const char *name);
+void remove_user_avatars(Bouncer *bouncer, gint64 user_id);
 /* Creates an invite and returns its token */
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses);
 void close_downstream(Downstream *downstream);

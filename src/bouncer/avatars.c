@@ -117,12 +117,17 @@ char *store_avatar(Bouncer *bouncer, BouncerUser *user, Upstream *upstream, cons
 }
 
 
-GBytes *load_avatar(Bouncer *bouncer, const char *name, const char **content_type) {
-	/* Only names the bouncer gave out, so a request can never reach outside the folder */
+/* Only names the bouncer gave out, so a request can never reach outside the folder */
+static gboolean is_avatar_name(const char *name) {
 	for (const char *letter = name; *letter; letter++)
 		if (!g_ascii_isalnum(*letter) && *letter != '-' && *letter != '.')
-			return NULL;
-	if (!*name || name[0] == '.' || strstr(name, ".."))
+			return FALSE;
+	return *name && name[0] != '.' && !strstr(name, "..");
+}
+
+
+GBytes *load_avatar(Bouncer *bouncer, const char *name, const char **content_type) {
+	if (!is_avatar_name(name))
 		return NULL;
 	g_autofree char *path = g_build_filename(bouncer->avatars.folder, name, NULL);
 	char *contents = NULL;
@@ -131,4 +136,54 @@ GBytes *load_avatar(Bouncer *bouncer, const char *name, const char **content_typ
 		return NULL;
 	*content_type = g_str_has_suffix(name, ".jpg") ? "image/jpeg" : "image/png";
 	return g_bytes_new_take(contents, length);
+}
+
+
+void free_avatar_file(AvatarFile *file) {
+	g_free(file->name);
+	g_free(file);
+}
+
+
+static int compare_avatar_names(gconstpointer first, gconstpointer second) {
+	return g_strcmp0((*(AvatarFile *const *)first)->name, (*(AvatarFile *const *)second)->name);
+}
+
+
+GPtrArray *list_avatars(Bouncer *bouncer) {
+	GPtrArray *files = g_ptr_array_new_with_free_func((GDestroyNotify)free_avatar_file);
+	g_autoptr(GDir) directory = g_dir_open(bouncer->avatars.folder, 0, NULL);
+	const char *name;
+	while (directory && (name = g_dir_read_name(directory))) {
+		if (!is_avatar_name(name))
+			continue;
+		g_autofree char *path = g_build_filename(bouncer->avatars.folder, name, NULL);
+		GStatBuf details;
+		AvatarFile *file = g_new0(AvatarFile, 1);
+		file->name = g_strdup(name);
+		/* Names start with the id of the user the picture belongs to */
+		file->user_id = g_ascii_strtoll(name, NULL, 10);
+		file->bytes = g_stat(path, &details) == 0 ? details.st_size : 0;
+		g_ptr_array_add(files, file);
+	}
+	g_ptr_array_sort(files, compare_avatar_names);
+	return files;
+}
+
+
+gboolean remove_avatar(Bouncer *bouncer, const char *name) {
+	if (!is_avatar_name(name))
+		return FALSE;
+	g_autofree char *path = g_build_filename(bouncer->avatars.folder, name, NULL);
+	return g_remove(path) == 0;
+}
+
+
+void remove_user_avatars(Bouncer *bouncer, gint64 user_id) {
+	g_autoptr(GPtrArray) files = list_avatars(bouncer);
+	for (guint index = 0; index < files->len; index++) {
+		AvatarFile *file = g_ptr_array_index(files, index);
+		if (file->user_id == user_id)
+			remove_avatar(bouncer, file->name);
+	}
 }

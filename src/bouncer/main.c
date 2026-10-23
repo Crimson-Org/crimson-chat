@@ -26,7 +26,7 @@
 #define AVATAR_FOLDER "avatars"
 
 typedef struct {
-	char *listen, *web, *new_admin;
+	char *listen, *web;
 	gboolean changes_password, shows_version;
 } Options;
 
@@ -61,8 +61,6 @@ static gboolean read_options(int *argument_count, char ***arguments, Options *op
 		{"web", 'w', 0, G_OPTION_ARG_STRING, &options->web, "Serve the website on a port, or an address and port",
 			"ADDRESS"},
 		{"password", 'p', 0, G_OPTION_ARG_NONE, &options->changes_password, "Change a user's password", NULL},
-		{"admin", 'a', 0, G_OPTION_ARG_STRING, &options->new_admin, "Make a user an admin, who can invite people",
-			"NAME"},
 		{"version", 'v', 0, G_OPTION_ARG_NONE, &options->shows_version, "Print the version", NULL},
 		G_OPTION_ENTRY_NULL,
 	};
@@ -112,17 +110,6 @@ static gboolean change_password(Database *database) {
 	memset(password, 0, strlen(password));
 	if (hash && change_user_password(database, name, hash)) {
 		g_print("The password of %s changed.\n", name);
-		return TRUE;
-	}
-	g_printerr("There is no user called %s.\n", name);
-	return FALSE;
-}
-
-
-/* A running bouncer reads its users when it starts, so it takes the new admin once restarted */
-static gboolean make_admin(Database *database, const char *name) {
-	if (make_user_admin(database, name)) {
-		g_print("%s is now an admin, from the next start of the bouncer.\n", name);
 		return TRUE;
 	}
 	g_printerr("There is no user called %s.\n", name);
@@ -216,8 +203,6 @@ static int run_bouncer(Options *options) {
 	g_autoptr(GPtrArray) users = load_users(database);
 	if (options->changes_password)
 		return change_password(database) ? EXIT_SUCCESS : FAILURE_STATUS;
-	if (options->new_admin)
-		return make_admin(database, options->new_admin) ? EXIT_SUCCESS : FAILURE_STATUS;
 	if (!users->len && !create_admin(database))
 		return FAILURE_STATUS;
 	g_autoptr(GKeyFile) config = load_config();
@@ -261,6 +246,5 @@ int main(int argument_count, char **arguments) {
 	int status = run_bouncer(&options);
 	g_free(options.listen);
 	g_free(options.web);
-	g_free(options.new_admin);
 	return status;
 }

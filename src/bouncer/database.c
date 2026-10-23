@@ -138,11 +138,26 @@ gboolean change_user_password(Database *database, const char *name, const char *
 }
 
 
-gboolean make_user_admin(Database *database, const char *name) {
-	sqlite3_stmt *statement = prepare(database, "UPDATE users SET is_admin = 1 WHERE name = ?");
-	bind_text(statement, 1, name);
+void save_user_admin(Database *database, gint64 user_id, gboolean is_admin) {
+	sqlite3_stmt *statement = prepare(database, "UPDATE users SET is_admin = ? WHERE id = ?");
+	sqlite3_bind_int(statement, 1, is_admin);
+	sqlite3_bind_int64(statement, 2, user_id);
 	finish_change(database, statement);
-	return sqlite3_changes(database->connection) > 0;
+}
+
+
+void save_user_password(Database *database, gint64 user_id, const char *password_hash) {
+	sqlite3_stmt *statement = prepare(database, "UPDATE users SET password = ? WHERE id = ?");
+	bind_text(statement, 1, password_hash);
+	sqlite3_bind_int64(statement, 2, user_id);
+	finish_change(database, statement);
+}
+
+
+void delete_user(Database *database, gint64 user_id) {
+	sqlite3_stmt *statement = prepare(database, "DELETE FROM users WHERE id = ?");
+	sqlite3_bind_int64(statement, 1, user_id);
+	finish_change(database, statement);
 }
 
 

@@ -173,6 +173,38 @@ BouncerUser *find_user(Bouncer *bouncer, gint64 id) {
 }
 
 
+void set_user_admin(BouncerUser *user, gboolean is_admin) {
+	user->is_admin = is_admin;
+	save_user_admin(user->bouncer->database, user->id, is_admin);
+	g_message("%s %s an admin", user->name, is_admin ? "is now" : "is no longer");
+}
+
+
+void set_user_password(BouncerUser *user, const char *password) {
+	g_free(user->password_hash);
+	user->password_hash = hash_password(password);
+	save_user_password(user->bouncer->database, user->id, user->password_hash);
+	g_message("The password of %s changed", user->name);
+}
+
+
+void remove_user(BouncerUser *user) {
+	Bouncer *bouncer = user->bouncer;
+	while (user->upstreams->len)
+		remove_upstream(g_ptr_array_index(user->upstreams, 0));
+	for (GList *item = bouncer->downstreams; item;) {
+		Downstream *downstream = item->data;
+		item = item->next;
+		if (downstream->user == user)
+			close_downstream(downstream);
+	}
+	remove_user_avatars(bouncer, user->id);
+	delete_user(bouncer->database, user->id);
+	g_message("%s was removed", user->name);
+	g_ptr_array_remove(bouncer->users, user);
+}
+
+
 BouncerUser *register_user(Bouncer *bouncer, const char *name, const char *password) {
 	if (!is_valid_user_name(name))
 		return NULL;
