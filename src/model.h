@@ -135,6 +135,9 @@ struct _CrimsonNetwork {
 	CrimsonRoom *server_room;
 	/* Attributes the bouncer reported, kept to fill the network editor */
 	GHashTable *attributes;
+	/* Avatar addresses of people and rooms by lowercase name as last seen, so their pictures show before the server
+	 * sends them again */
+	GHashTable *known_avatars;
 };
 
 #define CRIMSON_TYPE_ACCOUNT (crimson_account_get_type())

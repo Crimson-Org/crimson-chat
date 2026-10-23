@@ -10,6 +10,7 @@
 #define ACCOUNT_PREFIX "account "
 #define DEFAULT_PORT 6697
 #define CACHED_ROOMS_PER_NETWORK 200
+#define CACHED_AVATARS_PER_NETWORK 2000
 
 static GKeyFile *room_cache;
 
@@ -184,6 +185,12 @@ void load_room_cache(CrimsonNetwork *network) {
 		room->last_active = g_ascii_strtoll(fields[2], NULL, 10);
 		room->activity_checked = g_ascii_strtoll(fields[3], NULL, 10);
 	}
+	g_auto(GStrv) avatars = g_key_file_get_string_list(get_room_cache(), network->key, "avatars", NULL, NULL);
+	for (int index = 0; avatars && avatars[index]; index++) {
+		g_auto(GStrv) fields = g_strsplit(avatars[index], "\t", 2);
+		if (g_strv_length(fields) == 2)
+			g_hash_table_replace(network->known_avatars, g_strdup(fields[0]), g_strdup(fields[1]));
+	}
 }
 
 
@@ -233,6 +240,13 @@ void save_room_cache(GListModel *networks) {
 					room->activity, room->last_active, room->activity_checked));
 		}
 		g_key_file_set_boolean(file, network->key, "server-listed", network->server_room->is_listed);
+		g_autoptr(GPtrArray) avatars = g_ptr_array_new_with_free_func(g_free);
+		GHashTableIter iterator;
+		gpointer name, url;
+		g_hash_table_iter_init(&iterator, network->known_avatars);
+		while (avatars->len < CACHED_AVATARS_PER_NETWORK && g_hash_table_iter_next(&iterator, &name, &url))
+			g_ptr_array_add(avatars, g_strconcat(name, "\t", url, NULL));
+		g_key_file_set_string_list(file, network->key, "avatars", (const char *const *)avatars->pdata, avatars->len);
 		if (activity->len)
 			g_key_file_set_string_list(file, network->key, "activity", (const char *const *)activity->pdata,
 				activity->len);

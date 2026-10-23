@@ -796,15 +796,36 @@ static void deliver_rename(CrimsonNetwork *network, const IrcMessage *message) {
 }
 
 
+/* Keeps the avatar the server now gives a person or room for the next start, or forgets one it took away */
+static void remember_avatar(CrimsonNetwork *network, const char *target) {
+	IrcState *state = get_network_state(network);
+	if (!target || !state)
+		return;
+	IrcChannel *channel = is_irc_channel_name(state, target) ? find_irc_channel(state, target) : NULL;
+	IrcUser *user = channel ? NULL : find_irc_user(state, target);
+	GHashTable *metadata = channel ? channel->metadata : user ? user->metadata : NULL;
+	const char *url = metadata ? g_hash_table_lookup(metadata, "avatar") : NULL;
+	g_autofree char *lowered = g_utf8_strdown(target, -1);
+	if (g_strcmp0(url, g_hash_table_lookup(network->known_avatars, lowered)) == 0)
+		return;
+	if (url)
+		g_hash_table_replace(network->known_avatars, g_steal_pointer(&lowered), g_strdup(url));
+	else
+		g_hash_table_remove(network->known_avatars, lowered);
+	save_chat_cache_later(network->session->chat);
+}
+
+
 /* Replies name the target after the user's nick, and a removed key comes back as a key that is not set */
 static void deliver_metadata(CrimsonNetwork *network, const IrcMessage *message) {
 	gboolean is_reply = !g_str_equal(message->command, "METADATA");
 	const char *target = get_irc_parameter(message, is_reply ? 1 : 0);
+	IrcState *state = get_network_state(network);
+	remember_avatar(network, state && target && g_str_equal(target, "*") ? state->nick : target);
 	CrimsonRoom *room = find_room(network, target);
 	if (room)
 		announce_room_change(room);
 	/* The user's own details change how the profile and the network show them */
-	IrcState *state = get_network_state(network);
 	if (target && state && (g_str_equal(target, "*") || is_own_nick(state, target)))
 		announce_network_change(network);
 }

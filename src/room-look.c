@@ -17,7 +17,7 @@ static GPtrArray *typing_labels;
 static guint typing_source, typing_step;
 
 
-const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key) {
+static const char *find_state_metadata(CrimsonRoom *room, const char *nick, const char *key) {
 	IrcState *state = get_network_state(room->network);
 	if (!state)
 		return NULL;
@@ -29,6 +29,17 @@ const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key) 
 	}
 	IrcUser *user = nick ? find_irc_user(state, nick) : NULL;
 	return user ? g_hash_table_lookup(user->metadata, key) : NULL;
+}
+
+
+/* An avatar the server has not sent on this connection yet is the one seen last time */
+const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key) {
+	const char *value = find_state_metadata(room, nick, key);
+	const char *name = nick ? nick : room->kind != ROOM_SERVER ? room->name : NULL;
+	if (value || !name || !g_str_equal(key, "avatar"))
+		return value;
+	g_autofree char *lowered = g_utf8_strdown(name, -1);
+	return g_hash_table_lookup(room->network->known_avatars, lowered);
 }
 
 

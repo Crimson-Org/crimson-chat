@@ -358,6 +358,7 @@ static void finalize_network(GObject *object) {
 	g_object_unref(network->rooms);
 	g_clear_object(&network->server_room);
 	g_hash_table_unref(network->attributes);
+	g_hash_table_unref(network->known_avatars);
 	G_OBJECT_CLASS(crimson_network_parent_class)->finalize(object);
 }
 
@@ -371,6 +372,7 @@ static void crimson_network_class_init(CrimsonNetworkClass *class) {
 static void crimson_network_init(CrimsonNetwork *network) {
 	network->rooms = g_list_store_new(CRIMSON_TYPE_ROOM);
 	network->attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	network->known_avatars = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 }
 
 
