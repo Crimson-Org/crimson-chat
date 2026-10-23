@@ -822,10 +822,21 @@ headerbar.title-bar {
 	opacity: 1;
 }
 
-/* The sign on a picture only the user sees stays in view, since it tells who sees the picture */
-.picture-choice > .picture-badge.picture-local {
-	opacity: 1;
-	font-weight: bold;
+/* The sign on a picture only the user sees is a small warning dot that stays in view, since it tells who sees the
+ * picture */
+.picture-choice > .picture-local > button {
+	min-width: 22px;
+	min-height: 22px;
+	padding: 0;
+	border-radius: 9999px;
+	background-color: var(--warning-bg-color);
+	color: var(--warning-fg-color);
+	font-weight: 800;
+	box-shadow: 0 1px 3px alpha(black, 0.35);
+}
+
+.picture-choice > .picture-local > button:hover {
+	background-color: color-mix(in srgb, var(--warning-bg-color) 85%, white);
 }
 
 /* The pen beside the user's own name only shows while the name is pointed at */

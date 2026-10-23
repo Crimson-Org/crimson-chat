@@ -199,7 +199,7 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	const char *url = pick_person_picture(room, nick);
 	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(avatar), sized);
-	GtkWidget *choice = offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick);
+	GtkWidget *choice = offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick, FALSE);
 	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), choice);
 	view->name = gtk_label_new(nick);
@@ -269,8 +269,9 @@ typedef struct {
 	GtkWidget *avatar, *nick, *display_name, *realname, *account, *password;
 	/* What the fields held when the dialog opened, so only changes are sent */
 	char *old_nick, *old_display_name, *old_realname, *old_picture, *old_account, *old_password;
-	/* The picture address given through the avatar, sent on saving */
+	/* The picture address given through the avatar, or a picture to upload, sent on saving */
 	char *picture;
+	GFile *upload;
 	/* The registry's status, pronouns and homepage keys, and what they held when the dialog opened */
 	GtkWidget *status, *pronouns, *homepage;
 	char *old_status, *old_pronouns, *old_homepage;
@@ -333,6 +334,7 @@ static void free_own_profile(OwnProfile *own) {
 	g_free(own->old_realname);
 	g_free(own->old_picture);
 	g_free(own->picture);
+	g_clear_object(&own->upload);
 	g_free(own->old_status);
 	g_free(own->old_pronouns);
 	g_free(own->old_homepage);
@@ -347,71 +349,29 @@ static const char *read_field(GtkWidget *row) {
 }
 
 
-/* Tells the avatar an upload started from how it goes, with neither address nor problem while it travels */
-typedef void (*ShowUpload)(GtkWidget *widget, const char *url, const char *problem);
-
-
-/* Where an uploaded picture is going, kept while the file dialog is open and the picture travels */
+/* A picture sent on saving finishes after the dialog closed, so it keeps only what the upload needs */
 typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
-	char *target;
-	GtkWidget *widget;
-	ShowUpload show;
 } PictureUpload;
-
-
-static void free_picture_upload(PictureUpload *upload) {
-	g_object_unref(upload->network);
-	g_free(upload->target);
-	g_clear_object(&upload->widget);
-	g_free(upload);
-}
 
 
 static void finish_picture_upload(const char *url, const char *problem, gpointer data) {
 	PictureUpload *upload = data;
-	gtk_widget_set_sensitive(upload->widget, TRUE);
-	upload->show(upload->widget, url, problem);
-	if (url && g_str_equal(upload->target, "*")) {
-		/* The address is kept like a typed one, so the app sets it again on each connection */
+	/* The address is kept like a typed one, so the app sets it again on each connection */
+	if (url)
 		save_profile_value(upload->network->key, "avatar", url);
-	}
 	if (problem)
 		show_toast(upload->window, problem);
-	free_picture_upload(upload);
+	g_object_unref(upload->network);
+	g_free(upload);
 }
 
 
-static void finish_choosing_upload(GObject *source, GAsyncResult *result, gpointer data) {
-	PictureUpload *upload = data;
-	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
-	if (!file) {
-		free_picture_upload(upload);
-		return;
-	}
-	gtk_widget_set_sensitive(upload->widget, FALSE);
-	upload->show(upload->widget, NULL, NULL);
-	upload_avatar(upload->network, upload->target, file, finish_picture_upload, upload);
-}
-
-
-static void choose_upload(Window *window, CrimsonNetwork *network, const char *target, GtkWidget *widget,
-	ShowUpload show) {
+static void send_picture_upload(CrimsonNetwork *network, Window *window, GFile *file) {
 	PictureUpload *upload = g_new0(PictureUpload, 1);
-	*upload = (PictureUpload){window, g_object_ref(network), g_strdup(target), g_object_ref(widget), show};
-	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
-	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_PICTURE_TITLE);
-	g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
-	gtk_file_filter_set_name(filter, TEXT_PICTURES);
-	gtk_file_filter_add_mime_type(filter, "image/png");
-	gtk_file_filter_add_mime_type(filter, "image/jpeg");
-	gtk_file_filter_add_mime_type(filter, "image/webp");
-	gtk_file_filter_add_mime_type(filter, "image/gif");
-	g_autoptr(GListStore) filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
-	g_list_store_append(filters, filter);
-	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
-	gtk_file_dialog_open(dialog, GTK_WINDOW(upload->window->window), NULL, finish_choosing_upload, upload);
+	*upload = (PictureUpload){window, g_object_ref(network)};
+	upload_avatar(network, "*", file, finish_picture_upload, upload);
 }
 
 
@@ -492,7 +452,9 @@ static void save_own_profile(GtkButton *button, OwnProfile *own) {
 		save_profile_value(network->key, FIELDS[index].key, FIELDS[index].value);
 	}
 	/* An uploaded picture is set by the bouncer, so only a given address is sent from here */
-	if (g_strcmp0(own->picture, own->old_picture ? own->old_picture : "") != 0) {
+	if (own->upload) {
+		send_picture_upload(network, own->window, own->upload);
+	} else if (g_strcmp0(own->picture, own->old_picture ? own->old_picture : "") != 0) {
 		if (network->client)
 			set_metadata(network, "avatar", own->picture);
 		save_profile_value(network->key, "avatar", own->picture);
@@ -541,15 +503,17 @@ static void refresh_own_field(GtkWidget *row, char **old, const char *current) {
 
 
 static void show_own_picture(OwnProfile *own) {
-	g_autofree char *sized = fill_image_size(*own->picture ? own->picture : NULL, PROFILE_AVATAR_SIZE * 2);
+	g_autofree char *chosen = own->upload ? g_file_get_uri(own->upload) : NULL;
+	const char *url = chosen ? chosen : *own->picture ? own->picture : NULL;
+	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(own->avatar), sized);
-	show_picture_removable(own->avatar, *own->picture != '\0');
+	show_picture_removable(own->avatar, url != NULL);
 }
 
 
 /* The picture the server announces shows unless the user gave another address since the dialog opened */
 static void refresh_own_picture(OwnProfile *own, const char *current) {
-	if (!current || g_strcmp0(current, own->old_picture) == 0
+	if (!current || own->upload || g_strcmp0(current, own->old_picture) == 0
 		|| g_strcmp0(own->picture, own->old_picture ? own->old_picture : "") != 0)
 		return;
 	g_free(own->old_picture);
@@ -585,15 +549,6 @@ static void refresh_own_profile(CrimsonNetwork *network, AdwDialog *dialog) {
 }
 
 
-static void show_avatar_upload(GtkWidget *avatar, const char *url, const char *problem) {
-	if (!url)
-		return;
-	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
-	show_avatar_image(ADW_AVATAR(avatar), sized);
-	show_picture_removable(avatar, TRUE);
-}
-
-
 static void finish_picture_address(AdwAlertDialog *alert, const char *response, AdwDialog *dialog) {
 	OwnProfile *own = g_object_get_data(G_OBJECT(dialog), "own");
 	if (g_strcmp0(response, "use") != 0 || !own)
@@ -601,6 +556,7 @@ static void finish_picture_address(AdwAlertDialog *alert, const char *response, 
 	GtkWidget *entry = adw_alert_dialog_get_extra_child(alert);
 	g_free(own->picture);
 	own->picture = g_strstrip(g_strdup(gtk_editable_get_text(GTK_EDITABLE(entry))));
+	g_clear_object(&own->upload);
 	show_own_picture(own);
 }
 
@@ -622,15 +578,12 @@ static void ask_picture_address(OwnProfile *own) {
 }
 
 
-/* Removing takes effect at once, as an uploaded picture does, since everyone sees the change */
+/* Like every field of the profile, the removal is sent on saving */
 static void finish_removing_own_picture(AdwAlertDialog *alert, const char *response, AdwDialog *dialog) {
 	OwnProfile *own = g_object_get_data(G_OBJECT(dialog), "own");
 	if (g_strcmp0(response, "remove") != 0 || !own)
 		return;
-	if (own->network->client)
-		set_metadata(own->network, "avatar", "");
-	save_profile_value(own->network->key, "avatar", "");
-	g_clear_pointer(&own->old_picture, g_free);
+	g_clear_object(&own->upload);
 	g_free(own->picture);
 	own->picture = g_strdup("");
 	show_own_picture(own);
@@ -648,11 +601,40 @@ static void ask_to_remove_own_picture(OwnProfile *own) {
 }
 
 
+static void finish_choosing_upload(GObject *source, GAsyncResult *result, gpointer data) {
+	g_autoptr(GObject) dialog = data;
+	OwnProfile *own = g_object_get_data(dialog, "own");
+	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+	if (!file || !own)
+		return;
+	g_set_object(&own->upload, file);
+	show_own_picture(own);
+}
+
+
+/* The bouncer only reads these kinds of picture */
+static void choose_upload(OwnProfile *own) {
+	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_PICTURE_TITLE);
+	g_autoptr(GtkFileFilter) filter = gtk_file_filter_new();
+	gtk_file_filter_set_name(filter, TEXT_PICTURES);
+	gtk_file_filter_add_mime_type(filter, "image/png");
+	gtk_file_filter_add_mime_type(filter, "image/jpeg");
+	gtk_file_filter_add_mime_type(filter, "image/webp");
+	gtk_file_filter_add_mime_type(filter, "image/gif");
+	g_autoptr(GListStore) filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+	g_list_store_append(filters, filter);
+	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+	gtk_file_dialog_open(dialog, GTK_WINDOW(own->window->window), NULL, finish_choosing_upload,
+		g_object_ref(own->dialog));
+}
+
+
 /* A bouncer that takes uploads gets a picture from the computer, and any other server an address */
 static void change_own_picture(OwnProfile *own) {
 	g_autofree char *upload_url = find_avatar_upload_url(own->network);
 	if (upload_url)
-		choose_upload(own->window, own->network, "*", own->avatar, show_avatar_upload);
+		choose_upload(own);
 	else
 		ask_picture_address(own);
 }
@@ -908,7 +890,7 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 	gtk_widget_add_css_class(box, "profile");
 	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, NULL, TRUE);
 	fill_room_avatar(ADW_AVATAR(avatar), room, PROFILE_AVATAR_SIZE);
-	GtkWidget *choice = offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name);
+	GtkWidget *choice = offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name, FALSE);
 	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), choice);
 	g_autofree char *title = describe_room_title(room);

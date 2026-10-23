@@ -22,4 +22,6 @@ void show_picture_removable(GtkWidget *avatar, gboolean is_removable);
 /* Clicking the avatar asks before choosing a picture only the user sees, or one everyone sees where the user may set
  * it, and its corner button removes the picture in place; returns the widget to place where the avatar would go */
 GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
-	const char *name);
+	const char *name, gboolean waits_for_save);
+/* In a form with a Save button, the picture chosen or removed since it opened takes effect only when this is called */
+void save_picture_choice(GtkWidget *avatar);

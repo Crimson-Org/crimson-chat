@@ -28,6 +28,7 @@ typedef struct {
 	CrimsonNetwork *bouncer_network;
 	/* The server the form changes, whose picture sits at the top */
 	CrimsonNetwork *network;
+	GtkWidget *avatar;
 } ServerForm;
 
 /* The rows of the bouncer form */
@@ -162,6 +163,8 @@ static AccountRecord *collect_account(ServerForm *form) {
 
 
 static void save_server_form(GtkButton *button, ServerForm *form) {
+	if (form->avatar)
+		save_picture_choice(form->avatar);
 	if (form->bouncer_network) {
 		g_autoptr(GHashTable) attributes = collect_attributes(form);
 		change_bouncer_network(form->bouncer_network, attributes);
@@ -190,7 +193,8 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 		gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
 		g_autofree char *sized = fill_image_size(pick_network_picture(form->network), SERVER_AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
-		GtkWidget *choice = offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL);
+		GtkWidget *choice = offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL, TRUE);
+		form->avatar = avatar;
 		gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
 		adw_preferences_group_add(ADW_PREFERENCES_GROUP(picture), choice);
 		adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(picture));

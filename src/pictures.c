@@ -36,14 +36,8 @@ static char *describe_picture_key(CrimsonNetwork *network, PictureKind kind, con
 }
 
 
-const char *find_own_picture(CrimsonNetwork *network, PictureKind kind, const char *name) {
-	if (!network)
-		return NULL;
-	g_autofree char *key = describe_picture_key(network, kind, name);
-	g_autofree char *file = g_key_file_get_string(get_pictures(), GROUP, key, NULL);
-	if (!file)
-		return NULL;
-	/* The address is kept so callers can hold it like a string the server sent */
+/* The address is kept so callers can hold it like a string the server sent */
+static const char *describe_picture_address(const char *file) {
 	static GHashTable *addresses;
 	if (!addresses)
 		addresses = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
@@ -59,6 +53,15 @@ const char *find_own_picture(CrimsonNetwork *network, PictureKind kind, const ch
 }
 
 
+const char *find_own_picture(CrimsonNetwork *network, PictureKind kind, const char *name) {
+	if (!network)
+		return NULL;
+	g_autofree char *key = describe_picture_key(network, kind, name);
+	g_autofree char *file = g_key_file_get_string(get_pictures(), GROUP, key, NULL);
+	return file ? describe_picture_address(file) : NULL;
+}
+
+
 /* The address a server is reached at, kept by the bouncer for its networks and in the account otherwise */
 static const char *read_network_host(CrimsonNetwork *network) {
 	if (network->bouncer_id)
@@ -67,13 +70,17 @@ static const char *read_network_host(CrimsonNetwork *network) {
 }
 
 
-const char *pick_network_picture(CrimsonNetwork *network) {
-	const char *own = find_own_picture(network, PICTURE_SERVER, NULL);
-	if (own)
-		return own;
+/* The picture the server itself offers, or Crimson's own for the Crimson server */
+static const char *find_offered_network_picture(CrimsonNetwork *network) {
 	if (network->icon_url)
 		return network->icon_url;
 	return g_strcmp0(read_network_host(network), CRIMSON_SERVER_HOST) == 0 ? CRIMSON_SERVER_PICTURE : NULL;
+}
+
+
+const char *pick_network_picture(CrimsonNetwork *network) {
+	const char *own = find_own_picture(network, PICTURE_SERVER, NULL);
+	return own ? own : find_offered_network_picture(network);
 }
 
 
@@ -97,10 +104,24 @@ typedef struct {
 	char *network_key, *name;
 	PictureKind kind;
 	GWeakRef avatar;
+	/* In a form with a Save button the choice waits there, as a scaled file or as NULL for a removal */
+	gboolean waits_for_save, has_pending;
+	char *pending;
 } PictureChoice;
 
 
+static void remove_picture_file(const char *file) {
+	g_autofree char *folder = get_state_file_path(PICTURES_FOLDER);
+	g_autofree char *path = g_build_filename(folder, file, NULL);
+	g_remove(path);
+}
+
+
+/* A picture chosen in a form that closed without saving is thrown away */
 static void free_picture_choice(PictureChoice *choice) {
+	if (choice->pending)
+		remove_picture_file(choice->pending);
+	g_free(choice->pending);
 	g_free(choice->network_key);
 	g_free(choice->name);
 	g_weak_ref_clear(&choice->avatar);
@@ -148,15 +169,23 @@ static const char *find_shared_room_picture(CrimsonNetwork *network, const char 
 }
 
 
+/* The user's own picture as the form shows it, with a choice waiting for Save in place of the kept one */
+static const char *find_choice_own_picture(CrimsonNetwork *network, PictureChoice *choice) {
+	if (choice->has_pending)
+		return choice->pending ? describe_picture_address(choice->pending) : NULL;
+	return find_own_picture(network, choice->kind, choice->name);
+}
+
+
 static const char *pick_choice_picture(CrimsonNetwork *network, PictureChoice *choice) {
+	const char *own = find_choice_own_picture(network, choice);
+	if (own)
+		return own;
 	if (choice->kind == PICTURE_SERVER)
-		return pick_network_picture(network);
-	if (choice->kind == PICTURE_PERSON) {
-		CrimsonRoom *room = find_room(network, choice->name);
-		return pick_person_picture(room ? room : network->server_room, choice->name);
-	}
-	const char *own = find_own_picture(network, PICTURE_ROOM, choice->name);
-	return own ? own : find_shared_room_picture(network, choice->name);
+		return find_offered_network_picture(network);
+	if (choice->kind == PICTURE_PERSON)
+		return find_metadata(network->server_room, choice->name, "avatar");
+	return find_shared_room_picture(network, choice->name);
 }
 
 
@@ -186,7 +215,7 @@ static const struct {
 
 /* The button removes the picture on show, the user's own first, and offers to choose one while none is set */
 static PictureAction decide_button_action(CrimsonNetwork *network, PictureChoice *choice) {
-	if (find_own_picture(network, choice->kind, choice->name))
+	if (find_choice_own_picture(network, choice))
 		return PICTURE_REMOVE_OWN;
 	if (!is_picture_shared(network, choice))
 		return PICTURE_CHOOSE_OWN;
@@ -212,7 +241,7 @@ static void refresh_picture_choice(GtkWidget *avatar) {
 		: "image-x-generic-symbolic");
 	gtk_widget_set_tooltip_text(button, ACTIONS[action].tooltip);
 	GtkWidget *local = g_object_get_data(G_OBJECT(avatar), "picture-local");
-	gtk_widget_set_visible(local, find_own_picture(network, template->kind, template->name) != NULL);
+	gtk_widget_set_visible(local, find_choice_own_picture(network, template) != NULL);
 }
 
 
@@ -224,11 +253,8 @@ static void show_new_picture(PictureChoice *choice, const char *file) {
 		return;
 	g_autofree char *key = describe_picture_key(network, choice->kind, choice->name);
 	g_autofree char *old = g_key_file_get_string(get_pictures(), GROUP, key, NULL);
-	if (old) {
-		g_autofree char *folder = get_state_file_path(PICTURES_FOLDER);
-		g_autofree char *old_path = g_build_filename(folder, old, NULL);
-		g_remove(old_path);
-	}
+	if (old)
+		remove_picture_file(old);
 	if (file)
 		g_key_file_set_string(get_pictures(), GROUP, key, file);
 	else
@@ -243,6 +269,51 @@ static void show_new_picture(PictureChoice *choice, const char *file) {
 	if (room)
 		announce_room_change(room);
 	refresh_window_later(choice->window);
+}
+
+
+static PictureChoice *copy_choice(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	PictureChoice *choice = g_new0(PictureChoice, 1);
+	*choice = (PictureChoice){template->window, g_strdup(template->network_key), g_strdup(template->name),
+		template->kind, {{0}}, FALSE, FALSE, NULL};
+	g_weak_ref_init(&choice->avatar, avatar);
+	return choice;
+}
+
+
+/* A form keeps the choice until Save, and anywhere else it takes effect at once */
+static void take_picture(PictureChoice *choice, const char *file) {
+	g_autoptr(GObject) avatar = g_weak_ref_get(&choice->avatar);
+	PictureChoice *template = avatar ? g_object_get_data(avatar, "picture-choice") : NULL;
+	if (!template) {
+		if (file)
+			remove_picture_file(file);
+		return;
+	}
+	if (!template->waits_for_save) {
+		show_new_picture(choice, file);
+		return;
+	}
+	if (template->pending)
+		remove_picture_file(template->pending);
+	g_free(template->pending);
+	template->pending = g_strdup(file);
+	template->has_pending = TRUE;
+	refresh_picture_choice(GTK_WIDGET(avatar));
+}
+
+
+void save_picture_choice(GtkWidget *avatar) {
+	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
+	if (!template || !template->has_pending)
+		return;
+	/* The kept picture now owns the file, so closing the form no longer throws it away */
+	g_autofree char *file = g_steal_pointer(&template->pending);
+	template->has_pending = FALSE;
+	PictureChoice *choice = copy_choice(avatar);
+	show_new_picture(choice, file);
+	free_picture_choice(choice);
 }
 
 
@@ -265,7 +336,7 @@ static void finish_scaling(GObject *source, GAsyncResult *result, gpointer data)
 	g_autoptr(GError) error = NULL;
 	if (g_task_propagate_boolean(G_TASK(result), &error)) {
 		g_autofree char *file = g_path_get_basename(paths[1]);
-		show_new_picture(choice, file);
+		take_picture(choice, file);
 	} else {
 		show_toast(choice->window, TEXT_PICTURE_UNREADABLE);
 	}
@@ -326,16 +397,6 @@ static void finish_choosing_shared(GObject *source, GAsyncResult *result, gpoint
 }
 
 
-static PictureChoice *copy_choice(GtkWidget *avatar) {
-	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
-	PictureChoice *choice = g_new0(PictureChoice, 1);
-	*choice = (PictureChoice){template->window, g_strdup(template->network_key), g_strdup(template->name),
-		template->kind, {{0}}};
-	g_weak_ref_init(&choice->avatar, avatar);
-	return choice;
-}
-
-
 /* The bouncer only reads these kinds of picture, while one kept here may be any picture the computer opens */
 static void open_picture_dialog(GtkWidget *avatar, gboolean is_shared) {
 	PictureChoice *choice = copy_choice(avatar);
@@ -376,7 +437,7 @@ static void finish_asking(AdwAlertDialog *alert, const char *response, GtkWidget
 		open_picture_dialog(avatar, action == PICTURE_CHOOSE_SHARED);
 	} else if (action == PICTURE_REMOVE_OWN) {
 		PictureChoice *choice = copy_choice(avatar);
-		show_new_picture(choice, NULL);
+		take_picture(choice, NULL);
 		free_picture_choice(choice);
 	} else {
 		remove_shared_picture(avatar);
@@ -480,9 +541,7 @@ static GtkWidget *create_local_sign(void) {
 	GtkWidget *sign = gtk_menu_button_new();
 	/* A label as the child keeps the arrow a menu button draws beside a text label */
 	gtk_menu_button_set_child(GTK_MENU_BUTTON(sign), gtk_label_new("!"));
-	gtk_widget_add_css_class(sign, "picture-badge");
 	gtk_widget_add_css_class(sign, "picture-local");
-	gtk_widget_add_css_class(sign, "circular");
 	gtk_widget_set_tooltip_text(sign, TEXT_PICTURE_ONLY_YOURS);
 	gtk_widget_set_halign(sign, GTK_ALIGN_START);
 	gtk_widget_set_valign(sign, GTK_ALIGN_END);
@@ -494,9 +553,9 @@ static GtkWidget *create_local_sign(void) {
 
 
 GtkWidget *offer_picture_choice(GtkWidget *avatar, Window *window, CrimsonNetwork *network, PictureKind kind,
-	const char *name) {
+	const char *name, gboolean waits_for_save) {
 	PictureChoice *choice = g_new0(PictureChoice, 1);
-	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}};
+	*choice = (PictureChoice){window, g_strdup(network->key), g_strdup(name), kind, {{0}}, waits_for_save, FALSE, NULL};
 	g_weak_ref_init(&choice->avatar, NULL);
 	g_object_set_data_full(G_OBJECT(avatar), "picture-choice", choice, (GDestroyNotify)free_picture_choice);
 	GtkWidget *overlay = wrap_picture(avatar, G_CALLBACK(change_picture), avatar);
