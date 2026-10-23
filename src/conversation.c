@@ -33,6 +33,7 @@
 /* How long a newly opened room without messages waits for its history before it fades in without them */
 #define HISTORY_WAIT_US (150 * 1000)
 #define CONTEXT_BEFORE_TARGET 10
+#define LOADING_SPINNER_SIZE 32
 #define MEMBERS_WIDTH 260
 /* The member list lies over the chat instead of beside it when the chat would keep less than this, and the chat
  * column itself never asks for more than the smallest room the window's own layout leaves it */
@@ -71,7 +72,7 @@ struct Conversation {
 	gboolean is_settling, is_attached;
 	/* A narrow window slides whole pages itself, so the chat view does not slide on top of that */
 	gboolean is_narrow;
-	GtkWidget *member_view, *empty_note, *members_title;
+	GtkWidget *member_view, *empty_note, *loading_spinner, *members_title;
 	GtkStringList *members;
 	GtkNoSelection *messages;
 	/* The room's latest messages, and those without the joins and leaves the setting hides, which are kept */
@@ -161,12 +162,39 @@ static void pin_to_bottom(Conversation *conversation) {
 }
 
 
+/* More of the room may still come while it waits for its server, while its history has not been asked for or is
+ * on the way, while messages wait above the shown ones, and while older pages may hold more than hidden joins */
+static gboolean is_room_loading(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	if (!room || room->kind == ROOM_SERVER)
+		return FALSE;
+	if (room->network->state != NETWORK_CONNECTED)
+		return TRUE;
+	if (!can_network(room->network, "draft/chathistory"))
+		return FALSE;
+	CrimsonShownMessages *shown = conversation->recent_messages;
+	gboolean has_held = shown && g_list_model_get_n_items(G_LIST_MODEL(shown)) > 0;
+	return room->is_loading_history || !room->has_history || (shown && count_hidden_messages(shown))
+		|| (has_held && !room->has_all_history);
+}
+
+
+/* A chat with nothing to show says it is empty only once it knows, and shows a spinner while it may still load */
+static void show_empty_note(Conversation *conversation) {
+	gboolean is_empty = g_list_model_get_n_items(G_LIST_MODEL(conversation->messages)) == 0;
+	gboolean is_loading = is_room_loading(conversation);
+	gtk_widget_set_visible(conversation->empty_note, is_empty && !is_loading);
+	gtk_widget_set_visible(conversation->loading_spinner, is_empty && is_loading);
+}
+
+
 /* The earliest shown row may lose its day line or start of a group to the messages coming in above it */
 static void reveal_before_shown(Conversation *conversation, guint position) {
 	g_autoptr(CrimsonMessage) first = g_list_model_get_item(G_LIST_MODEL(conversation->messages), 0);
 	reveal_messages_from(conversation->recent_messages, position);
 	if (first)
 		announce_message_change(first);
+	show_empty_note(conversation);
 }
 
 
@@ -395,14 +423,6 @@ static void open_person(const char *nick, gpointer data) {
 		return;
 	CrimsonRoom *room = open_private_room(conversation->room->network, nick);
 	open_room(conversation->window, room);
-}
-
-
-/* An empty room says so, unless its history is still on the way */
-static void show_empty_note(Conversation *conversation) {
-	gboolean is_empty = g_list_model_get_n_items(G_LIST_MODEL(conversation->messages)) == 0;
-	gboolean is_waiting = conversation->room && conversation->room->is_loading_history;
-	gtk_widget_set_visible(conversation->empty_note, is_empty && !is_waiting);
 }
 
 
@@ -662,6 +682,13 @@ static GtkWidget *create_message_list(Conversation *conversation) {
 	g_signal_connect_swapped(conversation->messages, "items-changed", G_CALLBACK(replace_sticky_avatar),
 		conversation);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->empty_note);
+	conversation->loading_spinner = create_spinner();
+	gtk_widget_set_size_request(conversation->loading_spinner, LOADING_SPINNER_SIZE, LOADING_SPINNER_SIZE);
+	gtk_widget_set_halign(conversation->loading_spinner, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(conversation->loading_spinner, GTK_ALIGN_CENTER);
+	gtk_widget_set_can_target(conversation->loading_spinner, FALSE);
+	gtk_widget_set_visible(conversation->loading_spinner, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->loading_spinner);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->jump_button);
 	gtk_widget_add_css_class(overlay, "chat-background");
 	return overlay;
