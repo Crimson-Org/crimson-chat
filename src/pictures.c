@@ -168,31 +168,20 @@ typedef enum {
 	PICTURE_REMOVE_SHARED,
 } PictureAction;
 
-/* The words for each action, and its question names the room when everyone in it gets the change */
+/* The words for each action, kept short so the question fits on one line in a narrow window */
 static const struct {
-	const char *tooltip, *title, *answer;
+	const char *tooltip, *title, *body, *answer;
 	gboolean is_removal;
 } ACTIONS[] = {
-	[PICTURE_CHOOSE_OWN] = {TEXT_CHOOSE_OWN_PICTURE, TEXT_CHOOSE_OWN_PICTURE_TITLE, TEXT_CHOOSE_PICTURE, FALSE},
-	[PICTURE_CHOOSE_SHARED] = {TEXT_CHOOSE_SHARED_PICTURE, TEXT_CHOOSE_SHARED_PICTURE_TITLE, TEXT_CHOOSE_PICTURE,
-		FALSE},
-	[PICTURE_REMOVE_OWN] = {TEXT_REMOVE_OWN_PICTURE, TEXT_REMOVE_OWN_PICTURE_TITLE, TEXT_REMOVE, TRUE},
-	[PICTURE_REMOVE_SHARED] = {TEXT_REMOVE_SHARED_PICTURE, TEXT_REMOVE_SHARED_PICTURE_TITLE, TEXT_REMOVE, TRUE},
+	[PICTURE_CHOOSE_OWN] = {TEXT_CHOOSE_OWN_PICTURE, TEXT_CHOOSE_OWN_PICTURE_TITLE, TEXT_CHOOSE_OWN_PICTURE_BODY,
+		TEXT_CHOOSE_PICTURE, FALSE},
+	[PICTURE_CHOOSE_SHARED] = {TEXT_CHOOSE_SHARED_PICTURE, TEXT_CHOOSE_SHARED_PICTURE_TITLE,
+		TEXT_CHOOSE_SHARED_PICTURE_BODY, TEXT_CHOOSE_PICTURE, FALSE},
+	[PICTURE_REMOVE_OWN] = {TEXT_REMOVE_OWN_PICTURE, TEXT_REMOVE_OWN_PICTURE_TITLE, TEXT_REMOVE_OWN_PICTURE_BODY,
+		TEXT_REMOVE, TRUE},
+	[PICTURE_REMOVE_SHARED] = {TEXT_REMOVE_SHARED_PICTURE, TEXT_REMOVE_SHARED_PICTURE_TITLE,
+		TEXT_REMOVE_SHARED_PICTURE_BODY, TEXT_REMOVE, TRUE},
 };
-
-
-static char *describe_action_body(PictureAction action, const char *name) {
-	switch (action) {
-	case PICTURE_CHOOSE_SHARED:
-		return g_strdup_printf(TEXT_CHOOSE_SHARED_PICTURE_BODY, name);
-	case PICTURE_REMOVE_SHARED:
-		return g_strdup_printf(TEXT_REMOVE_SHARED_PICTURE_BODY, name);
-	case PICTURE_REMOVE_OWN:
-		return g_strdup(TEXT_REMOVE_OWN_PICTURE_BODY);
-	default:
-		return g_strdup(TEXT_CHOOSE_OWN_PICTURE_BODY);
-	}
-}
 
 
 /* The button removes the picture on show, the user's own first, and offers to choose one while none is set */
@@ -397,8 +386,7 @@ static void finish_asking(AdwAlertDialog *alert, const char *response, GtkWidget
 /* Every change asks first, saying whether only the user or everyone in the room will see it */
 static void ask_about_picture(GtkWidget *avatar, PictureAction action) {
 	PictureChoice *template = g_object_get_data(G_OBJECT(avatar), "picture-choice");
-	g_autofree char *body = describe_action_body(action, template->name);
-	AdwDialog *alert = adw_alert_dialog_new(ACTIONS[action].title, body);
+	AdwDialog *alert = adw_alert_dialog_new(ACTIONS[action].title, ACTIONS[action].body);
 	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "confirm", ACTIONS[action].answer,
 		NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "confirm",
