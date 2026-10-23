@@ -94,7 +94,7 @@ headerbar.title-bar {
 	min-width: 30px;
 	min-height: 30px;
 	margin: -3px -5px;
-	background: radial-gradient(circle closest-side, var(--badge-fill) 12.5px, var(--rail-bg) 13.5px);
+	background: radial-gradient(circle closest-side, var(--badge-fill) 12px, var(--rail-bg) 14px);
 	background-color: var(--rail-bg);
 }
 
