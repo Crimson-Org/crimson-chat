@@ -206,7 +206,12 @@ headerbar.top-bar menubutton > button {
 }
 
 .picker-row {
-	padding: 6px 4px;
+	padding: 8px 10px;
+}
+
+/* The tick box keeps the same gap to the room's name as avatars do in the chat list */
+.picker-row > check {
+	margin-right: 12px;
 }
 
 .picker-name {

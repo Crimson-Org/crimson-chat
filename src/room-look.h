@@ -12,4 +12,6 @@ char *describe_room_title(CrimsonRoom *room);
 char *describe_room_preview(CrimsonRoom *room);
 /* Members and topic for a channel, presence for a private chat and the connection for a server room */
 char *describe_room_subtitle(CrimsonRoom *room);
+/* When the person in a private chat was last active, counted from what the server last said, or NULL */
+char *describe_room_activity(CrimsonRoom *room);
 const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key);

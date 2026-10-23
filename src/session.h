@@ -61,6 +61,8 @@ typedef struct {
 
 /* Hands over the listed rooms, most people first, or NULL when the network went away before the end */
 typedef void (*RoomListingReady)(GPtrArray *rooms, gpointer data);
+/* The server lists its rooms only after the user has been connected a while, and is asked again in this many seconds */
+typedef void (*RoomListingWait)(guint seconds, gpointer data);
 
 /* What WHOIS tells about a person, for their profile */
 typedef struct {
@@ -85,7 +87,10 @@ typedef struct {
 	/* The channel list being collected for the room picker, and who waits for it */
 	GPtrArray *listing;
 	RoomListingReady listing_ready;
+	RoomListingWait listing_wait;
 	gpointer listing_data;
+	/* How long the server said to wait before listing, and the timer that asks again */
+	guint listing_delay, listing_retry_source;
 	/* Whether the list asked only for busy channels, so a short answer is asked again in full */
 	gboolean is_listing_busy;
 	/* Whether the user was already offered to log in on this connection */
@@ -117,7 +122,7 @@ NetworkWork *get_network_work(CrimsonNetwork *network);
 /* The one bouncer the user is connected to, if any */
 Session *find_bouncer(Chat *chat);
 /* Asks the server for its channels, the busy ones only when it can filter them */
-void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, gpointer data);
+void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, RoomListingWait wait, gpointer data);
 void cancel_room_listing(CrimsonNetwork *network);
 /* Takes the server's channel list replies while a listing is wanted, returning whether it took the line */
 gboolean collect_room_listing(CrimsonNetwork *network, int number, const IrcMessage *message);

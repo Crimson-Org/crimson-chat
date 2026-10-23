@@ -24,6 +24,14 @@ typedef enum {
 	PRESENCE_OFFLINE,
 } Presence;
 
+/* What the server last said about the person in a private chat */
+typedef enum {
+	ACTIVITY_UNKNOWN,
+	ACTIVITY_SEEN,
+	ACTIVITY_AWAY,
+	ACTIVITY_GONE,
+} Activity;
+
 typedef enum {
 	ROOM_SERVER,
 	ROOM_CHANNEL,
@@ -69,6 +77,9 @@ struct _CrimsonRoom {
 	guint unread_count;
 	gboolean has_mention, is_joined, is_loading_history, has_all_history, has_history;
 	Presence presence;
+	/* For a private chat, when the person was last active and when the server was last asked, in real time */
+	Activity activity;
+	gint64 last_active, activity_checked;
 	/* Nicks to the monotonic moment their typing notice runs out */
 	GHashTable *typing;
 };

@@ -392,7 +392,7 @@ static GtkWidget *create_list_view(RoomList *list) {
 
 	g_autoptr(GMenu) menu = g_menu_new();
 	g_menu_append(menu, TEXT_JOIN_ROOM, "win.join-room");
-	g_menu_append(menu, TEXT_START_PRIVATE_CHAT, "win.message-someone");
+	g_menu_append(menu, TEXT_MESSAGE_SOMEONE, "win.message-someone");
 	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(list->add_button), G_MENU_MODEL(menu));
 	gtk_menu_button_set_direction(GTK_MENU_BUTTON(list->add_button), GTK_ARROW_UP);
 	list->add_revealer = gtk_revealer_new();

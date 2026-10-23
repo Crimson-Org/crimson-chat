@@ -58,6 +58,7 @@ static void free_network_work(NetworkWork *work) {
 		work->profile_ready(NULL, work->profile_data);
 	g_clear_pointer(&work->profile, free_profile);
 	g_clear_pointer(&work->listing, g_ptr_array_unref);
+	g_clear_handle_id(&work->listing_retry_source, g_source_remove);
 	g_hash_table_unref(work->history);
 	g_hash_table_unref(work->multiline);
 	g_hash_table_unref(work->pending);
@@ -276,6 +277,7 @@ static void handle_network_status(IrcClient *client, IrcClientStatus status, con
 
 
 static void drop_network(Session *session, CrimsonNetwork *network);
+static void note_listing_delay(CrimsonNetwork *network, const IrcMessage *message);
 
 
 static void drop_gone_network(gpointer data) {
@@ -302,6 +304,7 @@ static void handle_network_received(IrcClient *client, const IrcMessage *message
 		g_idle_add_once(drop_gone_network, g_object_ref(network));
 		return;
 	}
+	note_listing_delay(network, message);
 	handle_network_message(network, message, affected);
 	if (g_str_equal(message->command, "005"))
 		adopt_network_name(network);
@@ -693,18 +696,19 @@ Session *find_bouncer(Chat *chat) {
 
 void cancel_room_listing(CrimsonNetwork *network) {
 	NetworkWork *work = get_network_work(network);
+	g_clear_handle_id(&work->listing_retry_source, g_source_remove);
+	work->listing_wait = NULL;
 	work->listing_ready = NULL;
 	work->listing_data = NULL;
 	g_clear_pointer(&work->listing, g_ptr_array_unref);
 }
 
 
-void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, gpointer data) {
-	cancel_room_listing(network);
+static void send_room_listing(CrimsonNetwork *network) {
 	NetworkWork *work = get_network_work(network);
+	g_clear_pointer(&work->listing, g_ptr_array_unref);
 	work->listing = g_ptr_array_new_with_free_func((GDestroyNotify)free_listed_room);
-	work->listing_ready = ready;
-	work->listing_data = data;
+	work->listing_delay = 0;
 	IrcState *state = get_network_state(network);
 	const char *filters = state ? get_irc_support(state, "ELIST") : NULL;
 	/* Big networks list tens of thousands of channels, so a server that filters by size first sends busy ones */
@@ -713,6 +717,38 @@ void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, gpoin
 		send_irc_client_command(network->client, "LIST", BUSY_ROOM_FILTER, NULL);
 	else
 		send_irc_client_command(network->client, "LIST", NULL);
+}
+
+
+static gboolean retry_room_listing(gpointer data) {
+	CrimsonNetwork *network = data;
+	get_network_work(network)->listing_retry_source = 0;
+	send_room_listing(network);
+	return G_SOURCE_REMOVE;
+}
+
+
+void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, RoomListingWait wait, gpointer data) {
+	cancel_room_listing(network);
+	NetworkWork *work = get_network_work(network);
+	work->listing_ready = ready;
+	work->listing_wait = wait;
+	work->listing_data = data;
+	send_room_listing(network);
+}
+
+
+/* Some servers refuse to list rooms for a while after connecting, which they say in a notice with the seconds left */
+static void note_listing_delay(CrimsonNetwork *network, const IrcMessage *message) {
+	NetworkWork *work = get_network_work(network);
+	if (!work->listing || !g_str_equal(message->command, "NOTICE") || (message->source && strchr(message->source, '!')))
+		return;
+	g_autoptr(GRegex) delay = g_regex_new("try again in (\\d+)", G_REGEX_CASELESS, 0, NULL);
+	g_autoptr(GMatchInfo) match = NULL;
+	if (!g_regex_match(delay, get_irc_parameter(message, count_irc_parameters(message) - 1), 0, &match))
+		return;
+	g_autofree char *seconds = g_match_info_fetch(match, 1);
+	work->listing_delay = (guint)g_ascii_strtoull(seconds, NULL, 10);
 }
 
 
@@ -735,8 +771,19 @@ gboolean collect_room_listing(CrimsonNetwork *network, int number, const IrcMess
 		room->name = g_strdup(get_irc_parameter(message, 1));
 		room->users = (guint)g_ascii_strtoull(get_irc_parameter(message, 2) ? get_irc_parameter(message, 2) : "0",
 			NULL, 10);
-		room->topic = strip_irc_formatting(get_irc_parameter(message, 3));
+		/* Some servers put the room's modes in front of its topic, such as "[+nt]", which the picker leaves out */
+		const char *topic = get_irc_parameter(message, 3);
+		const char *modes_end = topic && g_str_has_prefix(topic, "[+") ? strstr(topic, "] ") : NULL;
+		room->topic = strip_irc_formatting(modes_end ? modes_end + 2 : topic);
 		g_ptr_array_add(work->listing, room);
+	} else if (number == 323 && !work->listing->len && work->listing_delay) {
+		/* The list waits for the time the server named, and the picker counts it down meanwhile */
+		guint delay = work->listing_delay;
+		g_clear_pointer(&work->listing, g_ptr_array_unref);
+		work->listing = g_ptr_array_new_with_free_func((GDestroyNotify)free_listed_room);
+		work->listing_retry_source = g_timeout_add_seconds(delay + 1, retry_room_listing, network);
+		if (work->listing_wait)
+			work->listing_wait(delay + 1, work->listing_data);
 	} else if (number == 323 && work->is_listing_busy && work->listing->len < FEW_BUSY_ROOMS) {
 		work->is_listing_busy = FALSE;
 		g_ptr_array_set_size(work->listing, 0);

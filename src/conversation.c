@@ -37,8 +37,7 @@ struct Conversation {
 	/* Whether the user opened the member list, which the split view would otherwise change when it resizes */
 	gboolean wants_members;
 	guint member_source;
-	/* When the person in a private chat was last active, asked of the server every couple of minutes */
-	char *activity;
+	/* Asks the server every couple of minutes when the person in a private chat was last active */
 	guint activity_source;
 	MessageActions actions;
 };
@@ -723,30 +722,28 @@ static void fill_header(Conversation *conversation);
 
 static void show_activity(Profile *profile, gpointer data) {
 	Conversation *conversation = data;
-	CrimsonRoom *room = conversation->room;
-	if (!profile || !room || room->kind != ROOM_PRIVATE || g_ascii_strcasecmp(profile->nick, room->name) != 0)
+	CrimsonRoom *room = profile && conversation->room ? find_room(conversation->room->network, profile->nick) : NULL;
+	if (!room || room->kind != ROOM_PRIVATE)
 		return;
-	g_free(conversation->activity);
-	if (!profile->is_found)
-		conversation->activity = g_strdup(TEXT_OFFLINE);
-	else if (profile->away)
-		conversation->activity = g_strdup(TEXT_AWAY);
-	else if (profile->idle_seconds < SECONDS_PER_MINUTE)
-		conversation->activity = g_strdup(TEXT_ACTIVE_NOW);
-	else {
-		g_autofree char *ago = describe_idle(profile->idle_seconds);
-		conversation->activity = g_strdup_printf(TEXT_LAST_ACTIVE, ago);
-	}
-	fill_header(conversation);
+	gint64 now = g_get_real_time();
+	room->activity = !profile->is_found ? ACTIVITY_GONE : profile->away ? ACTIVITY_AWAY : ACTIVITY_SEEN;
+	room->last_active = now - profile->idle_seconds * G_USEC_PER_SEC;
+	room->activity_checked = now;
+	save_chat_cache_later(room->network->session->chat);
+	if (room == conversation->room)
+		fill_header(conversation);
 }
 
 
-/* Asks the server how long the person has been idle, unless a profile is already being asked for */
+/* Keeps the shown time counting, and asks the server again once the last answer is a couple of minutes old */
 static gboolean poll_activity(gpointer data) {
 	Conversation *conversation = data;
 	CrimsonRoom *room = conversation->room;
-	if (room && room->kind == ROOM_PRIVATE && room->network->state == NETWORK_CONNECTED
-		&& !get_network_work(room->network)->profile)
+	if (!room || room->kind != ROOM_PRIVATE)
+		return G_SOURCE_CONTINUE;
+	fill_header(conversation);
+	gboolean is_stale = g_get_real_time() - room->activity_checked >= ACTIVITY_SECONDS * G_USEC_PER_SEC;
+	if (is_stale && room->network->state == NETWORK_CONNECTED && !get_network_work(room->network)->profile)
 		request_profile(room->network, room->name, show_activity, conversation);
 	return G_SOURCE_CONTINUE;
 }
@@ -754,14 +751,13 @@ static gboolean poll_activity(gpointer data) {
 
 static void follow_activity(Conversation *conversation, CrimsonRoom *previous) {
 	g_clear_handle_id(&conversation->activity_source, g_source_remove);
-	g_clear_pointer(&conversation->activity, g_free);
 	if (previous)
 		cancel_profile(previous->network, conversation);
 	CrimsonRoom *room = conversation->room;
 	if (!room || room->kind != ROOM_PRIVATE)
 		return;
 	poll_activity(conversation);
-	conversation->activity_source = g_timeout_add_seconds(ACTIVITY_SECONDS, poll_activity, conversation);
+	conversation->activity_source = g_timeout_add_seconds(SECONDS_PER_MINUTE, poll_activity, conversation);
 }
 
 
@@ -773,8 +769,9 @@ static void fill_header(Conversation *conversation) {
 	gboolean shows_topic = room->kind == ROOM_CHANNEL && topic && *topic
 		&& !(is_room_typing(room) && get_settings()->shows_typing);
 	gboolean is_typing = is_room_typing(room) && get_settings()->shows_typing;
-	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : room->kind == ROOM_PRIVATE && !is_typing
-		&& conversation->activity ? g_strdup(conversation->activity) : describe_room_subtitle(room);
+	g_autofree char *activity = room->kind == ROOM_PRIVATE && !is_typing ? describe_room_activity(room) : NULL;
+	g_autofree char *subtitle = shows_topic ? g_strdup(topic) : activity ? g_strdup(activity)
+		: describe_room_subtitle(room);
 	gtk_label_set_text(GTK_LABEL(conversation->title), title);
 	gtk_label_set_text(GTK_LABEL(conversation->subtitle), subtitle);
 	/* Without anything to say under it, the name sits in the middle of the header */

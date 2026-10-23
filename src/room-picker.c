@@ -8,6 +8,7 @@
 #define PICKER_HEIGHT 680
 /* The busiest rooms shown, since a big network lists tens of thousands */
 #define ROOMS_SHOWN 3000
+#define LOADING_MARGIN 32
 #define NAME_KEY "room-name"
 #define HANDLER_KEY "toggled-handler"
 
@@ -15,7 +16,9 @@ typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
 	AdwDialog *dialog;
-	GtkWidget *stack, *search, *typed_button, *join_button;
+	GtkWidget *stack, *search, *typed_button, *join_button, *loading_label;
+	/* The seconds left before a server that waits after connecting lists its rooms */
+	guint wait_left, wait_source;
 	GtkStringList *names;
 	GtkStringFilter *filter;
 	/* Listed names to their rooms, and the names the user ticked */
@@ -24,6 +27,7 @@ typedef struct {
 
 
 static void free_picker(Picker *picker) {
+	g_clear_handle_id(&picker->wait_source, g_source_remove);
 	if (picker->network)
 		cancel_room_listing(picker->network);
 	g_hash_table_unref(picker->rooms);
@@ -165,6 +169,8 @@ static void bind_row(GtkSignalListItemFactory *factory, GtkListItem *item, Picke
 	GtkWidget *topic = g_object_get_data(G_OBJECT(check), "topic");
 	gtk_label_set_text(GTK_LABEL(topic), room && room->topic ? room->topic : "");
 	gtk_widget_set_visible(topic, room && room->topic && *room->topic);
+	/* The topic is cut to one line in the list, so pointing at the room shows all of it */
+	gtk_widget_set_tooltip_text(check, room && room->topic && *room->topic ? room->topic : NULL);
 	g_autofree char *users = joined ? g_strdup(TEXT_ALREADY_JOINED) : g_strdup_printf("%u", room ? room->users : 0);
 	gtk_label_set_text(g_object_get_data(G_OBJECT(check), "users"), users);
 }
@@ -187,19 +193,44 @@ static void show_rooms(GPtrArray *rooms, gpointer data) {
 		g_hash_table_replace(picker->rooms, copy->name, copy);
 		gtk_string_list_append(picker->names, room->name);
 	}
+	g_clear_handle_id(&picker->wait_source, g_source_remove);
 	gtk_stack_set_visible_child_name(GTK_STACK(picker->stack), "rooms");
 	gtk_widget_grab_focus(picker->search);
 }
 
 
-static GtkWidget *create_loading_page(void) {
+static GtkWidget *create_loading_page(Picker *picker) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), adw_spinner_new());
-	GtkWidget *label = gtk_label_new(TEXT_FINDING_ROOMS);
-	gtk_widget_add_css_class(label, "dim-label");
-	gtk_box_append(GTK_BOX(box), label);
+	picker->loading_label = gtk_label_new(TEXT_FINDING_ROOMS);
+	gtk_label_set_wrap(GTK_LABEL(picker->loading_label), TRUE);
+	gtk_label_set_justify(GTK_LABEL(picker->loading_label), GTK_JUSTIFY_CENTER);
+	gtk_widget_add_css_class(picker->loading_label, "dim-label");
+	gtk_widget_set_margin_start(picker->loading_label, LOADING_MARGIN);
+	gtk_widget_set_margin_end(picker->loading_label, LOADING_MARGIN);
+	gtk_box_append(GTK_BOX(box), picker->loading_label);
 	return box;
+}
+
+
+static gboolean count_down(gpointer data) {
+	Picker *picker = data;
+	if (picker->wait_left > 1)
+		picker->wait_left--;
+	g_autofree char *text = g_strdup_printf(TEXT_ROOMS_WAIT, picker->wait_left);
+	gtk_label_set_text(GTK_LABEL(picker->loading_label), text);
+	return G_SOURCE_CONTINUE;
+}
+
+
+/* The server lists its rooms only after a while, so the picker counts down to when it asks again */
+static void wait_for_rooms(guint seconds, gpointer data) {
+	Picker *picker = data;
+	picker->wait_left = seconds + 1;
+	count_down(picker);
+	if (!picker->wait_source)
+		picker->wait_source = g_timeout_add_seconds(1, count_down, picker);
 }
 
 
@@ -251,7 +282,7 @@ AdwNavigationPage *create_room_picker_page(Window *window, CrimsonNetwork *netwo
 	picker->rooms = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)free_room_copy);
 	picker->chosen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	picker->stack = gtk_stack_new();
-	gtk_stack_add_named(GTK_STACK(picker->stack), create_loading_page(), "loading");
+	gtk_stack_add_named(GTK_STACK(picker->stack), create_loading_page(picker), "loading");
 	gtk_stack_add_named(GTK_STACK(picker->stack), create_rooms_page(picker), "rooms");
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	GtkWidget *header = adw_header_bar_new();
@@ -262,7 +293,7 @@ AdwNavigationPage *create_room_picker_page(Window *window, CrimsonNetwork *netwo
 	g_object_set_data_full(G_OBJECT(page), "picker", picker, (GDestroyNotify)free_picker);
 	/* Without a connection there is no list to wait for, and a typed name still joins once it is back */
 	if (network->state == NETWORK_CONNECTED)
-		request_room_listing(network, show_rooms, picker);
+		request_room_listing(network, show_rooms, wait_for_rooms, picker);
 	else
 		gtk_stack_set_visible_child_name(GTK_STACK(picker->stack), "rooms");
 	return page;

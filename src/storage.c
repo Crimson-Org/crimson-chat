@@ -171,6 +171,16 @@ void load_room_cache(CrimsonNetwork *network) {
 		g_free(room->preview);
 		room->preview = g_strdup(fields[7]);
 	}
+	g_auto(GStrv) activity = g_key_file_get_string_list(get_room_cache(), network->key, "activity", NULL, NULL);
+	for (int index = 0; activity && activity[index]; index++) {
+		g_auto(GStrv) fields = g_strsplit(activity[index], "\t", 4);
+		CrimsonRoom *room = g_strv_length(fields) == 4 ? find_room(network, fields[0]) : NULL;
+		if (!room || room->kind != ROOM_PRIVATE)
+			continue;
+		room->activity = (Activity)g_ascii_strtoll(fields[1], NULL, 10);
+		room->last_active = g_ascii_strtoll(fields[2], NULL, 10);
+		room->activity_checked = g_ascii_strtoll(fields[3], NULL, 10);
+	}
 }
 
 
@@ -211,6 +221,17 @@ void save_room_cache(GListModel *networks) {
 		}
 		g_key_file_set_string(file, network->key, "name", network->name);
 		g_key_file_set_string_list(file, network->key, "rooms", (const char *const *)entries->pdata, entries->len);
+		/* When people in private chats were last active, so a chat shows it at once on the next start */
+		g_autoptr(GPtrArray) activity = g_ptr_array_new_with_free_func(g_free);
+		for (guint room_index = 0; room_index < room_count; room_index++) {
+			g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), room_index);
+			if (room->kind == ROOM_PRIVATE && room->activity != ACTIVITY_UNKNOWN)
+				g_ptr_array_add(activity, g_strdup_printf("%s\t%d\t%" G_GINT64_FORMAT "\t%" G_GINT64_FORMAT, room->name,
+					room->activity, room->last_active, room->activity_checked));
+		}
+		if (activity->len)
+			g_key_file_set_string_list(file, network->key, "activity", (const char *const *)activity->pdata,
+				activity->len);
 	}
 	g_autofree char *path = get_state_file_path(ROOMS_FILE);
 	save_key_file(file, path);

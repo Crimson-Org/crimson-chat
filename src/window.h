@@ -29,7 +29,7 @@ struct Window {
 	Conversation *conversation;
 	/* The server whose rooms the list shows, NULL only while there is none */
 	CrimsonNetwork *network;
-	/* The rail only shows in a wide window with more than one server */
+	/* The rail only shows with more than one server */
 	gboolean is_narrow, has_rail, is_quitting;
 	guint refresh_source;
 	Tray *tray;

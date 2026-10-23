@@ -114,7 +114,9 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	guint unread = count_network_unread(network, &has_mention);
 	style_unread_badge(badge, unread, has_mention);
 	gtk_widget_set_opacity(GTK_WIDGET(avatar), network->state == NETWORK_CONNECTED ? 1.0 : 0.45);
-	g_autofree char *tooltip = g_strdup_printf("%s\n%s", network->name, describe_state(network->state));
+	/* A connected server only names itself, and one that is not also says so */
+	g_autofree char *tooltip = network->state == NETWORK_CONNECTED ? g_strdup(network->name)
+		: g_strdup_printf("%s\n%s", network->name, describe_state(network->state));
 	gtk_widget_set_tooltip_text(row, tooltip);
 }
 
@@ -267,7 +269,8 @@ static void update_view(Window *window) {
 	gboolean has_chats = count > 0 || !window->chat->has_started;
 	gtk_stack_set_visible_child_name(GTK_STACK(window->pages), has_chats ? "chats" : "welcome");
 	refresh_welcome(window);
-	gboolean has_rail = !window->is_narrow && count > 1;
+	/* The rail shows whenever there are several servers, in a narrow window as well */
+	gboolean has_rail = count > 1;
 	window->has_rail = has_rail;
 	gtk_widget_set_visible(window->rail, has_rail);
 	set_room_list_narrow(window->room_list, !has_rail);
@@ -280,9 +283,24 @@ static void update_view(Window *window) {
 }
 
 
+/* The tray icon carries a red dot while a mention or a private message waits unread anywhere */
+static void refresh_tray_attention(Window *window) {
+	if (!window->tray)
+		return;
+	gboolean has_mention = FALSE;
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
+	for (guint index = 0; index < count && !has_mention; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
+		count_network_unread(network, &has_mention);
+	}
+	set_tray_attention(window->tray, has_mention);
+}
+
+
 static gboolean refresh_now(gpointer data) {
 	Window *window = data;
 	window->refresh_source = 0;
+	refresh_tray_attention(window);
 	refresh_rail(window);
 	update_view(window);
 	resort_room_list(window->room_list);

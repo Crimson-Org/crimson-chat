@@ -1,7 +1,10 @@
 #include "../lang/en.h"
 #include "formatting.h"
 #include "images.h"
+#include "profile.h"
 #include "room-look.h"
+
+#define SECONDS_PER_MINUTE 60
 #include "settings.h"
 
 #define TYPING_NAMES_SHOWN 2
@@ -103,4 +106,23 @@ char *describe_room_subtitle(CrimsonRoom *room) {
 	if (room->presence == PRESENCE_ONLINE)
 		return g_strdup(TEXT_ONLINE);
 	return g_strdup(room->presence == PRESENCE_OFFLINE ? TEXT_OFFLINE : "");
+}
+
+
+char *describe_room_activity(CrimsonRoom *room) {
+	switch (room->activity) {
+	case ACTIVITY_GONE:
+		return g_strdup(TEXT_OFFLINE);
+	case ACTIVITY_AWAY:
+		return g_strdup(TEXT_AWAY);
+	case ACTIVITY_SEEN: {
+		gint64 seconds = (g_get_real_time() - room->last_active) / G_USEC_PER_SEC;
+		if (seconds < SECONDS_PER_MINUTE)
+			return g_strdup(TEXT_ACTIVE_NOW);
+		g_autofree char *ago = describe_idle(seconds);
+		return g_strdup_printf(TEXT_LAST_ACTIVE, ago);
+	}
+	default:
+		return NULL;
+	}
 }
