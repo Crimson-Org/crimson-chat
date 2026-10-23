@@ -10,7 +10,7 @@
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
 #define SEND_SPINNER_SIZE 20
-#define SEND_ROOM_MS 250
+#define SEND_ROOM_MS 325
 /* The send button's width and the gap before it, which the field gives up while the button shows */
 #define SEND_ROOM 52
 /* How far the field has moved aside when the send button starts to grow in */

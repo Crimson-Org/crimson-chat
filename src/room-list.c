@@ -8,8 +8,7 @@
 #include "window.h"
 
 #define ROOM_AVATAR_SIZE 50
-#define SEARCH_SLIDE_MS 200
-#define LIST_SLIDE_MS 120
+#define SEARCH_SLIDE_MS 260
 #define CONNECTION_SPINNER_SIZE 24
 #define ROOM_KEY "room"
 #define HANDLER_KEY "changed-handler"
@@ -18,8 +17,6 @@
 struct RoomList {
 	Window *window;
 	GtkWidget *box, *header, *search, *menu_button;
-	/* Switching servers slides the new list in over a still image of the old one */
-	GtkWidget *slider, *still;
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
 	/* Whether the pointer is over the chat list, which shows the + button */
@@ -627,25 +624,6 @@ void show_room_list_banner(RoomList *list, AccountBanner banner, const char *net
 }
 
 
-/* Shows a still image of the list in its place, so the list can change underneath before sliding in */
-static gboolean freeze_room_list(RoomList *list) {
-	if (!gtk_widget_get_mapped(list->box) || gtk_widget_get_width(list->box) <= 0)
-		return FALSE;
-	g_autoptr(GdkPaintable) live = gtk_widget_paintable_new(list->box);
-	g_autoptr(GdkPaintable) image = gdk_paintable_get_current_image(live);
-	gtk_picture_set_paintable(GTK_PICTURE(list->still), image);
-	gtk_stack_set_transition_type(GTK_STACK(list->slider), GTK_STACK_TRANSITION_TYPE_NONE);
-	gtk_stack_set_visible_child(GTK_STACK(list->slider), list->still);
-	return TRUE;
-}
-
-
-static void forget_list_still(GtkStack *slider, GParamSpec *spec, RoomList *list) {
-	if (!gtk_stack_get_transition_running(slider))
-		gtk_picture_set_paintable(GTK_PICTURE(list->still), NULL);
-}
-
-
 RoomList *create_room_list(Window *window) {
 	RoomList *list = g_new0(RoomList, 1);
 	list->window = window;
@@ -664,19 +642,12 @@ RoomList *create_room_list(Window *window) {
 	gtk_overlay_add_overlay(GTK_OVERLAY(pages), list->connection);
 	gtk_widget_set_vexpand(pages, TRUE);
 	gtk_box_append(GTK_BOX(list->box), pages);
-	list->slider = gtk_stack_new();
-	gtk_stack_set_transition_duration(GTK_STACK(list->slider), LIST_SLIDE_MS);
-	gtk_stack_add_named(GTK_STACK(list->slider), list->box, "live");
-	list->still = gtk_picture_new();
-	gtk_picture_set_content_fit(GTK_PICTURE(list->still), GTK_CONTENT_FIT_FILL);
-	gtk_stack_add_named(GTK_STACK(list->slider), list->still, "still");
-	g_signal_connect(list->slider, "notify::transition-running", G_CALLBACK(forget_list_still), list);
 	return list;
 }
 
 
 GtkWidget *get_room_list_widget(RoomList *list) {
-	return list->slider;
+	return list->box;
 }
 
 
@@ -696,16 +667,12 @@ void refresh_room_list_header(RoomList *list) {
 }
 
 
+/* Switching servers changes the list at once, without an animation */
 void show_room_list_network(RoomList *list, CrimsonNetwork *network) {
-	gboolean slides = list->network && network != list->network && freeze_room_list(list);
 	list->network = network;
 	gtk_filter_changed(GTK_FILTER(list->filter), GTK_FILTER_CHANGE_DIFFERENT);
 	select_listed_room(list, get_open_room(list->window));
 	refresh_room_list_header(list);
-	if (!slides)
-		return;
-	gtk_stack_set_transition_type(GTK_STACK(list->slider), GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT);
-	gtk_stack_set_visible_child(GTK_STACK(list->slider), list->box);
 }
 
 

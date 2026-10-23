@@ -57,8 +57,9 @@ headerbar.title-bar {
 	box-shadow: 0 0 0 3px var(--accent-bg-color);
 }
 
+/* Switching servers is instant, so only the dimming of a server still connecting fades */
 .rail-list > row avatar {
-	transition: box-shadow 200ms ease-out, opacity 300ms ease-out;
+	transition: opacity 400ms ease-out;
 }
 
 .rail-all {
@@ -68,7 +69,6 @@ headerbar.title-bar {
 	padding: 0;
 	margin: 10px 0 4px 0;
 	background-color: alpha(currentColor, 0.08);
-	transition: box-shadow 200ms ease-out;
 }
 
 .rail-kind {
@@ -116,7 +116,7 @@ headerbar.title-bar {
 	padding: 0;
 	margin: 1px 6px;
 	border-radius: 12px;
-	transition: background-color 150ms ease-out;
+	transition: background-color 200ms ease-out;
 }
 
 /* A chosen chat or person is shaded like a pointed one, only stronger */
@@ -306,7 +306,7 @@ headerbar.title-bar {
 }
 
 .fresh-message {
-	animation: pop-in 320ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+	animation: pop-in 420ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
 }
 
 /* A group's first bubble points at the avatar with a tail on its side, level with the avatar's middle, so the
@@ -423,7 +423,7 @@ headerbar.title-bar {
 .image-preview {
 	border-radius: 12px;
 	margin: 4px 0;
-	animation: pop-in 250ms ease-out;
+	animation: pop-in 325ms ease-out;
 }
 
 .reactions {
@@ -668,14 +668,14 @@ headerbar.title-bar {
 .send-button {
 	min-width: 44px;
 	min-height: 44px;
-	transition: opacity 200ms ease-out, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+	transition: opacity 260ms ease-out, transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .send-button.tucked,
 .send-button.tucked:disabled {
 	opacity: 0;
 	transform: scale(0.3);
-	transition: opacity 100ms ease-in, transform 100ms ease-in;
+	transition: opacity 130ms ease-in, transform 130ms ease-in;
 }
 
 .send-button:disabled {
@@ -807,7 +807,7 @@ headerbar.title-bar {
  * own is in place */
 .picture-choice > .picture-badge {
 	opacity: 0;
-	transition: opacity 150ms ease;
+	transition: opacity 200ms ease;
 	min-width: 28px;
 	min-height: 28px;
 	padding: 0;
@@ -823,7 +823,7 @@ headerbar.title-bar {
 /* The pen beside the user's own name only shows while the name is pointed at */
 .name-editor > .name-pen {
 	opacity: 0;
-	transition: opacity 150ms ease;
+	transition: opacity 200ms ease;
 }
 
 .name-editor:hover > .name-pen,

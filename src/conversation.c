@@ -11,7 +11,7 @@
 #include "window.h"
 #include "pictures.h"
 
-#define FADE_DURATION_MS 120
+#define FADE_DURATION_MS 160
 #define ACTIVITY_SECONDS 120
 #define SECONDS_PER_MINUTE 60
 #define HEADER_AVATAR_SIZE 38
@@ -40,7 +40,7 @@
 /* Room above the avatars for their hop and its shadow, since the overlay clips them to their own box */
 #define TYPING_HOP_ROOM 16
 #define NICK_KEY "nick"
-#define TYPING_RISE_MS 260
+#define TYPING_RISE_MS 340
 /* Rooms with more people than the user and one other show typing with avatars rather than only the header */
 #define TYPING_FACES_MEMBERS 3
 
