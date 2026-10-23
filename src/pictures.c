@@ -455,7 +455,8 @@ GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer da
 /* A sign in the lower left that tells, when clicked, that nobody else sees the picture */
 static GtkWidget *create_local_sign(void) {
 	GtkWidget *sign = gtk_menu_button_new();
-	gtk_menu_button_set_label(GTK_MENU_BUTTON(sign), "!");
+	/* A label as the child keeps the arrow a menu button draws beside a text label */
+	gtk_menu_button_set_child(GTK_MENU_BUTTON(sign), gtk_label_new("!"));
 	gtk_widget_add_css_class(sign, "picture-badge");
 	gtk_widget_add_css_class(sign, "picture-local");
 	gtk_widget_add_css_class(sign, "circular");
