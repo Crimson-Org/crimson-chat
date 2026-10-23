@@ -21,6 +21,8 @@ typedef struct {
 	void (*network_removed)(CrimsonNetwork *network, gpointer data);
 	/* A room was read, here or on another device, so its desktop notifications are no longer news */
 	void (*room_read)(CrimsonRoom *room, gpointer data);
+	/* The user asked which rooms the server has, as with /list */
+	void (*rooms_requested)(CrimsonNetwork *network, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */

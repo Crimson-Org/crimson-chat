@@ -229,6 +229,8 @@ static void run_network_command(CrimsonRoom *room, const char *name, const char 
 		message_someone(network, rest, "PRIVMSG");
 	} else if (g_str_equal(name, "notice")) {
 		message_someone(network, rest, "NOTICE");
+	} else if (g_str_equal(name, "list")) {
+		network->session->chat->events.rooms_requested(network, network->session->chat->data);
 	} else if (g_str_equal(name, "nick")) {
 		send_irc_client_command(network->client, "NICK", rest, NULL);
 	} else if (g_str_equal(name, "away")) {

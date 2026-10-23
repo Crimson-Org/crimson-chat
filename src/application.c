@@ -4,6 +4,7 @@
 #include "application.h"
 #include "dialogs.h"
 #include "formatting.h"
+#include "room-picker.h"
 #include "settings-dialog.h"
 #include "settings.h"
 #include "state.h"
@@ -79,6 +80,13 @@ static void open_requested_room(CrimsonRoom *room, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
 		open_room(window, room);
+}
+
+
+static void show_server_rooms(CrimsonNetwork *network, gpointer data) {
+	Window *window = get_main_window();
+	if (window)
+		show_room_picker(window, network);
 }
 
 
@@ -191,7 +199,7 @@ static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, open_requested_room,
-		share_invite, forget_network, withdraw_notification};
+		share_invite, forget_network, withdraw_notification, show_server_rooms};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},
