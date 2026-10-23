@@ -66,6 +66,11 @@ static void change_style(AdwComboRow *row, GParamSpec *spec, Style *style) {
 }
 
 
+static void change_tray_badge(AdwComboRow *row, GParamSpec *spec, TrayBadge *tray_badge) {
+	*tray_badge = (TrayBadge)adw_combo_row_get_selected(row);
+}
+
+
 static void change_theme(AdwComboRow *row, GParamSpec *spec, char **theme) {
 	const char *const *ids = g_object_get_data(G_OBJECT(row), "theme-ids");
 	g_free(*theme);
@@ -242,6 +247,16 @@ static void fill_badges(GtkWidget *stack, Settings *settings) {
 		{TEXT_NOTIFY_ROOM_MESSAGES, NULL, &settings->shows_room_badges},
 	};
 	add_switches(group, BADGES, G_N_ELEMENTS(BADGES));
+	static const char *const TRAY_BADGES[] = {TEXT_TRAY_BADGE_NOTHING, TEXT_TRAY_BADGE_MENTIONS, TEXT_TRAY_BADGE_ANY,
+		NULL};
+	g_autoptr(GtkStringList) tray_badges = gtk_string_list_new(TRAY_BADGES);
+	GtkWidget *tray = adw_combo_row_new();
+	keep_row_on_one_line(tray);
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(tray), TEXT_TRAY_BADGE);
+	adw_combo_row_set_model(ADW_COMBO_ROW(tray), G_LIST_MODEL(tray_badges));
+	adw_combo_row_set_selected(ADW_COMBO_ROW(tray), settings->tray_badge);
+	g_signal_connect(tray, "notify::selected", G_CALLBACK(change_tray_badge), &settings->tray_badge);
+	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), tray);
 	add_overrides(page, settings->badge_overrides, TEXT_RESTORE_BADGES);
 }
 

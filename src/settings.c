@@ -24,6 +24,7 @@ static Settings settings = {
 	.shows_mention_badges = TRUE,
 	.shows_private_badges = TRUE,
 	.shows_room_badges = TRUE,
+	.tray_badge = TRAY_BADGE_MENTIONS,
 	.closes_to_tray = TRUE,
 	.uses_24_hours = TRUE,
 };
@@ -144,6 +145,8 @@ void load_settings(void) {
 	settings.shows_mention_badges = read_switch(file, "badge-mentions", settings.shows_mention_badges);
 	settings.shows_private_badges = read_switch(file, "badge-private", settings.shows_private_badges);
 	settings.shows_room_badges = read_switch(file, "badge-room-messages", settings.shows_room_badges);
+	settings.tray_badge = (TrayBadge)read_key_integer(file, GROUP, "tray-badge", TRAY_BADGE_MENTIONS, TRAY_BADGE_NOTHING,
+		TRAY_BADGE_ANY);
 	settings.closes_to_tray = read_switch(file, "close-to-tray", settings.closes_to_tray);
 	settings.uses_24_hours = read_switch(file, "24-hour-clock", settings.uses_24_hours);
 	g_free(settings.highlight_words);
@@ -173,6 +176,7 @@ void save_settings(void) {
 	g_key_file_set_boolean(file, GROUP, "badge-mentions", settings.shows_mention_badges);
 	g_key_file_set_boolean(file, GROUP, "badge-private", settings.shows_private_badges);
 	g_key_file_set_boolean(file, GROUP, "badge-room-messages", settings.shows_room_badges);
+	g_key_file_set_integer(file, GROUP, "tray-badge", settings.tray_badge);
 	g_key_file_set_boolean(file, GROUP, "close-to-tray", settings.closes_to_tray);
 	g_key_file_set_boolean(file, GROUP, "24-hour-clock", settings.uses_24_hours);
 	g_key_file_set_string(file, GROUP, "highlight-words", settings.highlight_words ? settings.highlight_words : "");

@@ -8,6 +8,13 @@ typedef enum {
 	STYLE_DARK,
 } Style;
 
+/* What puts a dot on the tray icon, counting only rooms whose badges show */
+typedef enum {
+	TRAY_BADGE_NOTHING,
+	TRAY_BADGE_MENTIONS,
+	TRAY_BADGE_ANY,
+} TrayBadge;
+
 /* A room or private chat whose notifications or badges are switched on or off apart from the defaults */
 typedef struct {
 	char *network_key, *room_name;
@@ -24,6 +31,7 @@ typedef struct {
 	gboolean shows_events, shows_images, shows_typing, sends_typing, sends_read_markers;
 	gboolean notifies_mentions, notifies_private, notifies_room_messages, plays_sounds, closes_to_tray, uses_24_hours;
 	gboolean shows_mention_badges, shows_private_badges, shows_room_badges;
+	TrayBadge tray_badge;
 	/* Comma separated words that count as a mention besides the user's own nick */
 	char *highlight_words;
 	GPtrArray *notification_overrides, *badge_overrides;

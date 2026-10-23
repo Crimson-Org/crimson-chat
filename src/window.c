@@ -537,17 +537,20 @@ static void update_view(Window *window) {
 }
 
 
-/* The tray icon carries a red dot while a mention or a private message waits unread anywhere */
+/* The tray icon carries a red dot while a badged room holds what the Badges settings ask the tray to show */
 static void refresh_tray_attention(Window *window) {
 	if (!window->tray)
 		return;
-	gboolean has_mention = FALSE;
-	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
-	for (guint index = 0; index < count && !has_mention; index++) {
+	TrayBadge tray_badge = get_settings()->tray_badge;
+	gboolean wants_attention = FALSE;
+	guint count = tray_badge == TRAY_BADGE_NOTHING ? 0 : g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
+	for (guint index = 0; index < count && !wants_attention; index++) {
 		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(window->chat->networks), index);
-		count_network_badges(network, &has_mention);
+		gboolean has_mention = FALSE;
+		guint unread = count_network_badges(network, &has_mention);
+		wants_attention = has_mention || (tray_badge == TRAY_BADGE_ANY && unread);
 	}
-	set_tray_attention(window->tray, has_mention);
+	set_tray_attention(window->tray, wants_attention);
 }
 
 
