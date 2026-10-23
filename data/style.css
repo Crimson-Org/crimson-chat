@@ -10,8 +10,8 @@
 	--chat-wall: color-mix(in srgb, var(--accent-bg-color) 5%, var(--window-bg-color));
 	--pill-bg: color-mix(in srgb, var(--window-fg-color) 32%, transparent);
 	--rail-bg: color-mix(in srgb, var(--window-fg-color) 6%, var(--window-bg-color));
-	/* The lines parting the chat from its neighbours, half see-through so they darken any theme's colours alike */
-	--divider: rgba(0, 0, 0, 0.5);
+	/* The faint lines parting the chat from its neighbours, the same as beside the server rail */
+	--divider: alpha(currentColor, 0.08);
 	/* What lifts bubbles, reactions and avatars off the chat's wall */
 	--message-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
 }
@@ -39,7 +39,7 @@ headerbar.title-bar {
 .rail {
 	background-color: var(--rail-bg);
 	min-width: 76px;
-	border-right: 1px solid alpha(currentColor, 0.08);
+	border-right: 1px solid var(--divider);
 }
 
 .rail-list {
@@ -250,7 +250,7 @@ headerbar.title-bar {
 		transparent 55%);
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-size: 128px 128px, auto, auto;
-	/* A dark line parts the chat from the side panel, ending where the composer's own line takes over */
+	/* A faint line parts the chat from the side panel, ending where the composer's own line takes over */
 	box-shadow: inset 1px 0 var(--divider);
 }
 
@@ -625,11 +625,10 @@ headerbar.title-bar {
 	min-height: 44px;
 }
 
-/* The composer along the bottom, set off from the chat by a dark line with a faint light one under it */
+/* The composer along the bottom, set off from the chat by a faint line */
 .composer {
 	padding: 8px 12px;
 	border-top: 1px solid var(--divider);
-	box-shadow: inset 0 1px alpha(#ffffff, 0.12);
 }
 
 .reply-bar {
@@ -698,7 +697,7 @@ headerbar.title-bar {
 }
 
 /* The member list */
-/* The same dark line as beside the chat parts the members from it while they lie over the chat */
+/* The same faint line as beside the chat parts the members from it while they lie over the chat */
 .member-panel {
 	background-color: var(--window-bg-color);
 	box-shadow: inset 1px 0 var(--divider);
