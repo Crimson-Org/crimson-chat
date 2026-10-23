@@ -456,6 +456,8 @@ static void deliver_read_marker(CrimsonNetwork *network, const IrcMessage *messa
 	room->read_time = read_time;
 	count_unread(room);
 	announce_room_change(room);
+	if (!room->unread_count)
+		network->session->chat->events.room_read(room, network->session->chat->data);
 	save_chat_cache_later(network->session->chat);
 }
 

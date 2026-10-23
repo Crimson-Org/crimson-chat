@@ -1,12 +1,15 @@
 #include <string.h>
 
 #include "../lang/en.h"
+#include "formatting.h"
 #include "session.h"
 #include "settings.h"
 
 /* Room for the sender's own nick, user and host, which the server adds when it passes a line on */
 #define LINE_BYTES 400
 #define CTCP_MARK "\001"
+/* How much of a message a reply quotes where the server strips reply tags */
+#define REPLY_EXCERPT_CHARS 30
 
 
 static char *get_own_nick(CrimsonNetwork *network) {
@@ -267,6 +270,22 @@ gboolean allows_client_tag(CrimsonNetwork *network, const char *name) {
 }
 
 
+/* The start of a message on one line, cut at a word with an ellipsis once it runs past a few words */
+static char *describe_reply_excerpt(CrimsonMessage *message) {
+	g_autofree char *plain = strip_irc_formatting(message->text);
+	g_strdelimit(plain, "\r\n\t", ' ');
+	g_strstrip(plain);
+	if (g_utf8_strlen(plain, -1) <= REPLY_EXCERPT_CHARS)
+		return g_steal_pointer(&plain);
+	char *end = g_utf8_offset_to_pointer(plain, REPLY_EXCERPT_CHARS);
+	*end = '\0';
+	char *space = strrchr(plain, ' ');
+	if (space && space > plain)
+		*space = '\0';
+	return g_strconcat(plain, "…", NULL);
+}
+
+
 void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to) {
 	if (!room->network->client || !*text)
 		return;
@@ -277,13 +296,12 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 		return;
 	}
 	const char *body = text[0] == '/' ? text + 1 : text;
-	/* A server that strips the reply tag would leave the reply without context, so it names the person instead, the
-	 * way replies have always looked on IRC */
-	g_autofree char *named = NULL;
+	/* A server that strips the reply tag would leave the reply without context, so it quotes the person and the start
+	 * of what they said in front of it */
+	g_autofree char *quoted = NULL;
 	if (reply_to && reply_to->sender && room->kind == ROOM_CHANNEL && !allows_client_tag(room->network, "reply")) {
-		g_autofree char *prefix = g_strdup_printf("%s: ", reply_to->sender);
-		if (!g_str_has_prefix(body, prefix))
-			body = named = g_strconcat(prefix, body, NULL);
+		g_autofree char *excerpt = describe_reply_excerpt(reply_to);
+		body = quoted = g_strdup_printf(">\"%s: %s\" %s", reply_to->sender, excerpt, body);
 	}
 	if (room->kind == ROOM_SERVER)
 		send_raw(room->network, body);
@@ -340,6 +358,7 @@ void mark_room_read(CrimsonRoom *room) {
 	room->read_time = last->time;
 	count_unread(room);
 	announce_room_change(room);
+	room->network->session->chat->events.room_read(room, room->network->session->chat->data);
 	save_chat_cache_later(room->network->session->chat);
 	if (room->kind == ROOM_SERVER || !get_settings()->sends_read_markers || !can_network(room->network,
 		"draft/read-marker"))

@@ -33,6 +33,12 @@ static CrimsonRoom *find_room_by_key(const char *key) {
 }
 
 
+static void withdraw_notification(CrimsonRoom *room, gpointer data) {
+	g_autofree char *key = describe_room_key(room);
+	g_application_withdraw_notification(g_application_get_default(), key);
+}
+
+
 /* A desktop notification for a mention or a private message, unless the room is already on screen */
 static void notify_message(CrimsonRoom *room, CrimsonMessage *message, gpointer data) {
 	Window *window = get_main_window();
@@ -188,7 +194,7 @@ static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_problem, open_requested_room,
-		share_invite, forget_network, offer_login};
+		share_invite, forget_network, offer_login, withdraw_notification};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},

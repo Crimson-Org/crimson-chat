@@ -706,6 +706,8 @@ Conversation *create_conversation(Window *window) {
 	conversation->is_pinned = TRUE;
 	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, show_person,
 		show_person_menu, conversation};
+	/* Coming back to the window counts as seeing the open chat, so what arrived meanwhile is read */
+	g_signal_connect_swapped(window->window, "notify::is-active", G_CALLBACK(mark_read_when_seen), conversation);
 	conversation->stack = gtk_stack_new();
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");

@@ -20,6 +20,8 @@ typedef struct {
 	void (*network_removed)(CrimsonNetwork *network, gpointer data);
 	/* The network's nickname service asked the user to log in, and the app has no login for it */
 	void (*login_wanted)(CrimsonNetwork *network, gpointer data);
+	/* A room was read, here or on another device, so its desktop notifications are no longer news */
+	void (*room_read)(CrimsonRoom *room, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */
