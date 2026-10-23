@@ -87,9 +87,11 @@ headerbar.title-bar {
 	background-color: var(--rail-bg);
 }
 
-/* The picture's padding already moves the badge out, so this puts it where it sat on the bare picture */
+/* A border in the rail's colour parts the badge from the picture, and the margin puts it where it sat on the bare
+ * picture */
 .rail-badge {
-	margin: -1px -3px;
+	margin: -3px -5px;
+	border: 2px solid var(--rail-bg);
 }
 
 /* Unread counters, crimson when they hold a mention */
