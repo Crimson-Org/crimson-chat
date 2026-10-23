@@ -21,7 +21,7 @@ struct RoomList {
 	/* The server's name until the search button slides the search field open in its place */
 	GtkWidget *title_stack, *title, *search_button;
 	GtkWidget *add_button, *add_revealer, *connection, *connection_button, *connection_icons, *connection_note,
-		*connection_label;
+		*connection_label, *connection_fix;
 	/* Whether the press now going on started on the list's empty space, whether the list holds chats, and whether
 	 * the corner shows a problem rather than a wait */
 	gboolean is_space_pressed, has_chats, is_problem;
@@ -438,7 +438,16 @@ static GtkWidget *create_list_view(RoomList *list) {
 	gtk_widget_add_css_class(list->connection_label, "connection-note");
 	list->connection_note = gtk_revealer_new();
 	gtk_revealer_set_transition_type(GTK_REVEALER(list->connection_note), GTK_REVEALER_TRANSITION_TYPE_SLIDE_RIGHT);
-	gtk_revealer_set_child(GTK_REVEALER(list->connection_note), list->connection_label);
+	list->connection_fix = gtk_button_new();
+	gtk_widget_add_css_class(list->connection_fix, "pill");
+	gtk_widget_add_css_class(list->connection_fix, "suggested-action");
+	gtk_widget_add_css_class(list->connection_fix, "connection-fix");
+	gtk_widget_set_halign(list->connection_fix, GTK_ALIGN_START);
+	GtkWidget *note_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+	gtk_widget_add_css_class(note_box, "connection-note-box");
+	gtk_box_append(GTK_BOX(note_box), list->connection_label);
+	gtk_box_append(GTK_BOX(note_box), list->connection_fix);
+	gtk_revealer_set_child(GTK_REVEALER(list->connection_note), note_box);
 	gtk_widget_set_valign(list->connection_note, GTK_ALIGN_CENTER);
 	/* One rounded shape that is a circle around the spinner and grows into a pill as the note slides out */
 	list->connection = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -577,6 +586,12 @@ void show_room_list_connection(RoomList *list, const ConnectionNote *note) {
 	list->is_problem = note && note->is_problem;
 	if (note) {
 		gtk_label_set_text(GTK_LABEL(list->connection_label), note->message);
+		gtk_widget_set_visible(list->connection_fix, note->fix_label != NULL);
+		if (note->fix_label) {
+			gtk_button_set_label(GTK_BUTTON(list->connection_fix), note->fix_label);
+			gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_fix), note->fix_action);
+			gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->connection_fix), note->fix_target);
+		}
 		gtk_stack_set_visible_child_name(GTK_STACK(list->connection_icons), note->is_problem ? "problem" : "waiting");
 		gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_button), note->action);
 		gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->connection_button), note->target);

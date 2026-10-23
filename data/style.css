@@ -529,8 +529,8 @@ headerbar.top-bar menubutton > button {
 	box-shadow: 0 2px 8px alpha(black, 0.3);
 }
 
-.connection-note {
-	padding: 8px 18px 8px 8px;
+.connection-note-box {
+	padding: 10px 18px 10px 8px;
 }
 
 /* While the server is away the send button only spins, plainly visible rather than faded */

@@ -117,25 +117,50 @@ static gboolean is_stuck(CrimsonNetwork *network) {
 }
 
 
-/* Only says reconnecting when something really is trying again, and otherwise says why it stopped */
+/* What stopped a connection, in kind: a refused login, an untrusted certificate, or anything else */
+typedef enum {
+	STOP_OTHER,
+	STOP_LOGIN,
+	STOP_CERTIFICATE,
+} StopKind;
+
+
+static StopKind read_stop_kind(const char *error) {
+	g_autofree char *reason = error ? g_ascii_strdown(error, -1) : NULL;
+	if (reason && strstr(reason, "certificate"))
+		return STOP_CERTIFICATE;
+	if (reason && (strstr(reason, "sasl") || strstr(reason, "authentication") || strstr(reason, "password")
+		|| strstr(reason, "login")))
+		return STOP_LOGIN;
+	return STOP_OTHER;
+}
+
+
+/* A stopped connection is described in a few plain words, while the server's messages keep the technical reason */
+static char *describe_stop(const char *error) {
+	switch (read_stop_kind(error)) {
+	case STOP_LOGIN: return g_strdup(TEXT_LOGIN_REFUSED);
+	case STOP_CERTIFICATE: return g_strdup(TEXT_CERTIFICATE_REFUSED);
+	default: return g_strdup(TEXT_CANNOT_CONNECT);
+	}
+}
+
+
+/* Only says reconnecting when something really is trying again, and otherwise says plainly why it stopped */
 char *describe_connection_wait(CrimsonNetwork *network) {
 	Session *session = network->session;
 	gboolean is_stopped = is_stuck(network);
 	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED) {
-		const char *name = describe_account_name(session);
-		const char *error = read_account_error(session);
 		if (is_stopped)
-			return g_strdup_printf(TEXT_DISCONNECTED_FROM, name, error ? error : TEXT_NO_REASON);
-		return g_strdup_printf(session->has_connected ? TEXT_RECONNECTING_TO : TEXT_CONNECTING_TO_ELLIPSIS, name);
+			return describe_stop(read_account_error(session));
+		return g_strdup(session->has_connected ? TEXT_RECONNECTING : TEXT_CONNECTING);
 	}
 	if (network->state == NETWORK_CONNECTED)
 		return NULL;
-	if (is_stopped) {
-		const char *error = read_network_error(network);
-		return g_strdup_printf(TEXT_DISCONNECTED_FROM, network->name, error && *error ? error : TEXT_NO_REASON);
-	}
-	return g_strdup_printf(network->state == NETWORK_CONNECTING && !session->has_connected
-		? TEXT_CONNECTING_TO_ELLIPSIS : TEXT_RECONNECTING_TO, network->name);
+	if (is_stopped)
+		return describe_stop(read_network_error(network));
+	return g_strdup(network->state == NETWORK_CONNECTING && !session->has_connected ? TEXT_CONNECTING
+		: TEXT_RECONNECTING);
 }
 
 
@@ -157,7 +182,7 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	gtk_stack_set_visible_child_name(GTK_STACK(state), is_stopped ? "problem" : "waiting");
 	/* A connected server only names itself, and one that is not says what the corner of the list says about it */
 	g_autofree char *wait = describe_connection_wait(network);
-	g_autofree char *tooltip = wait ? g_strdup(wait) : g_strdup(network->name);
+	g_autofree char *tooltip = wait ? g_strdup_printf("%s\n%s", network->name, wait) : g_strdup(network->name);
 	gtk_widget_set_tooltip_text(row, tooltip);
 }
 
@@ -262,11 +287,30 @@ static void read_connection_problem(Window *window) {
 }
 
 
-/* Clicking the corner opens the server's messages, where what happened is written */
+/* Clicking the corner opens the server's messages, where what happened is written, and a stopped connection
+ * offers the fix: the account for a refused login, the bouncer's settings for its own, or another try */
 static void show_connection(Window *window) {
-	g_autoptr(GVariant) target = window->network ? g_variant_ref_sink(g_variant_new_string(window->network->key))
-		: NULL;
-	ConnectionNote note = {window->lost_message, window->is_problem, target ? "win.server-messages" : NULL, target};
+	CrimsonNetwork *network = window->network;
+	g_autoptr(GVariant) target = network ? g_variant_ref_sink(g_variant_new_string(network->key)) : NULL;
+	ConnectionNote note = {window->lost_message, window->is_problem, target ? "win.server-messages" : NULL, target,
+		NULL, NULL, NULL};
+	if (window->is_problem && network) {
+		Session *session = network->session;
+		gboolean is_bouncer_down = session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED;
+		StopKind kind = read_stop_kind(is_bouncer_down ? read_account_error(session) : read_network_error(network));
+		if (kind == STOP_LOGIN && is_bouncer_down) {
+			note.fix_label = TEXT_LOG_IN;
+			note.fix_action = "win.bouncer-settings";
+		} else if (kind == STOP_LOGIN) {
+			note.fix_label = TEXT_LOG_IN;
+			note.fix_action = "win.own-profile";
+			note.fix_target = target;
+		} else if (kind == STOP_OTHER) {
+			note.fix_label = TEXT_TRY_AGAIN;
+			note.fix_action = "win.reconnect-server";
+			note.fix_target = target;
+		}
+	}
 	show_room_list_connection(window->room_list, &note);
 }
 

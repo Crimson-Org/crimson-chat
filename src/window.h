@@ -81,6 +81,9 @@ typedef struct {
 	gboolean is_problem;
 	const char *action;
 	GVariant *target;
+	/* A button in the note that fixes the problem, such as opening the account for a refused login, or NULL */
+	const char *fix_label, *fix_action;
+	GVariant *fix_target;
 } ConnectionNote;
 
 /* Shows the connection note in the list's corner and dims the chats, or hides it with NULL */
