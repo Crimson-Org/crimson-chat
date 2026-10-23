@@ -656,12 +656,13 @@ static void start_editing_name(GtkEditableLabel *name) {
 }
 
 
-/* The hidden text box would ask for room in average letters, which leaves a gap beside the name, so the shown name
- * sets the width and the text box only asks for room while the user types */
+/* The hidden text box asks for 150 pixels without a most letters set, which leaves a gap beside a short name, so the
+ * shown name sets the width and the text box only asks for room while the user types */
 static void fit_name_width(GtkEditable *name) {
 	gboolean is_editing = gtk_editable_label_get_editing(GTK_EDITABLE_LABEL(name));
-	int letters = (int)g_utf8_strlen(gtk_editable_get_text(name), -1);
-	gtk_editable_set_width_chars(name, is_editing ? MAX(1, letters) : 1);
+	int letters = is_editing ? MAX(1, (int)g_utf8_strlen(gtk_editable_get_text(name), -1)) : 1;
+	gtk_editable_set_width_chars(name, letters);
+	gtk_editable_set_max_width_chars(name, letters);
 }
 
 
