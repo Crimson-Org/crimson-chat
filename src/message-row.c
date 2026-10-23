@@ -166,7 +166,9 @@ static void open_message_menu(RowContext *context, double x, double y) {
 	GtkWidget *popover = gtk_popover_new();
 	gtk_widget_add_css_class(popover, "message-menu");
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
-	gboolean can_react = message->id && room && can_network(room->network, "message-tags");
+	/* Reactions only show where the server passes them on to others */
+	gboolean can_react = message->id && room && can_network(room->network, "message-tags")
+		&& allows_client_tag(room->network, "draft/react");
 	if (can_react) {
 		gtk_box_append(GTK_BOX(box), create_reaction_strip(context));
 		gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));

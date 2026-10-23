@@ -16,7 +16,7 @@ typedef struct {
 	Window *window;
 	CrimsonNetwork *network;
 	AdwDialog *dialog;
-	GtkWidget *stack, *search, *typed_button, *join_button, *loading_label;
+	GtkWidget *stack, *search, *typed_check, *typed_name, *join_button, *loading_label;
 	/* The seconds left before a server that waits after connecting lists its rooms */
 	guint wait_left, wait_source;
 	GtkStringList *names;
@@ -50,8 +50,21 @@ static gboolean is_joined(Picker *picker, const char *name) {
 }
 
 
+/* A typed name the server did not list is picked like a listed room, with its tick on as it is typed */
+static gboolean has_typed_room(Picker *picker) {
+	return gtk_widget_get_visible(picker->typed_check)
+		&& gtk_check_button_get_active(GTK_CHECK_BUTTON(picker->typed_check));
+}
+
+
+static char *read_typed_room(Picker *picker) {
+	g_autofree char *text = g_strstrip(g_strdup(gtk_editable_get_text(GTK_EDITABLE(picker->search))));
+	return *text == '#' ? g_steal_pointer(&text) : g_strconcat("#", text, NULL);
+}
+
+
 static void refresh_join_button(Picker *picker) {
-	guint count = g_hash_table_size(picker->chosen);
+	guint count = g_hash_table_size(picker->chosen) + (has_typed_room(picker) ? 1 : 0);
 	g_autofree char *label = count == 1 ? g_strdup(TEXT_JOIN_ONE_ROOM) : g_strdup_printf(TEXT_JOIN_ROOMS, count);
 	gtk_button_set_label(GTK_BUTTON(picker->join_button), count ? label : TEXT_JOIN);
 	gtk_widget_set_sensitive(picker->join_button, count > 0);
@@ -66,20 +79,14 @@ static void join_rooms(GPtrArray *names, Picker *picker) {
 }
 
 
-static void join_chosen(GtkButton *button, Picker *picker) {
+/* The ticked rooms and a typed one join together, from the button or from Enter in the search */
+static void join_chosen(GtkWidget *widget, Picker *picker) {
 	g_autoptr(GPtrArray) names = g_hash_table_get_keys_as_ptr_array(picker->chosen);
-	join_rooms(names, picker);
-}
-
-
-/* A typed name that the server did not list still joins at once */
-static void join_typed(GtkWidget *widget, Picker *picker) {
-	const char *text = gtk_editable_get_text(GTK_EDITABLE(picker->search));
-	if (!text || !*text)
-		return;
-	g_autoptr(GPtrArray) names = g_ptr_array_new();
-	g_ptr_array_add(names, (gpointer)text);
-	join_rooms(names, picker);
+	g_autofree char *typed = has_typed_room(picker) ? read_typed_room(picker) : NULL;
+	if (typed)
+		g_ptr_array_add(names, typed);
+	if (names->len)
+		join_rooms(names, picker);
 }
 
 
@@ -99,11 +106,13 @@ static void change_search(GtkSearchEntry *entry, Picker *picker) {
 	const char *text = gtk_editable_get_text(GTK_EDITABLE(entry));
 	gtk_string_filter_set_search(picker->filter, text);
 	gboolean is_new = text && *text && !is_listed(picker, text);
-	gtk_widget_set_visible(picker->typed_button, is_new);
-	if (!is_new)
-		return;
-	g_autofree char *label = g_strdup_printf(TEXT_JOIN_TYPED_ROOM, *text == '#' ? "" : "#", text);
-	gtk_button_set_label(GTK_BUTTON(picker->typed_button), label);
+	gtk_widget_set_visible(picker->typed_check, is_new);
+	if (is_new) {
+		g_autofree char *name = read_typed_room(picker);
+		gtk_label_set_text(GTK_LABEL(picker->typed_name), name);
+		gtk_check_button_set_active(GTK_CHECK_BUTTON(picker->typed_check), TRUE);
+	}
+	refresh_join_button(picker);
 }
 
 
@@ -240,13 +249,22 @@ static GtkWidget *create_rooms_page(Picker *picker) {
 	picker->search = gtk_search_entry_new();
 	gtk_search_entry_set_placeholder_text(GTK_SEARCH_ENTRY(picker->search), TEXT_SEARCH_ROOMS);
 	g_signal_connect(picker->search, "search-changed", G_CALLBACK(change_search), picker);
-	g_signal_connect(picker->search, "activate", G_CALLBACK(join_typed), picker);
+	g_signal_connect(picker->search, "activate", G_CALLBACK(join_chosen), picker);
 	gtk_box_append(GTK_BOX(box), picker->search);
-	picker->typed_button = gtk_button_new();
-	gtk_widget_add_css_class(picker->typed_button, "flat");
-	gtk_widget_set_visible(picker->typed_button, FALSE);
-	g_signal_connect(picker->typed_button, "clicked", G_CALLBACK(join_typed), picker);
-	gtk_box_append(GTK_BOX(box), picker->typed_button);
+	/* A name the server did not list shows as a ticked row of its own above the listed rooms */
+	picker->typed_check = gtk_check_button_new();
+	gtk_widget_add_css_class(picker->typed_check, "picker-row");
+	GtkWidget *typed_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	picker->typed_name = create_row_label("picker-name");
+	gtk_widget_set_hexpand(picker->typed_name, TRUE);
+	gtk_box_append(GTK_BOX(typed_box), picker->typed_name);
+	GtkWidget *unlisted = create_row_label("picker-users");
+	gtk_label_set_text(GTK_LABEL(unlisted), TEXT_NOT_LISTED);
+	gtk_box_append(GTK_BOX(typed_box), unlisted);
+	gtk_check_button_set_child(GTK_CHECK_BUTTON(picker->typed_check), typed_box);
+	gtk_widget_set_visible(picker->typed_check, FALSE);
+	g_signal_connect_swapped(picker->typed_check, "toggled", G_CALLBACK(refresh_join_button), picker);
+	gtk_box_append(GTK_BOX(box), picker->typed_check);
 	GtkExpression *expression = gtk_property_expression_new(GTK_TYPE_STRING_OBJECT, NULL, "string");
 	picker->filter = gtk_string_filter_new(expression);
 	GtkFilterListModel *filtered = gtk_filter_list_model_new(G_LIST_MODEL(g_object_ref(picker->names)),

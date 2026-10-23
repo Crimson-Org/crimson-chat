@@ -148,6 +148,8 @@ void save_network_channels(CrimsonNetwork *network);
 /* Outgoing */
 void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to);
 void send_reaction(CrimsonRoom *room, CrimsonMessage *message, const char *reaction);
+/* Whether the server passes on a client tag such as react or reply, from its CLIENTTAGDENY */
+gboolean allows_client_tag(CrimsonNetwork *network, const char *name);
 void redact_message(CrimsonRoom *room, CrimsonMessage *message);
 void send_typing(CrimsonRoom *room, const char *state);
 void mark_room_read(CrimsonRoom *room);

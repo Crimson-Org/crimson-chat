@@ -217,7 +217,7 @@
 #define TEXT_SEARCH_ROOMS "Search or type a room"
 #define TEXT_JOIN_ONE_ROOM "Join 1 Room"
 #define TEXT_JOIN_ROOMS "Join %u Rooms"
-#define TEXT_JOIN_TYPED_ROOM "Join %s%s"
+#define TEXT_NOT_LISTED "Not listed"
 #define TEXT_ALREADY_JOINED "Joined"
 #define TEXT_HELP_BOUNCER "A bouncer is a small server that stays connected for you. It keeps your rooms joined and saves messages while this computer is off. Its owner gives you an address and a login, often through an invite link."
 #define TEXT_HELP_BOUNCER_ADDRESS "The bouncer's address and port, from its owner. An invite link fills these in for you."

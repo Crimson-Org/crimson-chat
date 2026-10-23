@@ -249,6 +249,24 @@ static void run_command(CrimsonRoom *room, const char *line) {
 }
 
 
+/* CLIENTTAGDENY lists the client tags a server drops, with * for all of them and -name for exceptions */
+gboolean allows_client_tag(CrimsonNetwork *network, const char *name) {
+	const char *denied = get_irc_support(get_network_state(network), "CLIENTTAGDENY");
+	if (!denied)
+		return TRUE;
+	g_auto(GStrv) entries = g_strsplit(denied, ",", -1);
+	g_autofree char *exception = g_strconcat("-", name, NULL);
+	gboolean is_denied = FALSE;
+	for (int index = 0; entries[index]; index++) {
+		if (g_str_equal(entries[index], "*") || g_str_equal(entries[index], name))
+			is_denied = TRUE;
+		if (g_str_equal(entries[index], exception))
+			return TRUE;
+	}
+	return !is_denied;
+}
+
+
 void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to) {
 	if (!room->network->client || !*text)
 		return;
@@ -259,6 +277,14 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 		return;
 	}
 	const char *body = text[0] == '/' ? text + 1 : text;
+	/* A server that strips the reply tag would leave the reply without context, so it names the person instead, the
+	 * way replies have always looked on IRC */
+	g_autofree char *named = NULL;
+	if (reply_to && reply_to->sender && room->kind == ROOM_CHANNEL && !allows_client_tag(room->network, "reply")) {
+		g_autofree char *prefix = g_strdup_printf("%s: ", reply_to->sender);
+		if (!g_str_has_prefix(body, prefix))
+			body = named = g_strconcat(prefix, body, NULL);
+	}
 	if (room->kind == ROOM_SERVER)
 		send_raw(room->network, body);
 	else
@@ -268,7 +294,7 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 
 void send_reaction(CrimsonRoom *room, CrimsonMessage *message, const char *reaction) {
 	CrimsonNetwork *network = room->network;
-	if (!message->id || !can_network(network, "message-tags"))
+	if (!message->id || !can_network(network, "message-tags") || !allows_client_tag(network, "draft/react"))
 		return;
 	g_autofree char *nick = get_own_nick(network);
 	gboolean is_removing = has_reacted(message, reaction, nick);
@@ -289,22 +315,6 @@ void redact_message(CrimsonRoom *room, CrimsonMessage *message) {
 }
 
 
-/* CLIENTTAGDENY lists the client tags a server drops, with * for all of them and -name for exceptions */
-static gboolean allows_client_tag(CrimsonNetwork *network, const char *name) {
-	const char *denied = get_irc_support(get_network_state(network), "CLIENTTAGDENY");
-	if (!denied)
-		return TRUE;
-	g_auto(GStrv) entries = g_strsplit(denied, ",", -1);
-	g_autofree char *exception = g_strconcat("-", name, NULL);
-	gboolean is_denied = FALSE;
-	for (int index = 0; entries[index]; index++) {
-		if (g_str_equal(entries[index], "*") || g_str_equal(entries[index], name))
-			is_denied = TRUE;
-		if (g_str_equal(entries[index], exception))
-			return TRUE;
-	}
-	return !is_denied;
-}
 
 
 void send_typing(CrimsonRoom *room, const char *state) {
