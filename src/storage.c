@@ -171,6 +171,7 @@ void load_room_cache(CrimsonNetwork *network) {
 		g_free(room->preview);
 		room->preview = g_strdup(fields[7]);
 	}
+	network->server_room->is_listed = g_key_file_get_boolean(get_room_cache(), network->key, "server-listed", NULL);
 	g_auto(GStrv) activity = g_key_file_get_string_list(get_room_cache(), network->key, "activity", NULL, NULL);
 	for (int index = 0; activity && activity[index]; index++) {
 		g_auto(GStrv) fields = g_strsplit(activity[index], "\t", 4);
@@ -229,6 +230,7 @@ void save_room_cache(GListModel *networks) {
 				g_ptr_array_add(activity, g_strdup_printf("%s\t%d\t%" G_GINT64_FORMAT "\t%" G_GINT64_FORMAT, room->name,
 					room->activity, room->last_active, room->activity_checked));
 		}
+		g_key_file_set_boolean(file, network->key, "server-listed", network->server_room->is_listed);
 		if (activity->len)
 			g_key_file_set_string_list(file, network->key, "activity", (const char *const *)activity->pdata,
 				activity->len);

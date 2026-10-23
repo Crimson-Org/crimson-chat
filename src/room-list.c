@@ -35,7 +35,7 @@ static gboolean keep_room(gpointer item, gpointer data) {
 	CrimsonRoom *room = item;
 	RoomList *list = data;
 	/* Server rooms stay out of the list, and open from the server menu */
-	if (room->kind == ROOM_SERVER || room->network != list->network)
+	if ((room->kind == ROOM_SERVER && !room->is_listed) || room->network != list->network)
 		return FALSE;
 	const char *search = gtk_editable_get_text(GTK_EDITABLE(list->search));
 	if (!search || !*search)
@@ -120,15 +120,17 @@ static void forget_row_menu(GtkPopover *popover, gpointer data) {
 static void open_row_menu(GtkGestureClick *gesture, int presses, double x, double y, gpointer data) {
 	GtkWidget *row = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(gesture));
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(row), ROOM_KEY);
-	if (!room || room->kind == ROOM_SERVER)
+	if (!room)
 		return;
-	/* Leaving cannot be undone from here, so the item is red */
-	GtkWidget *leave = gtk_button_new_with_label(room->kind == ROOM_CHANNEL ? TEXT_LEAVE_ROOM : TEXT_DELETE_CHAT);
+	/* Leaving cannot be undone from here, so the item is red, while the server's messages only leave the list */
+	gboolean is_server = room->kind == ROOM_SERVER;
+	GtkWidget *leave = gtk_button_new_with_label(is_server ? TEXT_HIDE : room->kind == ROOM_CHANNEL ? TEXT_LEAVE_ROOM
+		: TEXT_DELETE_CHAT);
 	gtk_widget_add_css_class(leave, "flat");
-	gtk_widget_add_css_class(leave, "destructive-item");
-	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-chat");
-	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(leave), g_variant_new("(ss)", room->network->key,
-		room->name));
+	gtk_widget_add_css_class(leave, is_server ? "plain-item" : "destructive-item");
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), is_server ? "win.hide-server-messages" : "win.leave-chat");
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(leave), is_server ? g_variant_new_string(room->network->key)
+		: g_variant_new("(ss)", room->network->key, room->name));
 	GtkWidget *popover = gtk_popover_new();
 	gtk_widget_add_css_class(popover, "menu");
 	gtk_popover_set_child(GTK_POPOVER(popover), leave);

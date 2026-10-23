@@ -604,9 +604,28 @@ static void own_profile_action(GSimpleAction *action, GVariant *parameter, gpoin
 
 /* The server room holds what the network itself says, kept out of the chat list */
 static void server_messages_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	CrimsonNetwork *network = find_keyed_network(data, parameter);
-	if (network)
-		open_room(data, network->server_room);
+	Window *window = data;
+	CrimsonNetwork *network = find_keyed_network(window, parameter);
+	if (!network)
+		return;
+	network->server_room->is_listed = TRUE;
+	save_chat_cache_later(window->chat);
+	resort_room_list(window->room_list);
+	open_room(window, network->server_room);
+}
+
+
+/* The server's messages are only taken off the list, to come back the next time they are opened */
+static void hide_server_messages_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	CrimsonNetwork *network = find_keyed_network(window, parameter);
+	if (!network)
+		return;
+	if (get_open_room(window) == network->server_room)
+		close_open_room(window);
+	network->server_room->is_listed = FALSE;
+	save_chat_cache_later(window->chat);
+	resort_room_list(window->room_list);
 }
 
 
@@ -689,6 +708,7 @@ static void add_window_actions(Window *window) {
 		{"choose-server", choose_server_action, "s", NULL, NULL, {0}},
 		{"own-profile", own_profile_action, "s", NULL, NULL, {0}},
 		{"server-messages", server_messages_action, "s", NULL, NULL, {0}},
+		{"hide-server-messages", hide_server_messages_action, "s", NULL, NULL, {0}},
 		{"network-settings", network_settings_action, "s", NULL, NULL, {0}},
 		{"reconnect-server", reconnect_server_action, "s", NULL, NULL, {0}},
 		{"remove-network", remove_network_action, "s", NULL, NULL, {0}},

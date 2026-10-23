@@ -270,3 +270,4 @@
 #define TEXT_TOPIC_SET_ON "%s, %s"
 #define TEXT_PASSWORD_SAVED "Password (Saved)"
 #define TEXT_ROOMS_WAIT "This server shows its rooms after you have been connected for a minute. Asking again in %u seconds…"
+#define TEXT_HIDE "Hide"

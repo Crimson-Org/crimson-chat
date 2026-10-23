@@ -80,6 +80,8 @@ struct _CrimsonRoom {
 	/* For a private chat, when the person was last active and when the server was last asked, in real time */
 	Activity activity;
 	gint64 last_active, activity_checked;
+	/* For a server room, whether the user opened its messages, which lists it among the chats until hidden */
+	gboolean is_listed;
 	/* Nicks to the monotonic moment their typing notice runs out */
 	GHashTable *typing;
 };

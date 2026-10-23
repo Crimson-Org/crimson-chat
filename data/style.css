@@ -512,3 +512,8 @@ headerbar.top-bar menubutton > button {
 	min-width: 48px;
 	min-height: 48px;
 }
+
+.plain-item {
+	font-weight: normal;
+	padding: 6px 12px;
+}
