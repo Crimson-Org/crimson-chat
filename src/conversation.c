@@ -600,7 +600,6 @@ static void rise_typing_faces(double value, gpointer data) {
 
 static void create_typing_faces(Conversation *conversation, GtkWidget *overlay) {
 	conversation->typing_faces = gtk_fixed_new();
-	gtk_widget_set_can_target(conversation->typing_faces, FALSE);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->typing_faces);
 	gtk_overlay_set_clip_overlay(GTK_OVERLAY(overlay), conversation->typing_faces, TRUE);
 	AdwAnimationTarget *target = adw_callback_animation_target_new(rise_typing_faces, conversation, NULL);
@@ -1421,7 +1420,8 @@ static gboolean is_busy_room(CrimsonRoom *room) {
 }
 
 
-/* The faces are only made again when who types changes, since a new face starts its hop over */
+/* The faces are only made again when who types changes, since a new face starts its hop over, and hovering one
+ * names who it is */
 static void fill_typing_faces(Conversation *conversation) {
 	g_autoptr(GPtrArray) nicks = g_hash_table_get_keys_as_ptr_array(conversation->room->typing);
 	g_ptr_array_sort_values(nicks, (GCompareFunc)g_strcmp0);
@@ -1443,6 +1443,8 @@ static void fill_typing_faces(Conversation *conversation) {
 		GtkWidget *face = adw_avatar_new(MESSAGE_AVATAR_SIZE, nick, TRUE);
 		g_object_set_data_full(G_OBJECT(face), NICK_KEY, g_strdup(nick), g_free);
 		gtk_widget_add_css_class(face, "typing-face");
+		g_autofree char *typing = g_strdup_printf(TEXT_TYPING_ONE, nick);
+		gtk_widget_set_tooltip_text(face, typing);
 		const char *url = pick_person_picture(conversation->room, nick);
 		g_autofree char *sized = fill_image_size(url, MESSAGE_AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(face), sized);
