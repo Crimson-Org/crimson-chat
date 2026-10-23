@@ -20,8 +20,9 @@
 #define DAY_PILL_KEY "day-pill"
 #define DAY_TIME_KEY "day-time"
 #define PARTS_KEY "parts"
-/* Lines up to this long keep their time on the same line */
-#define INLINE_TIME_CHARS 40
+/* Room kept between a line's last word and the time beside it, and between stacked parts of the text */
+#define TIME_GAP 10
+#define TEXT_PART_SPACING 3
 
 static const char *const QUICK_REACTIONS[] = {"👍", "❤️", "😂", "😮", "😢", "🙏", NULL};
 
@@ -496,10 +497,124 @@ static GtkWidget *create_footer(RowParts *parts) {
 }
 
 
+/* Where the text's last line ends when it is laid out this wide, and whether that width wrapped any line, with
+ * the deleted note and its eye counted as one line */
+static int measure_last_line_end(GtkWidget *content, int width, gboolean *is_wrapped) {
+	GtkWidget *body = gtk_widget_get_first_child(content);
+	GtkWidget *reveal = gtk_widget_get_next_sibling(body);
+	if (gtk_widget_get_visible(reveal)) {
+		int natural;
+		gtk_widget_measure(content, GTK_ORIENTATION_HORIZONTAL, -1, NULL, &natural, NULL, NULL);
+		*is_wrapped = width >= 0 && natural > width;
+		return width < 0 ? natural : MIN(natural, width);
+	}
+	g_autoptr(PangoLayout) layout = pango_layout_copy(gtk_label_get_layout(GTK_LABEL(body)));
+	pango_layout_set_width(layout, width < 0 ? -1 : width * PANGO_SCALE);
+	*is_wrapped = pango_layout_is_wrapped(layout);
+	PangoLayoutLine *line = pango_layout_get_line_readonly(layout, pango_layout_get_line_count(layout) - 1);
+	PangoRectangle extents;
+	pango_layout_line_get_pixel_extents(line, NULL, &extents);
+	return extents.x + extents.width;
+}
+
+
+static int measure_natural_width(GtkWidget *widget) {
+	int natural;
+	gtk_widget_measure(widget, GTK_ORIENTATION_HORIZONTAL, -1, NULL, &natural, NULL, NULL);
+	return natural;
+}
+
+
+/* The time sits at the end of the last line when it fits there, as in Telegram, and underneath when it does not or
+ * when pictures follow the text */
+static gboolean fits_time_beside(GtkWidget *content, GtkWidget *previews, GtkWidget *footer, int width) {
+	if (gtk_widget_get_visible(previews))
+		return FALSE;
+	gboolean is_wrapped;
+	return measure_last_line_end(content, width, &is_wrapped) + TIME_GAP + measure_natural_width(footer) <= width;
+}
+
+
+static GtkSizeRequestMode get_text_line_request_mode(GtkWidget *widget) {
+	return GTK_SIZE_REQUEST_HEIGHT_FOR_WIDTH;
+}
+
+
+/* Text that stays on its lines unwrapped widens its bubble to make room for the time beside the last line */
+static void measure_text_line_width(GtkWidget *content, GtkWidget *previews, GtkWidget *footer, int *minimum,
+	int *natural) {
+	int content_minimum, content_natural, previews_minimum, previews_natural, footer_minimum, footer_natural;
+	gtk_widget_measure(content, GTK_ORIENTATION_HORIZONTAL, -1, &content_minimum, &content_natural, NULL, NULL);
+	gtk_widget_measure(previews, GTK_ORIENTATION_HORIZONTAL, -1, &previews_minimum, &previews_natural, NULL, NULL);
+	gtk_widget_measure(footer, GTK_ORIENTATION_HORIZONTAL, -1, &footer_minimum, &footer_natural, NULL, NULL);
+	*minimum = MAX(MAX(content_minimum, previews_minimum), footer_minimum);
+	*natural = MAX(MAX(content_natural, previews_natural), footer_natural);
+	if (gtk_widget_get_visible(previews))
+		return;
+	gboolean is_wrapped;
+	int line_end = measure_last_line_end(content, content_natural, &is_wrapped);
+	if (!is_wrapped)
+		*natural = MAX(*natural, line_end + TIME_GAP + footer_natural);
+}
+
+
+static void measure_text_line(GtkWidget *widget, GtkOrientation orientation, int for_size, int *minimum,
+	int *natural, int *minimum_baseline, int *natural_baseline) {
+	GtkWidget *content = gtk_widget_get_first_child(widget);
+	GtkWidget *previews = gtk_widget_get_next_sibling(content);
+	GtkWidget *footer = gtk_widget_get_last_child(widget);
+	if (orientation == GTK_ORIENTATION_HORIZONTAL) {
+		measure_text_line_width(content, previews, footer, minimum, natural);
+		return;
+	}
+	int width = for_size;
+	if (width < 0) {
+		int unused;
+		measure_text_line_width(content, previews, footer, &unused, &width);
+	}
+	int content_minimum, content_natural, previews_minimum, previews_natural, footer_height;
+	gtk_widget_measure(content, GTK_ORIENTATION_VERTICAL, width, &content_minimum, &content_natural, NULL, NULL);
+	gtk_widget_measure(previews, GTK_ORIENTATION_VERTICAL, width, &previews_minimum, &previews_natural, NULL, NULL);
+	gtk_widget_measure(footer, GTK_ORIENTATION_VERTICAL, -1, NULL, &footer_height, NULL, NULL);
+	if (fits_time_beside(content, previews, footer, width)) {
+		*minimum = MAX(content_minimum, footer_height);
+		*natural = MAX(content_natural, footer_height);
+		return;
+	}
+	int previews_space = gtk_widget_get_visible(previews) ? TEXT_PART_SPACING : 0;
+	*minimum = content_minimum + previews_space + previews_minimum + TEXT_PART_SPACING + footer_height;
+	*natural = content_natural + previews_space + previews_natural + TEXT_PART_SPACING + footer_height;
+}
+
+
+static void allocate_text_line(GtkWidget *widget, int width, int height, int baseline) {
+	GtkWidget *content = gtk_widget_get_first_child(widget);
+	GtkWidget *previews = gtk_widget_get_next_sibling(content);
+	GtkWidget *footer = gtk_widget_get_last_child(widget);
+	int content_height, footer_height;
+	gtk_widget_measure(content, GTK_ORIENTATION_VERTICAL, width, NULL, &content_height, NULL, NULL);
+	gtk_widget_size_allocate(content, &(GtkAllocation){0, 0, width, content_height}, -1);
+	if (gtk_widget_get_visible(previews)) {
+		int previews_height;
+		gtk_widget_measure(previews, GTK_ORIENTATION_VERTICAL, width, NULL, &previews_height, NULL, NULL);
+		gtk_widget_size_allocate(previews, &(GtkAllocation){0, content_height + TEXT_PART_SPACING, width,
+			previews_height}, -1);
+	}
+	int footer_width = measure_natural_width(footer);
+	gtk_widget_measure(footer, GTK_ORIENTATION_VERTICAL, -1, NULL, &footer_height, NULL, NULL);
+	int footer_y = fits_time_beside(content, previews, footer, width) ? MAX(content_height, footer_height)
+		- footer_height : height - footer_height;
+	gtk_widget_size_allocate(footer, &(GtkAllocation){width - footer_width, footer_y, footer_width, footer_height},
+		-1);
+}
+
+
 /* Deleting only marks a message, and both the chat and the bouncer keep its text, so an eye beside the note shows
  * what it said */
 static GtkWidget *create_text_line(RowParts *parts) {
-	parts->text_line = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	parts->text_line = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_set_layout_manager(parts->text_line, gtk_custom_layout_new(get_text_line_request_mode,
+		measure_text_line, allocate_text_line));
 	GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
 	parts->body = create_wrapping_label("body");
 	ask_before_label_links(parts->body);
@@ -667,7 +782,6 @@ static void show_footer(RowParts *parts, CrimsonMessage *message) {
 }
 
 
-/* A short line keeps its time beside it, as in Telegram, while longer text and pictures put it underneath */
 static void show_text(RowParts *parts, CrimsonMessage *message, const char *text) {
 	g_autofree char *markup = build_body_markup(message, text);
 	gboolean can_reveal = message->is_redacted && *text;
@@ -678,15 +792,8 @@ static void show_text(RowParts *parts, CrimsonMessage *message, const char *text
 	toggle_deleted_text(GTK_TOGGLE_BUTTON(parts->reveal), GTK_LABEL(parts->body));
 	set_class(parts->body, "redacted", message->is_redacted);
 	set_class(parts->body, "body", !message->is_redacted);
-	gboolean is_short = !strchr(text, '\n') && g_utf8_strlen(text, -1) <= INLINE_TIME_CHARS && !strstr(text, "://");
-	gtk_orientable_set_orientation(GTK_ORIENTABLE(parts->text_line), is_short ? GTK_ORIENTATION_HORIZONTAL
-		: GTK_ORIENTATION_VERTICAL);
-	gtk_box_set_spacing(GTK_BOX(parts->text_line), is_short ? 10 : 3);
-	gtk_widget_set_valign(parts->footer, is_short ? GTK_ALIGN_END : GTK_ALIGN_FILL);
-	gtk_widget_set_hexpand(parts->footer, is_short);
 	clear_children(parts->previews);
-	if (!is_short)
-		add_previews(parts->previews, message);
+	add_previews(parts->previews, message);
 	gtk_widget_set_visible(parts->previews, gtk_widget_get_first_child(parts->previews) != NULL);
 }
 
