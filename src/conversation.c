@@ -1657,6 +1657,15 @@ void build_rooms_ahead(Conversation *conversation, CrimsonNetwork *network) {
 }
 
 
+void clear_read_line(Conversation *conversation, CrimsonRoom *room) {
+	RoomView *view = g_hash_table_lookup(conversation->views, room);
+	if (!view)
+		return;
+	view->was_unread = FALSE;
+	set_read_line(view, FALSE, 0);
+}
+
+
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow) {
 	conversation->is_narrow = is_narrow;
 }

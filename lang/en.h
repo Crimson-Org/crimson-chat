@@ -302,6 +302,7 @@
 #define TEXT_TOPIC_SET_ON "%s, %s"
 #define TEXT_ROOMS_WAIT "This server shows its rooms after you have been connected for a minute. Asking again in %u seconds…"
 #define TEXT_HIDE "Hide"
+#define TEXT_MARK_READ "Mark as Read"
 #define TEXT_LOGIN_REFUSED "Login rejected"
 #define TEXT_CERTIFICATE_REFUSED "Certificate not trusted"
 #define TEXT_CANNOT_CONNECT "Can't connect right now"

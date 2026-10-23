@@ -84,6 +84,7 @@ GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	if (!window->has_rail && count > 1)
 		append_network_item(about, TEXT_SHOW_CHATS, "win.choose-server", network);
+	append_network_item(about, TEXT_MARK_READ, "win.mark-server-read", network);
 	append_network_item(about, TEXT_ACCOUNT_MENU, "win.own-profile", network);
 	append_network_item(about, TEXT_SERVER_MESSAGES, "win.server-messages", network);
 	append_network_item(about, TEXT_SERVER_SETTINGS, "win.network-settings", network);
@@ -1098,6 +1099,35 @@ static void leave_chat_action(GSimpleAction *action, GVariant *parameter, gpoint
 }
 
 
+static void mark_read_in_window(Window *window, CrimsonRoom *room) {
+	mark_room_read(room);
+	clear_read_line(window->conversation, room);
+}
+
+
+static void mark_read_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	const char *key = NULL, *name = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &name);
+	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
+	CrimsonNetwork *network = find_keyed_network(window, network_key);
+	CrimsonRoom *room = network ? find_room(network, name) : NULL;
+	if (room)
+		mark_read_in_window(window, room);
+}
+
+
+static void mark_server_read_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	CrimsonNetwork *network = find_keyed_network(window, parameter);
+	guint count = network ? g_list_model_get_n_items(G_LIST_MODEL(network->rooms)) : 0;
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
+		mark_read_in_window(window, room);
+	}
+}
+
+
 static void search_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
 	adw_navigation_split_view_set_show_content(window->split, FALSE);
@@ -1140,6 +1170,8 @@ static void add_window_actions(Window *window) {
 		{"leave-room", leave_room_action, NULL, NULL, NULL, {0}},
 		{"leave-chat", leave_chat_action, "(ss)", NULL, NULL, {0}},
 		{"chat-details", chat_details_action, "(ss)", NULL, NULL, {0}},
+		{"mark-read", mark_read_action, "(ss)", NULL, NULL, {0}},
+		{"mark-server-read", mark_server_read_action, "s", NULL, NULL, {0}},
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},

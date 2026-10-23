@@ -129,4 +129,6 @@ void refresh_conversation(Conversation *conversation);
  * chat is with */
 void show_conversation_details(Conversation *conversation);
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow);
+/* Takes the line where reading stopped out of a room's kept chat, for a room the user marked as read */
+void clear_read_line(Conversation *conversation, CrimsonRoom *room);
 void focus_composer(Conversation *conversation);

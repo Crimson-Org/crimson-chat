@@ -300,6 +300,7 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 		set_room_action(details, "win.chat-details", room);
 		add_notifications_item(items, pages, popover, room);
 	}
+	set_room_action(add_menu_item(items, popover, TEXT_MARK_READ, "plain-item"), "win.mark-read", room);
 	/* Leaving cannot be undone from here, so the item is red */
 	GtkWidget *leave = add_menu_item(items, popover, is_server ? TEXT_HIDE : room->kind == ROOM_CHANNEL
 		? TEXT_LEAVE_ROOM : TEXT_DELETE_CHAT, is_server ? "plain-item" : "destructive-item");
