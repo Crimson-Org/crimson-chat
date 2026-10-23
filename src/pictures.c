@@ -428,16 +428,50 @@ static GtkWidget *wrap_picture(GtkWidget *avatar, GCallback change, gpointer dat
 }
 
 
-GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, gpointer data) {
+/* What the corner button of the user's own picture calls, both with the same data */
+typedef struct {
+	void (*change)(gpointer data);
+	void (*remove)(gpointer data);
+	gpointer data;
+	gboolean is_removable;
+} PictureChange;
+
+
+static void press_change_button(PictureChange *change) {
+	if (change->is_removable)
+		change->remove(change->data);
+	else
+		change->change(change->data);
+}
+
+
+GtkWidget *offer_picture_change(GtkWidget *avatar, GCallback change, GCallback remove, gpointer data) {
 	gtk_widget_set_tooltip_text(avatar, TEXT_CHANGE_PICTURE);
 	GtkWidget *overlay = wrap_picture(avatar, change, data);
-	GtkWidget *sign = gtk_image_new_from_icon_name("image-x-generic-symbolic");
-	gtk_widget_add_css_class(sign, "picture-badge");
-	gtk_widget_set_halign(sign, GTK_ALIGN_END);
-	gtk_widget_set_valign(sign, GTK_ALIGN_END);
-	gtk_widget_set_can_target(sign, FALSE);
-	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), sign);
+	PictureChange *calls = g_new0(PictureChange, 1);
+	*calls = (PictureChange){(void (*)(gpointer))change, (void (*)(gpointer))remove, data, FALSE};
+	g_object_set_data_full(G_OBJECT(avatar), "picture-change", calls, g_free);
+	GtkWidget *button = gtk_button_new();
+	gtk_widget_add_css_class(button, "picture-badge");
+	gtk_widget_add_css_class(button, "circular");
+	gtk_widget_set_halign(button, GTK_ALIGN_END);
+	gtk_widget_set_valign(button, GTK_ALIGN_END);
+	g_signal_connect_swapped(button, "clicked", G_CALLBACK(press_change_button), calls);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), button);
+	g_object_set_data(G_OBJECT(avatar), "picture-button", button);
+	show_picture_removable(avatar, FALSE);
 	return overlay;
+}
+
+
+void show_picture_removable(GtkWidget *avatar, gboolean is_removable) {
+	PictureChange *calls = g_object_get_data(G_OBJECT(avatar), "picture-change");
+	GtkWidget *button = g_object_get_data(G_OBJECT(avatar), "picture-button");
+	if (!calls || !button)
+		return;
+	calls->is_removable = is_removable;
+	gtk_button_set_icon_name(GTK_BUTTON(button), is_removable ? "user-trash-symbolic" : "image-x-generic-symbolic");
+	gtk_widget_set_tooltip_text(button, is_removable ? TEXT_REMOVE_YOUR_PICTURE : TEXT_CHANGE_PICTURE);
 }
 
 

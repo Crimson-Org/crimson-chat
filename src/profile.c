@@ -543,6 +543,7 @@ static void refresh_own_field(GtkWidget *row, char **old, const char *current) {
 static void show_own_picture(OwnProfile *own) {
 	g_autofree char *sized = fill_image_size(*own->picture ? own->picture : NULL, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(own->avatar), sized);
+	show_picture_removable(own->avatar, *own->picture != '\0');
 }
 
 
@@ -589,6 +590,7 @@ static void show_avatar_upload(GtkWidget *avatar, const char *url, const char *p
 		return;
 	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(avatar), sized);
+	show_picture_removable(avatar, TRUE);
 }
 
 
@@ -617,6 +619,32 @@ static void ask_picture_address(OwnProfile *own) {
 	g_signal_connect_object(alert, "response", G_CALLBACK(finish_picture_address), own->dialog, G_CONNECT_DEFAULT);
 	adw_dialog_present(alert, GTK_WIDGET(own->window->window));
 	gtk_widget_grab_focus(entry);
+}
+
+
+/* Removing takes effect at once, as an uploaded picture does, since everyone sees the change */
+static void finish_removing_own_picture(AdwAlertDialog *alert, const char *response, AdwDialog *dialog) {
+	OwnProfile *own = g_object_get_data(G_OBJECT(dialog), "own");
+	if (g_strcmp0(response, "remove") != 0 || !own)
+		return;
+	if (own->network->client)
+		set_metadata(own->network, "avatar", "");
+	save_profile_value(own->network->key, "avatar", "");
+	g_clear_pointer(&own->old_picture, g_free);
+	g_free(own->picture);
+	own->picture = g_strdup("");
+	show_own_picture(own);
+}
+
+
+static void ask_to_remove_own_picture(OwnProfile *own) {
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_REMOVE_YOUR_PICTURE_TITLE, TEXT_REMOVE_YOUR_PICTURE_BODY);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", TEXT_REMOVE, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "cancel");
+	g_signal_connect_object(alert, "response", G_CALLBACK(finish_removing_own_picture), own->dialog,
+		G_CONNECT_DEFAULT);
+	adw_dialog_present(alert, GTK_WIDGET(own->window->window));
 }
 
 
@@ -744,9 +772,9 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 12);
 	gtk_widget_add_css_class(box, "profile");
 	own->avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, nick, TRUE);
+	GtkWidget *picture = has_metadata ? offer_picture_change(own->avatar, G_CALLBACK(change_own_picture),
+		G_CALLBACK(ask_to_remove_own_picture), own) : own->avatar;
 	show_own_picture(own);
-	GtkWidget *picture = has_metadata ? offer_picture_change(own->avatar, G_CALLBACK(change_own_picture), own)
-		: own->avatar;
 	gtk_widget_set_halign(picture, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), picture);
 	/* Chats show the display name where the server has them, and the nickname otherwise, as the big name does */

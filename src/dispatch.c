@@ -778,8 +778,9 @@ static void deliver_rename(CrimsonNetwork *network, const IrcMessage *message) {
 }
 
 
+/* Replies name the target after the user's nick, and a removed key comes back as a key that is not set */
 static void deliver_metadata(CrimsonNetwork *network, const IrcMessage *message) {
-	gboolean is_reply = g_str_equal(message->command, "761");
+	gboolean is_reply = !g_str_equal(message->command, "METADATA");
 	const char *target = get_irc_parameter(message, is_reply ? 1 : 0);
 	CrimsonRoom *room = find_room(network, target);
 	if (room)
@@ -822,7 +823,7 @@ static void handle_message_in(CrimsonNetwork *network, const IrcMessage *message
 		deliver_standard_reply(network, message);
 	else if (g_str_equal(command, "RENAME"))
 		deliver_rename(network, message);
-	else if (g_str_equal(command, "METADATA") || g_str_equal(command, "761"))
+	else if (g_str_equal(command, "METADATA") || g_str_equal(command, "761") || g_str_equal(command, "766"))
 		deliver_metadata(network, message);
 	else if (g_str_equal(command, "INVITE"))
 		deliver_invite(network, message);
