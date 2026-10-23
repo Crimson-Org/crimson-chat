@@ -377,7 +377,8 @@ static void finish_picture_upload(const char *url, const char *problem, gpointer
 		/* The address is kept like a typed one, so the app sets it again on each connection */
 		save_profile_value(upload->network->key, "avatar", url);
 	}
-	show_toast(upload->window, url ? TEXT_PICTURE_UPLOADED : problem);
+	if (problem)
+		show_toast(upload->window, problem);
 	free_picture_upload(upload);
 }
 

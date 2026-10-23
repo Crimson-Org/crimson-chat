@@ -305,7 +305,8 @@ static void finish_sharing(const char *url, const char *problem, gpointer data) 
 	CrimsonNetwork *network = find_choice_network(choice);
 	if (url && network && find_own_picture(network, choice->kind, choice->name))
 		show_new_picture(choice, NULL);
-	show_toast(choice->window, url ? TEXT_PICTURE_UPLOADED : problem);
+	if (problem)
+		show_toast(choice->window, problem);
 	free_picture_choice(choice);
 }
 

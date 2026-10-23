@@ -322,7 +322,6 @@
 #define TEXT_REGISTER_BANNER "Nickname not registered"
 #define TEXT_LOGIN_BANNER "Nickname is registered"
 #define TEXT_PICTURE "Picture"
-#define TEXT_PICTURE_UPLOADED "Picture updated"
 #define TEXT_UPLOAD_FAILED "The picture could not be sent"
 #define TEXT_STATUS "Status"
 #define TEXT_PRONOUNS "Pronouns"
