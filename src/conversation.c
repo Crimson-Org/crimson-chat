@@ -786,9 +786,19 @@ static void fill_header(Conversation *conversation) {
 }
 
 
+static void follow_connection(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	Session *session = room ? room->network->session : NULL;
+	gboolean is_down = room && room->kind != ROOM_SERVER && (room->network->state != NETWORK_CONNECTED
+		|| (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED));
+	set_composer_waiting(conversation->composer, is_down);
+}
+
+
 void refresh_conversation(Conversation *conversation) {
 	if (!conversation->room)
 		return;
+	follow_connection(conversation);
 	fill_header(conversation);
 	show_empty_note(conversation);
 	refresh_members_later(conversation);
@@ -829,6 +839,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room) {
 		return;
 	conversation->room_handler = g_signal_connect(room, "changed", G_CALLBACK(follow_room), conversation);
 	fill_header(conversation);
+	follow_connection(conversation);
 	/* History is asked for first, so a room still loading does not show itself as empty for a moment */
 	if (!room->has_history)
 		request_latest_history(room);

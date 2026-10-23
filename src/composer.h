@@ -13,5 +13,7 @@ GtkWidget *get_composer_widget(Composer *composer);
 void switch_composer_room(Composer *composer, CrimsonRoom *room);
 void reply_in_composer(Composer *composer, CrimsonMessage *message);
 void focus_composer_field(Composer *composer);
+/* While the room's server is not connected the send button spins and nothing is sent, keeping what was typed */
+void set_composer_waiting(Composer *composer, gboolean is_waiting);
 /* Puts a person's nick into the message, at the start as "Nick: " or where the cursor is */
 void mention_in_composer(Composer *composer, const char *nick);

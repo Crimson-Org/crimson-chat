@@ -528,3 +528,11 @@ headerbar.top-bar menubutton > button {
 .connection-note {
 	padding: 8px 18px 8px 8px;
 }
+
+/* While the server is away the send button only spins, plainly visible rather than faded */
+.send-button.waiting,
+.send-button.waiting:disabled {
+	opacity: 1;
+	background-color: color-mix(in srgb, var(--window-fg-color) 12%, var(--window-bg-color));
+	color: var(--window-fg-color);
+}

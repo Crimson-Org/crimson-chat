@@ -6,6 +6,7 @@
 #include "session.h"
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
+#define SEND_SPINNER_SIZE 20
 #define PAUSE_SECONDS 6
 #define FIELD_MAXIMUM_HEIGHT 180
 #define DRAFTS_KEY "draft"
@@ -17,6 +18,9 @@ struct Composer {
 	CrimsonMessage *reply_to;
 	gint64 last_typing;
 	gboolean is_typing;
+	/* Whether the room's server is not connected, which turns the send button into a spinner and holds the text */
+	gboolean is_waiting;
+	GtkWidget *send_icons;
 	guint pause_source;
 	gulong change_handler;
 	/* Tab completion cycles through matches until another key is pressed */
@@ -58,7 +62,7 @@ static void stop_typing_notice(Composer *composer) {
 
 static void send_field(Composer *composer) {
 	g_autofree char *text = get_field_text(composer);
-	if (!composer->room || strspn(text, " \n\t") == strlen(text))
+	if (!composer->room || composer->is_waiting || strspn(text, " \n\t") == strlen(text))
 		return;
 	send_room_text(composer->room, text, composer->reply_to);
 	gtk_text_buffer_set_text(composer->buffer, "", -1);
@@ -172,7 +176,7 @@ static void change_text(GtkTextBuffer *buffer, Composer *composer) {
 	g_autofree char *text = get_field_text(composer);
 	gboolean is_empty = !*text;
 	gtk_widget_set_visible(composer->placeholder, is_empty);
-	gtk_widget_set_sensitive(composer->send_button, !is_empty);
+	gtk_widget_set_sensitive(composer->send_button, !is_empty && !composer->is_waiting);
 	if (!composer->room || *text == '/')
 		return;
 	if (is_empty) {
@@ -283,7 +287,15 @@ Composer *create_composer(void) {
 	gtk_menu_button_set_popover(GTK_MENU_BUTTON(emoji), chooser);
 	gtk_box_append(GTK_BOX(row), emoji);
 	gtk_box_append(GTK_BOX(row), create_field(composer));
-	composer->send_button = gtk_button_new_from_icon_name("crimson-send-symbolic");
+	composer->send_button = gtk_button_new();
+	composer->send_icons = gtk_stack_new();
+	gtk_stack_add_named(GTK_STACK(composer->send_icons), gtk_image_new_from_icon_name("crimson-send-symbolic"), "send");
+	GtkWidget *spinner = adw_spinner_new();
+	gtk_widget_set_size_request(spinner, SEND_SPINNER_SIZE, SEND_SPINNER_SIZE);
+	gtk_stack_add_named(GTK_STACK(composer->send_icons), spinner, "waiting");
+	gtk_widget_set_halign(composer->send_icons, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(composer->send_icons, GTK_ALIGN_CENTER);
+	gtk_button_set_child(GTK_BUTTON(composer->send_button), composer->send_icons);
 	gtk_widget_set_tooltip_text(composer->send_button, TEXT_SEND);
 	gtk_widget_add_css_class(composer->send_button, "circular");
 	gtk_widget_add_css_class(composer->send_button, "suggested-action");
@@ -318,7 +330,7 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 	gtk_text_buffer_set_text(composer->buffer, draft ? draft : "", -1);
 	g_signal_handler_unblock(composer->buffer, composer->change_handler);
 	gtk_widget_set_visible(composer->placeholder, !draft || !*draft);
-	gtk_widget_set_sensitive(composer->send_button, draft && *draft);
+	gtk_widget_set_sensitive(composer->send_button, draft && *draft && !composer->is_waiting);
 	gtk_label_set_text(GTK_LABEL(composer->placeholder), room && room->kind == ROOM_SERVER ? TEXT_SEND_COMMAND
 		: TEXT_WRITE_MESSAGE);
 }
@@ -334,4 +346,18 @@ void mention_in_composer(Composer *composer, const char *nick) {
 	g_autofree char *mention = *text ? g_strdup_printf("%s ", nick) : g_strdup_printf("%s: ", nick);
 	gtk_text_buffer_insert_at_cursor(composer->buffer, mention, -1);
 	gtk_widget_grab_focus(composer->field);
+}
+
+
+void set_composer_waiting(Composer *composer, gboolean is_waiting) {
+	if (composer->is_waiting == is_waiting)
+		return;
+	composer->is_waiting = is_waiting;
+	gtk_stack_set_visible_child_name(GTK_STACK(composer->send_icons), is_waiting ? "waiting" : "send");
+	if (is_waiting)
+		gtk_widget_add_css_class(composer->send_button, "waiting");
+	else
+		gtk_widget_remove_css_class(composer->send_button, "waiting");
+	g_autofree char *text = get_field_text(composer);
+	gtk_widget_set_sensitive(composer->send_button, !is_waiting && *text);
 }
