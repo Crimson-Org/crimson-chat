@@ -11,7 +11,7 @@ typedef struct Chat Chat;
 typedef struct {
 	void (*notify)(CrimsonRoom *room, CrimsonMessage *message, gpointer data);
 	void (*certificate_refused)(Session *session, const char *hash, gpointer data);
-	/* A short line for the user, such as a problem or the server's answer to something they sent */
+	/* A short line for the user, such as a problem the server reports */
 	void (*show_message)(const char *text, gpointer data);
 	/* A room the user asked for, such as a channel just joined or a private chat just opened */
 	void (*room_opened)(CrimsonRoom *room, gpointer data);

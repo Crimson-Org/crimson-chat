@@ -50,9 +50,9 @@ static void add_status(CrimsonRoom *room, const IrcMessage *message, const char 
 }
 
 
-/* The server's answer to something the user sent brings its messages into the room list as news, and the first
- * line of it shows at once unless the user sent it from those messages */
-static void show_answer(CrimsonNetwork *network, Question *question, const char *text) {
+/* The server's answer to something the user sent brings its messages into the room list, and the first line of it
+ * opens them so the whole answer shows, unless the user sent it from there */
+static void show_answer(CrimsonNetwork *network, Question *question) {
 	CrimsonRoom *room = network->server_room;
 	if (!room->is_listed) {
 		room->is_listed = TRUE;
@@ -61,7 +61,7 @@ static void show_answer(CrimsonNetwork *network, Question *question, const char 
 	count_unread(room);
 	announce_room_change(room);
 	if (!question->has_shown_answer && !question->was_typed_in_server)
-		network->session->chat->events.show_message(text, network->session->chat->data);
+		network->session->chat->events.room_opened(room, network->session->chat->data);
 	question->has_shown_answer = TRUE;
 }
 
@@ -76,7 +76,7 @@ static void add_server_line(CrimsonNetwork *network, const IrcMessage *message, 
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_NOTICE, NULL, text, read_message_time(message));
 	line->arrival_time = g_get_monotonic_time();
 	insert_room_message(network->server_room, line);
-	show_answer(network, question, text);
+	show_answer(network, question);
 }
 
 
@@ -269,7 +269,7 @@ static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, His
 	offer_login(network, line);
 	Question *question = room == network->server_room && !line->is_own ? find_question(network, message) : NULL;
 	if (question)
-		show_answer(network, question, line->text);
+		show_answer(network, question);
 	count_unread(room);
 	announce_room_change(room);
 	save_chat_cache_later(network->session->chat);
