@@ -6,6 +6,7 @@
 #include "profile.h"
 #include "room-look.h"
 #include "wizards.h"
+#include "pictures.h"
 
 #define PROFILE_WIDTH 400
 /* A person's profile opens at its full height, so it does not grow when the details arrive */
@@ -123,9 +124,10 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
 	gtk_widget_add_css_class(box, "profile");
 	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, nick, TRUE);
-	const char *url = find_metadata(room, nick, "avatar");
+	const char *url = pick_person_picture(room, nick);
 	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * 2);
 	show_avatar_image(ADW_AVATAR(avatar), sized);
+	offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick);
 	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), avatar);
 	GtkWidget *name = gtk_label_new(nick);
@@ -481,6 +483,7 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 	gtk_widget_add_css_class(box, "profile");
 	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, NULL, TRUE);
 	fill_room_avatar(ADW_AVATAR(avatar), room, PROFILE_AVATAR_SIZE);
+	offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name);
 	gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
 	gtk_box_append(GTK_BOX(box), avatar);
 	g_autofree char *title = describe_room_title(room);

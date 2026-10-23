@@ -42,6 +42,7 @@ Replies quote the message they answer, and a right click reacts with an emoji, c
 Typing notices show who is writing, and the read position follows you between your devices through the bouncer.\
 Long and multi-line messages arrive in one piece on servers with multiline batches, and history loads as you scroll up.\
 Avatars, display names and network icons come from the IRCv3 metadata the server shares.\
+Clicking the picture of a person, room or server lets you choose your own, which stays on this computer.\
 Links to pictures over HTTPS show the picture, and bold, italics, colours and monospace keep their formatting.
 
 ### Your own bouncer

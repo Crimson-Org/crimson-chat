@@ -1,11 +1,15 @@
 #include "../lang/en.h"
 #include "dialogs.h"
+#include "images.h"
+#include "pictures.h"
+#include "room-look.h"
 #include "wizards.h"
 
 #define DIALOG_WIDTH 480
 #define DIALOG_HEIGHT 640
 #define DEFAULT_TLS_PORT 6697
 #define DEFAULT_PLAIN_PORT 6667
+#define SERVER_AVATAR_SIZE 96
 
 /* The rows of the server form and what the form is for */
 typedef struct {
@@ -15,6 +19,8 @@ typedef struct {
 	GtkWidget *name, *host, *port, *tls, *server_password;
 	Session *editing;
 	CrimsonNetwork *bouncer_network;
+	/* The server the form changes, whose picture sits at the top */
+	CrimsonNetwork *network;
 } ServerForm;
 
 /* The rows of the bouncer form */
@@ -169,6 +175,18 @@ static const char *lookup_attribute(CrimsonNetwork *network, const char *name) {
 static void build_server_form(ServerForm *form, GtkWidget *page) {
 	const AccountRecord *record = form->editing ? form->editing->record : NULL;
 	CrimsonNetwork *network = form->bouncer_network;
+	/* The server's picture leads the form, the way a profile leads with its person, and clicking it changes it */
+	if (form->network) {
+		GtkWidget *picture = adw_preferences_group_new();
+		GtkWidget *avatar = adw_avatar_new(SERVER_AVATAR_SIZE, form->network->name, TRUE);
+		gtk_widget_add_css_class(avatar, "room-avatar");
+		gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
+		g_autofree char *sized = fill_image_size(pick_network_picture(form->network), SERVER_AVATAR_SIZE * 2);
+		show_avatar_image(ADW_AVATAR(avatar), sized);
+		offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL);
+		adw_preferences_group_add(ADW_PREFERENCES_GROUP(picture), avatar);
+		adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(picture));
+	}
 	GtkWidget *server = add_group(page, TEXT_SERVER, NULL);
 	const char *port_text = lookup_attribute(network, "port");
 	int port = record ? record->port : port_text ? (int)g_ascii_strtoll(port_text, NULL, 10) : DEFAULT_TLS_PORT;
@@ -187,11 +205,13 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 }
 
 
-static void open_server_form(Window *window, Session *editing, CrimsonNetwork *bouncer_network) {
+static void open_server_form(Window *window, Session *editing, CrimsonNetwork *bouncer_network,
+	CrimsonNetwork *network) {
 	ServerForm *form = g_new0(ServerForm, 1);
 	form->window = window;
 	form->editing = editing;
 	form->bouncer_network = bouncer_network;
+	form->network = network;
 	GtkWidget *page = adw_preferences_page_new();
 	build_server_form(form, page);
 	form->dialog = create_form_dialog(TEXT_SERVER_SETTINGS, TEXT_SAVE, page, &form->save_button);
@@ -300,10 +320,10 @@ static void open_bouncer_login(GtkButton *button, ServerForm *form) {
 
 void show_network_settings(Window *window, CrimsonNetwork *network) {
 	if (!network->bouncer_id) {
-		open_server_form(window, network->session, NULL);
+		open_server_form(window, network->session, NULL, network);
 		return;
 	}
-	open_server_form(window, NULL, network);
+	open_server_form(window, NULL, network, network);
 	AdwDialog *dialog = adw_application_window_get_visible_dialog(window->window);
 	ServerForm *form = dialog ? g_object_get_data(G_OBJECT(dialog), "form") : NULL;
 	if (!form)

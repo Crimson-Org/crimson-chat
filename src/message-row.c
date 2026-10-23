@@ -7,6 +7,7 @@
 #include "room-look.h"
 #include "session.h"
 #include "settings.h"
+#include "pictures.h"
 
 #define AVATAR_SIZE 34
 #define GROUP_GAP_MICROSECONDS (5 * 60 * G_USEC_PER_SEC)
@@ -484,7 +485,7 @@ static GtkWidget *create_message_line(CrimsonMessage *message, CrimsonRoom *room
 	if (has_avatars && is_first && message->sender) {
 		GtkWidget *avatar = adw_avatar_new(AVATAR_SIZE, message->sender, TRUE);
 		gtk_widget_set_valign(avatar, GTK_ALIGN_START);
-		const char *url = find_metadata(room, message->sender, "avatar");
+		const char *url = pick_person_picture(room, message->sender);
 		g_autofree char *sized = fill_image_size(url, AVATAR_SIZE * 2);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
 		make_person_target(avatar, context);

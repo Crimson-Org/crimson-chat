@@ -6,6 +6,7 @@
 
 #define SECONDS_PER_MINUTE 60
 #include "settings.h"
+#include "pictures.h"
 
 #define TYPING_NAMES_SHOWN 2
 
@@ -43,7 +44,10 @@ void fill_room_avatar(AdwAvatar *avatar, CrimsonRoom *room, int size) {
 		gtk_widget_remove_css_class(GTK_WIDGET(avatar), "room-avatar");
 	else
 		gtk_widget_add_css_class(GTK_WIDGET(avatar), "room-avatar");
-	const char *url = room->kind == ROOM_SERVER ? room->network->icon_url : find_metadata(room, NULL, "avatar");
+	const char *own = room->kind == ROOM_CHANNEL ? find_own_picture(room->network, PICTURE_ROOM, room->name)
+		: room->kind == ROOM_PRIVATE ? find_own_picture(room->network, PICTURE_PERSON, room->name) : NULL;
+	const char *url = room->kind == ROOM_SERVER ? pick_network_picture(room->network)
+		: own ? own : find_metadata(room, NULL, "avatar");
 	g_autofree char *sized = fill_image_size(url, size * 2);
 	show_avatar_image(avatar, sized);
 }

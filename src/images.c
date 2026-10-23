@@ -67,6 +67,25 @@ static void decode_texture(GTask *task, gpointer source, gpointer data, GCancell
 }
 
 
+/* A picture the user chose lies on disk, read on a thread like a download */
+static void read_own_picture(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+	GError *error = NULL;
+	g_autofree char *path = g_filename_from_uri(data, NULL, &error);
+	char *contents = NULL;
+	gsize length = 0;
+	if (!path || !g_file_get_contents(path, &contents, &length, &error)) {
+		g_task_return_error(task, error);
+		return;
+	}
+	g_autoptr(GBytes) bytes = g_bytes_new_take(contents, length);
+	GdkTexture *texture = gdk_texture_new_from_bytes(bytes, &error);
+	if (texture)
+		g_task_return_pointer(task, texture, g_object_unref);
+	else
+		g_task_return_error(task, error);
+}
+
+
 static void finish_decoding(GObject *source, GAsyncResult *result, gpointer data) {
 	g_autofree char *url = data;
 	g_autoptr(GdkTexture) texture = g_task_propagate_pointer(G_TASK(result), NULL);
@@ -108,6 +127,16 @@ static void request_image(GtkWidget *widget, const char *url) {
 		g_ptr_array_add(targets, reference);
 		return;
 	}
+	if (g_str_has_prefix(url, "file://")) {
+		targets = g_ptr_array_new_with_free_func((GDestroyNotify)free_weak_reference);
+		g_ptr_array_add(targets, reference);
+		g_hash_table_insert(waiting, g_strdup(url), targets);
+		GTask *task = g_task_new(NULL, NULL, finish_decoding, g_strdup(url));
+		g_task_set_task_data(task, g_strdup(url), g_free);
+		g_task_run_in_thread(task, read_own_picture);
+		g_object_unref(task);
+		return;
+	}
 	g_autoptr(SoupMessage) message = soup_message_new(SOUP_METHOD_GET, url);
 	if (!message) {
 		free_weak_reference(reference);
@@ -120,9 +149,10 @@ static void request_image(GtkWidget *widget, const char *url) {
 }
 
 
-/* Pictures only come over HTTPS, since a plain address would show who reads the chat to anyone on the way */
+/* Pictures only come over HTTPS, since a plain address would show who reads the chat to anyone on the way, or
+ * from the user's own chosen pictures on disk */
 static gboolean is_secure_link(const char *url) {
-	return url && g_str_has_prefix(url, "https://");
+	return url && (g_str_has_prefix(url, "https://") || g_str_has_prefix(url, "file://"));
 }
 
 

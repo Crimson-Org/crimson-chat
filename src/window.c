@@ -11,6 +11,7 @@
 #include "state.h"
 #include "window.h"
 #include "wizards.h"
+#include "pictures.h"
 
 #define NARROW_CONDITION "max-width: 640sp"
 #define RAIL_AVATAR_SIZE 48
@@ -170,7 +171,7 @@ static void fill_rail_row(GtkWidget *row, CrimsonNetwork *network) {
 	AdwAvatar *avatar = g_object_get_data(G_OBJECT(row), "avatar");
 	GtkWidget *badge = g_object_get_data(G_OBJECT(row), "badge");
 	adw_avatar_set_text(avatar, network->name);
-	g_autofree char *icon = fill_image_size(network->icon_url, RAIL_AVATAR_SIZE * 2);
+	g_autofree char *icon = fill_image_size(pick_network_picture(network), RAIL_AVATAR_SIZE * 2);
 	show_avatar_image(avatar, icon);
 	gboolean has_mention = FALSE;
 	guint unread = count_network_unread(network, &has_mention);

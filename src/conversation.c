@@ -8,6 +8,7 @@
 #include "message-row.h"
 #include "room-look.h"
 #include "window.h"
+#include "pictures.h"
 
 #define FADE_DURATION_MS 120
 #define ACTIVITY_SECONDS 120
@@ -392,7 +393,7 @@ static void bind_member(GtkSignalListItemFactory *factory, GtkListItem *item, Co
 	g_autofree char *folded = state ? fold_state_name(state, nick) : NULL;
 	const char *symbols = channel && folded ? g_hash_table_lookup(channel->members, folded) : NULL;
 	adw_avatar_set_text(g_object_get_data(G_OBJECT(row), "avatar"), nick);
-	const char *url = conversation->room ? find_metadata(conversation->room, nick, "avatar") : NULL;
+	const char *url = conversation->room ? pick_person_picture(conversation->room, nick) : NULL;
 	g_autofree char *sized = fill_image_size(url, MEMBER_AVATAR_SIZE * 2);
 	show_avatar_image(g_object_get_data(G_OBJECT(row), "avatar"), sized);
 	gtk_label_set_text(g_object_get_data(G_OBJECT(row), "name"), nick);
