@@ -853,7 +853,7 @@ void withdraw_window(Window *window) {
 	window->is_quitting = TRUE;
 	read_window_geometry(GTK_WINDOW(window->window), &window->geometry);
 	save_window_geometry_state(&window->geometry);
-	gtk_widget_set_visible(GTK_WIDGET(window->window), FALSE);
+	hide_closing_window(GTK_WINDOW(window->window));
 	if (window->tray)
 		remove_tray(window->tray);
 }
