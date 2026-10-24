@@ -176,6 +176,9 @@ void forgive_target(CrimsonNetwork *network, const char *target);
 gboolean is_target_refused(CrimsonNetwork *network, const char *target);
 /* The one bouncer the user is connected to, if any */
 Session *find_bouncer(Chat *chat);
+/* Whether the user trusted this certificate for one of their accounts, such as a bouncer's own, which also
+ * serves its pictures and files */
+gboolean is_trusted_certificate(Chat *chat, GTlsCertificate *certificate);
 /* Asks the server for its channels, the busy ones only when it can filter them */
 void request_room_listing(CrimsonNetwork *network, RoomListingReady ready, RoomListingWait wait, gpointer data);
 void cancel_room_listing(CrimsonNetwork *network);
@@ -216,6 +219,8 @@ void save_network_channels(CrimsonNetwork *network);
 
 /* Outgoing */
 void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to);
+/* Sends a line as it is, without turning Markdown into formatting, such as one naming a shared file */
+void send_room_line(CrimsonRoom *room, const char *text);
 void send_reaction(CrimsonRoom *room, CrimsonMessage *message, const char *reaction);
 /* Whether the server passes on a client tag such as react or reply, from its CLIENTTAGDENY */
 gboolean allows_client_tag(CrimsonNetwork *network, const char *name);

@@ -16,20 +16,31 @@ typedef struct BouncerUser BouncerUser;
 typedef struct Upstream Upstream;
 typedef struct Downstream Downstream;
 
-/* The running bouncer, with everyone who may log in and every client connected */
-/* How the bouncer takes pictures people upload for themselves or their rooms: whether it does, the address the
- * pictures are served from when set, their format, quality from 0 to 100, size in pixels, the largest upload and
- * where they are kept */
+/* How the bouncer takes pictures people upload for themselves or their rooms: whether it does, their format,
+ * quality from 0 to 100, size in pixels, the largest upload and where they are kept */
 typedef struct {
 	gboolean is_enabled;
-	char *public_url, *format, *folder;
+	char *format, *folder;
 	int quality, size;
 	gsize largest_bytes;
 } AvatarSettings;
 
+/* How the bouncer keeps files people share in their chats: whether it does, the largest one, how long each is kept
+ * and where */
+typedef struct {
+	gboolean is_enabled;
+	gsize largest_bytes;
+	gint64 kept_seconds;
+	char *folder;
+} FileSettings;
+
+/* The running bouncer, with everyone who may log in and every client connected */
 struct Bouncer {
 	Database *database;
 	AvatarSettings avatars;
+	FileSettings files;
+	/* The address the website is reached at from outside, such as https://chat.example.com:8443, when set */
+	char *public_url;
 	GTlsCertificate *certificate;
 	GSocketService *irc_service, *web_service;
 	char *irc_port, *web_port;
@@ -77,7 +88,8 @@ struct Upstream {
 struct Downstream {
 	Bouncer *bouncer;
 	IrcStream *stream;
-	char *address;
+	/* Where the client connects from, and the address of the bouncer it reached */
+	char *address, *local_host;
 	GHashTable *caps;
 	gboolean is_negotiating, is_registered, has_cap_values;
 	char *nick, *username, *password, *bound_network;
@@ -118,7 +130,7 @@ char *describe_upstream_progress(Upstream *upstream);
 char *get_upstream_nick(Upstream *upstream);
 
 /* Downstream */
-void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address);
+void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, const char *local_host);
 
 /* Website */
 void serve_web(Bouncer *bouncer, GIOStream *connection);
@@ -141,6 +153,15 @@ void free_avatar_file(AvatarFile *file);
 GPtrArray *list_avatars(Bouncer *bouncer);
 gboolean remove_avatar(Bouncer *bouncer, const char *name);
 void remove_user_avatars(Bouncer *bouncer, gint64 user_id);
+/* Files */
+/* Keeps a shared file under its name and returns its address under the base address */
+char *store_file(Bouncer *bouncer, BouncerUser *user, GBytes *data, const char *file_name, const char *base_url,
+	GError **error);
+/* A kept file by its name, with the type it is served as and whether browsers should save it rather than show it */
+GBytes *load_file(Bouncer *bouncer, const char *name, const char **content_type, gboolean *is_download);
+void remove_user_files(Bouncer *bouncer, gint64 user_id);
+/* Removes files older than the settings keep them now and every hour after */
+void start_file_cleanup(Bouncer *bouncer);
 /* Creates an invite and returns its token */
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses);
 void close_downstream(Downstream *downstream);

@@ -55,12 +55,29 @@ static GIOStream *secure_connection(Bouncer *bouncer, GSocketConnection *connect
 }
 
 
+/* The bouncer's own address as the client reached it, in the form a web address takes */
+static char *describe_local_host(GSocketConnection *connection) {
+	g_autoptr(GSocketAddress) local = g_socket_connection_get_local_address(connection, NULL);
+	if (!G_IS_INET_SOCKET_ADDRESS(local))
+		return g_strdup("localhost");
+	GInetAddress *inet = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(local));
+	g_autofree char *text = g_inet_address_to_string(inet);
+	/* A socket listening on both kinds of address sees IPv4 clients as IPv6 addresses wrapping them */
+	if (g_str_has_prefix(text, "::ffff:") && strchr(text, '.'))
+		return g_strdup(text + strlen("::ffff:"));
+	if (g_inet_address_get_family(inet) == G_SOCKET_FAMILY_IPV6)
+		return g_strdup_printf("[%s]", text);
+	return g_steal_pointer(&text);
+}
+
+
 static gboolean take_irc_connection(GSocketService *service, GSocketConnection *connection, GObject *source,
 	gpointer data) {
 	g_autofree char *address = NULL;
 	g_autoptr(GIOStream) secured = secure_connection(data, connection, &address);
+	g_autofree char *local_host = describe_local_host(connection);
 	if (secured)
-		accept_downstream(data, secured, address);
+		accept_downstream(data, secured, address, local_host);
 	return TRUE;
 }
 
@@ -199,6 +216,7 @@ void remove_user(BouncerUser *user) {
 			close_downstream(downstream);
 	}
 	remove_user_avatars(bouncer, user->id);
+	remove_user_files(bouncer, user->id);
 	delete_user(bouncer->database, user->id);
 	g_message("%s was removed", user->name);
 	g_ptr_array_remove(bouncer->users, user);

@@ -417,6 +417,23 @@ headerbar.title-bar {
 	color: alpha(currentColor, 0.5);
 }
 
+/* A /me action reads as narration in an open dashed frame rather than a filled speech bubble */
+.bubble.action,
+.bubble.own.action {
+	background-color: transparent;
+	box-shadow: none;
+	border: 1px dashed alpha(currentColor, 0.3);
+	border-radius: 18px;
+}
+
+.bubble.action.mention {
+	box-shadow: inset 3px 0 var(--accent-color);
+}
+
+.bubble.action .body {
+	font-style: italic;
+}
+
 /* The eye beside a deleted message stays small enough to sit on its line */
 .reveal-button {
 	min-width: 28px;
@@ -462,6 +479,51 @@ headerbar.title-bar {
 	border-radius: 12px;
 	margin: 4px 0;
 	animation: pop-in 325ms ease-out;
+}
+
+/* A shared file shows as a card with the icon of its kind, and one on its way has light sweeping across it */
+.file-card {
+	min-width: 240px;
+	padding: 10px 12px;
+	margin: 4px 0;
+	border-radius: 12px;
+	background-color: alpha(currentColor, 0.06);
+	border: 1px solid alpha(currentColor, 0.1);
+}
+
+.file-card .file-icon {
+	-gtk-icon-size: 32px;
+	color: var(--accent-color);
+}
+
+.file-card .file-name {
+	font-weight: bold;
+}
+
+.file-card .file-action {
+	-gtk-icon-size: 20px;
+	opacity: 0.6;
+}
+
+.file-card:hover {
+	background-color: alpha(currentColor, 0.1);
+}
+
+.file-card.uploading {
+	background-image: linear-gradient(100deg, transparent 35%, alpha(currentColor, 0.14) 50%, transparent 65%);
+	background-size: 300% 100%;
+	background-repeat: no-repeat;
+	animation: upload-shimmer 1600ms linear infinite;
+}
+
+@keyframes upload-shimmer {
+	from {
+		background-position: 100% 0;
+	}
+
+	to {
+		background-position: 0% 0;
+	}
 }
 
 .reactions {
@@ -675,7 +737,7 @@ headerbar.title-bar {
 	padding: 4px 4px 8px 4px;
 }
 
-.composer-row > overlay {
+.composer-pill {
 	background-color: alpha(currentColor, 0.07);
 	border-radius: 22px;
 	padding: 0 16px;
@@ -691,24 +753,36 @@ headerbar.title-bar {
 }
 
 /* The smiley matches the send button's size, so both sit centred on a one line message */
-.emoji-button {
+.share-button {
+	min-width: 44px;
+	min-height: 44px;
 	margin-right: 8px;
 }
 
+.share-button image {
+	-gtk-icon-size: 32px;
+}
+
+/* The emoji button inside the field reaches into its end padding, so the text keeps its room */
+.emoji-button {
+	margin: 6px -10px 6px 4px;
+}
+
 .emoji-button > button {
-	min-width: 44px;
-	min-height: 44px;
+	min-width: 32px;
+	min-height: 32px;
+	padding: 0;
 }
 
 .emoji-button image {
-	-gtk-icon-size: 32px;
+	-gtk-icon-size: 20px;
 }
 
 /* The send button grows past its size and settles as it arrives, and shrinks quickly as it goes */
 .send-button {
 	min-width: 44px;
 	min-height: 44px;
-	transition: opacity 260ms ease-out, transform 420ms cubic-bezier(0.34, 1.56, 0.64, 1);
+	transition: opacity 160ms ease-out, transform 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .send-button.tucked,

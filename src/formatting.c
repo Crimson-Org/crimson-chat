@@ -263,6 +263,29 @@ GPtrArray *find_image_links(const char *text) {
 }
 
 
+gboolean read_shared_file(const char *text, SharedFile *file) {
+	static GRegex *pattern;
+	if (!pattern)
+		pattern = g_regex_new("^file: (.+) \\((\\d+(?:[.,]\\d+)?\\h[^\\s()]+)\\) (https://\\S+)$", G_REGEX_OPTIMIZE, 0,
+			NULL);
+	g_autofree char *plain = strip_irc_formatting(text);
+	g_autoptr(GMatchInfo) match = NULL;
+	if (!g_regex_match(pattern, g_strstrip(plain), 0, &match))
+		return FALSE;
+	file->name = g_match_info_fetch(match, 1);
+	file->size = g_match_info_fetch(match, 2);
+	file->url = g_match_info_fetch(match, 3);
+	return TRUE;
+}
+
+
+void clear_shared_file(SharedFile *file) {
+	g_free(file->name);
+	g_free(file->size);
+	g_free(file->url);
+}
+
+
 int pick_name_color(const char *name) {
 	g_autofree char *folded = g_utf8_casefold(name ? name : "", -1);
 	return (int)(g_str_hash(folded) % NAME_COLORS);

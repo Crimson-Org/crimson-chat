@@ -96,6 +96,14 @@
 #define TEXT_SEND_COMMAND "Send a command"
 #define TEXT_SEND "Send"
 #define TEXT_EMOJI "Emoji"
+#define TEXT_SHARE_FILE "Share a File"
+#define TEXT_CHOOSE_FILE_TITLE "Choose a File to Share"
+#define TEXT_FILE_UNREADABLE "That file couldn't be opened"
+#define TEXT_FILE_UPLOAD_FAILED "The file could not be sent"
+#define TEXT_FILE_TOO_LARGE "That file is too large for this server"
+#define TEXT_UPLOAD_LOGIN_REFUSED "The server did not accept your login for uploads"
+/* A shared file's name, size and address, as the line sent to the room */
+#define TEXT_SHARED_FILE "file: %s (%s) %s"
 #define TEXT_CANCEL_REPLY "Cancel Reply"
 
 /* Server and bouncer forms */

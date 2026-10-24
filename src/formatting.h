@@ -12,6 +12,15 @@ char *strip_irc_formatting(const char *text);
 /* Addresses of pictures the text links to, which show as previews under the message */
 GPtrArray *find_image_links(const char *text);
 
+/* A file someone shared, from a line such as "file: notes.txt (2.1 kB) https://example.com/notes.txt" */
+typedef struct {
+	char *name, *size, *url;
+} SharedFile;
+
+/* Reads a shared file's line into the file, returning FALSE for any other text */
+gboolean read_shared_file(const char *text, SharedFile *file);
+void clear_shared_file(SharedFile *file);
+
 /* One of the eight name colours, the same for a nick every time */
 int pick_name_color(const char *name);
 

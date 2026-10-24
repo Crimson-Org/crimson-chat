@@ -13,7 +13,10 @@
 /* Lists show this many accounts, invites or pictures a page, however many there are */
 #define ITEMS_PER_PAGE 50
 #define COOKIE_NAME "crimson_session"
-#define UPLOAD_LINE_START "POST /avatar"
+#define AVATAR_LINE_START "POST /avatar "
+#define AVATAR_LINE_START_QUERY "POST /avatar?"
+#define FILE_LINE_START "POST /upload "
+#define CONTINUE_ANSWER "HTTP/1.1 100 Continue\r\n\r\n"
 #define DOWNLOAD_ADDRESS "https://github.com/Crimson-Org/crimson-chat/releases/latest"
 #define APPLICATION_LINK "crimson-chat://bouncer"
 
@@ -77,6 +80,8 @@ typedef struct {
 	GHashTable *headers, *query, *form;
 	/* The raw body, which an uploaded picture arrives as */
 	GBytes *body;
+	/* Whether the client was told to go on sending a body it asked about first */
+	gboolean has_continued;
 } WebRequest;
 
 /* A signed in browser and when its sign in runs out */
@@ -94,9 +99,14 @@ typedef struct {
 	const char *content_type;
 	GBytes *bytes;
 	gboolean is_lasting;
+	/* A shared file browsers should save under its name rather than show */
+	char *download_name;
+	/* The methods an address takes, which an OPTIONS request asks for */
+	const char *allow;
 } WebAnswer;
 
 static void read_more(WebRequest *request);
+static gboolean give_up(gpointer data);
 
 
 static void free_request(WebRequest *request) {
@@ -131,6 +141,7 @@ static const char *describe_status(int status) {
 	switch (status) {
 	case 200: return "OK";
 	case 201: return "Created";
+	case 204: return "No Content";
 	case 303: return "See Other";
 	case 400: return "Bad Request";
 	case 401: return "Unauthorized";
@@ -155,6 +166,11 @@ static void send_answer(WebRequest *request, WebAnswer *answer) {
 		g_string_append_printf(response, "Location: %s\r\n", answer->location);
 	if (answer->cookie)
 		g_string_append_printf(response, "Set-Cookie: %s\r\n", answer->cookie);
+	if (answer->download_name)
+		g_string_append_printf(response, "Content-Disposition: attachment; filename=\"%s\"\r\n",
+			answer->download_name);
+	if (answer->allow)
+		g_string_append_printf(response, "Allow: %s\r\n", answer->allow);
 	gsize body_length = answer->bytes ? g_bytes_get_size(answer->bytes) : answer->body ? answer->body->len : 0;
 	g_string_append_printf(response, "Content-Length: %zu\r\n\r\n", body_length);
 	if (answer->bytes && !g_str_equal(request->method, "HEAD"))
@@ -173,6 +189,7 @@ static void clear_answer(WebAnswer *answer) {
 	if (answer->body)
 		g_string_free(answer->body, TRUE);
 	g_free(answer->location);
+	g_free(answer->download_name);
 	g_free(answer->cookie);
 	g_clear_pointer(&answer->bytes, g_bytes_unref);
 }
@@ -873,7 +890,8 @@ static void answer_plainly(WebAnswer *answer, int status, const char *text) {
 }
 
 
-/* An app logs in with the user's bouncer name and password, as it does over IRC */
+/* An app logs in with the user's bouncer name and password, as it does over IRC, where other clients may add the
+ * network or their own name after a slash or an at sign */
 static BouncerUser *read_basic_login(WebRequest *request) {
 	const char *header = g_hash_table_lookup(request->headers, "authorization");
 	if (!header || g_ascii_strncasecmp(header, "Basic ", 6) != 0)
@@ -885,14 +903,15 @@ static BouncerUser *read_basic_login(WebRequest *request) {
 	if (!colon)
 		return NULL;
 	*colon = '\0';
+	text[strcspn(text, "/@")] = '\0';
 	return log_in_user(request->bouncer, text, colon + 1);
 }
 
 
 /* The address pictures are served from: the configured public one, or the address the app reached the bouncer by */
 static char *describe_base_url(WebRequest *request) {
-	if (request->bouncer->avatars.public_url)
-		return g_strdup(request->bouncer->avatars.public_url);
+	if (request->bouncer->public_url)
+		return g_strdup(request->bouncer->public_url);
 	return g_strdup_printf("https://%s", request->host ? request->host : "localhost");
 }
 
@@ -948,6 +967,75 @@ static void serve_avatar(WebAnswer *answer, WebRequest *request, const char *nam
 }
 
 
+/* The name in a Content-Disposition header, plain or quoted, or in the encoded form for names outside ASCII */
+static char *read_upload_name(WebRequest *request) {
+	const char *header = g_hash_table_lookup(request->headers, "content-disposition");
+	const char *encoded = header ? strstr(header, "filename*=") : NULL;
+	if (encoded) {
+		const char *quote = strstr(encoded, "''");
+		g_autofree char *value = g_strndup(quote ? quote + 2 : encoded + 10, strcspn(quote ? quote + 2 : encoded
+			+ 10, ";"));
+		char *name = g_uri_unescape_string(g_strstrip(value), NULL);
+		if (name)
+			return name;
+	}
+	const char *plain = header ? strstr(header, "filename=") : NULL;
+	if (!plain)
+		return NULL;
+	plain += strlen("filename=");
+	if (*plain == '"')
+		return g_strndup(plain + 1, strcspn(plain + 1, "\""));
+	g_autofree char *value = g_strndup(plain, strcspn(plain, ";"));
+	return g_strdup(g_strstrip(value));
+}
+
+
+/* A file shared in a chat, by the standard upload of soju's file host extension */
+static void upload_file(WebAnswer *answer, WebRequest *request) {
+	if (!request->bouncer->files.is_enabled) {
+		answer_plainly(answer, 404, "This bouncer does not take files");
+		return;
+	}
+	BouncerUser *user = read_basic_login(request);
+	if (!user) {
+		answer->is_delayed = TRUE;
+		answer_plainly(answer, 401, "The bouncer login was not accepted");
+		return;
+	}
+	g_autoptr(GError) error = NULL;
+	g_autofree char *name = read_upload_name(request);
+	g_autofree char *base = describe_base_url(request);
+	g_autofree char *url = store_file(request->bouncer, user, request->body, name, base, &error);
+	if (!url) {
+		gboolean is_large = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE);
+		answer_plainly(answer, is_large ? 413 : 500, error->message);
+		return;
+	}
+	answer_plainly(answer, 201, url);
+	answer->location = g_strdup(url);
+}
+
+
+static void serve_file(WebAnswer *answer, WebRequest *request, const char *name) {
+	const char *content_type = NULL;
+	gboolean is_download = FALSE;
+	GBytes *bytes = load_file(request->bouncer, name, &content_type, &is_download);
+	if (!bytes) {
+		answer_plainly(answer, 404, "No such file");
+		return;
+	}
+	answer->status = 200;
+	answer->content_type = content_type;
+	answer->bytes = bytes;
+	answer->is_lasting = TRUE;
+	/* The name the file was kept under starts with the user's id and a token, which the saved copy leaves out */
+	const char *shown = strchr(name, '-');
+	shown = shown ? strchr(shown + 1, '-') : NULL;
+	if (is_download)
+		answer->download_name = g_strdup(shown ? shown + 1 : name);
+}
+
+
 static void route_request(WebAnswer *answer, WebRequest *request) {
 	BouncerUser *user = find_signed_in_user(request);
 	gboolean is_post = g_str_equal(request->method, "POST");
@@ -956,6 +1044,13 @@ static void route_request(WebAnswer *answer, WebRequest *request) {
 		upload_avatar(answer, request);
 	} else if (g_str_has_prefix(path, "/avatars/") && !is_post) {
 		serve_avatar(answer, request, path + strlen("/avatars/"));
+	} else if (g_str_equal(path, "/upload") && is_post) {
+		upload_file(answer, request);
+	} else if (g_str_equal(path, "/upload") && g_str_equal(request->method, "OPTIONS")) {
+		answer->status = request->bouncer->files.is_enabled ? 204 : 404;
+		answer->allow = "OPTIONS, POST";
+	} else if (g_str_has_prefix(path, "/files/") && !is_post) {
+		serve_file(answer, request, path + strlen("/files/"));
 	} else if (g_str_equal(path, "/invite") && !is_post) {
 		const char *token = request->query ? g_hash_table_lookup(request->query, "token") : NULL;
 		show_invite(answer, request, token ? token : "", NULL);
@@ -1064,36 +1159,97 @@ static void answer_request(WebRequest *request, gsize header_length) {
 }
 
 
-/* Returns whether the headers and the body they announce have all arrived */
-static gboolean has_whole_request(WebRequest *request, gsize *header_length) {
+/* Returns whether the headers have arrived, with their length and the length of the body they announce */
+static gboolean read_head(WebRequest *request, gsize *header_length, gsize *body_length) {
 	const char *end = g_strstr_len((const char *)request->data->data, request->data->len, "\r\n\r\n");
 	if (!end)
 		return FALSE;
 	*header_length = (gsize)(end - (const char *)request->data->data);
 	g_autofree char *head = g_ascii_strdown((const char *)request->data->data, (gssize)*header_length);
 	const char *length_header = strstr(head, "\r\ncontent-length:");
-	gsize body_length = length_header ? (gsize)g_ascii_strtoull(length_header + 17, NULL, 10) : 0;
-	return request->data->len >= *header_length + 4 + body_length;
+	*body_length = length_header ? (gsize)g_ascii_strtoull(length_header + 17, NULL, 10) : 0;
+	return TRUE;
 }
 
 
-/* Uploads of pictures may be larger than pages and forms, up to what the settings allow */
-static gsize find_largest_request(WebRequest *request) {
-	gboolean is_upload = request->data->len >= strlen(UPLOAD_LINE_START) && memcmp(request->data->data,
-		UPLOAD_LINE_START, strlen(UPLOAD_LINE_START)) == 0;
-	return is_upload && request->bouncer->avatars.is_enabled ? request->bouncer->avatars.largest_bytes
-		+ LARGEST_REQUEST_BYTES : LARGEST_REQUEST_BYTES;
+static gboolean starts_with(WebRequest *request, const char *start) {
+	gsize length = strlen(start);
+	return request->data->len >= length && memcmp(request->data->data, start, length) == 0;
+}
+
+
+/* Uploads of pictures and files may be larger than pages and forms, up to what the settings allow */
+static gsize find_largest_body(WebRequest *request) {
+	Bouncer *bouncer = request->bouncer;
+	if (bouncer->avatars.is_enabled && (starts_with(request, AVATAR_LINE_START) || starts_with(request,
+		AVATAR_LINE_START_QUERY)))
+		return bouncer->avatars.largest_bytes;
+	if (bouncer->files.is_enabled && starts_with(request, FILE_LINE_START))
+		return bouncer->files.largest_bytes;
+	return LARGEST_REQUEST_BYTES;
+}
+
+
+/* A body too large is refused as soon as its length is known, so the sender learns why instead of being cut off */
+static void refuse_large_request(WebRequest *request) {
+	g_clear_handle_id(&request->timeout_source, g_source_remove);
+	WebAnswer answer = {0};
+	request->method = g_strdup("POST");
+	gsize largest = find_largest_body(request);
+	g_autofree char *text = largest > LARGEST_REQUEST_BYTES ? g_strdup_printf("Files can be at most %.0f MB",
+		largest / (1024.0 * 1024.0)) : g_strdup("That request is too large");
+	answer_plainly(&answer, 413, text);
+	send_answer(request, &answer);
+	clear_answer(&answer);
+}
+
+
+/* An upload may take longer than a page, so it only gives up once it stops arriving */
+static void wait_for_more(WebRequest *request) {
+	if (find_largest_body(request) > LARGEST_REQUEST_BYTES) {
+		g_clear_handle_id(&request->timeout_source, g_source_remove);
+		request->timeout_source = g_timeout_add_seconds(REQUEST_SECONDS, give_up, request);
+	}
+	read_more(request);
+}
+
+
+static void finish_continuing(GObject *source, GAsyncResult *result, gpointer data) {
+	WebRequest *request = data;
+	if (!g_output_stream_write_all_finish(G_OUTPUT_STREAM(source), result, NULL, NULL)) {
+		g_io_stream_close_async(request->connection, G_PRIORITY_DEFAULT, NULL, finish_closing, request);
+		return;
+	}
+	wait_for_more(request);
+}
+
+
+/* A client that asks before sending a body hears to go on once its size is allowed */
+static gboolean continue_request(WebRequest *request, gsize header_length) {
+	if (request->has_continued)
+		return FALSE;
+	g_autofree char *head = g_ascii_strdown((const char *)request->data->data, (gssize)header_length);
+	if (!strstr(head, "\r\nexpect: 100-continue"))
+		return FALSE;
+	request->has_continued = TRUE;
+	g_output_stream_write_all_async(g_io_stream_get_output_stream(request->connection), CONTINUE_ANSWER,
+		strlen(CONTINUE_ANSWER), G_PRIORITY_DEFAULT, NULL, finish_continuing, request);
+	return TRUE;
 }
 
 
 static void check_request(WebRequest *request) {
-	gsize header_length = 0;
-	if (has_whole_request(request, &header_length))
+	gsize header_length = 0, body_length = 0;
+	gboolean has_head = read_head(request, &header_length, &body_length);
+	gsize largest = find_largest_body(request) + LARGEST_REQUEST_BYTES;
+	if (has_head && body_length > find_largest_body(request))
+		refuse_large_request(request);
+	else if (has_head && request->data->len >= header_length + 4 + body_length)
 		answer_request(request, header_length);
-	else if (request->data->len > find_largest_request(request))
+	else if (request->data->len > largest)
 		g_io_stream_close_async(request->connection, G_PRIORITY_DEFAULT, NULL, finish_closing, request);
-	else
-		read_more(request);
+	else if (!has_head || !continue_request(request, header_length))
+		wait_for_more(request);
 }
 
 

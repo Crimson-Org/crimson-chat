@@ -326,6 +326,15 @@ void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_t
 }
 
 
+void send_room_line(CrimsonRoom *room, const char *text) {
+	if (!room->network->client || room->kind == ROOM_SERVER)
+		return;
+	start_question(room->network, room, FALSE);
+	send_text_as(room, "PRIVMSG", text, FALSE, NULL);
+	finish_question(room->network);
+}
+
+
 void send_reaction(CrimsonRoom *room, CrimsonMessage *message, const char *reaction) {
 	CrimsonNetwork *network = room->network;
 	if (!message->id || !can_network(network, "message-tags") || !allows_client_tag(network, "draft/react"))

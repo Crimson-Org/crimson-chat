@@ -1418,6 +1418,7 @@ static void follow_connection(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	g_autofree char *wait = room && room->kind != ROOM_SERVER ? describe_connection_wait(room->network) : NULL;
 	set_composer_waiting(conversation->composer, wait);
+	refresh_composer_sharing(conversation->composer);
 }
 
 

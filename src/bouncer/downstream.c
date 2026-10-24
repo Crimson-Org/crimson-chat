@@ -152,6 +152,7 @@ static gboolean free_downstream(gpointer data) {
 	Downstream *downstream = data;
 	g_hash_table_unref(downstream->caps);
 	g_free(downstream->address);
+	g_free(downstream->local_host);
 	g_free(downstream->nick);
 	g_free(downstream->username);
 	g_free(downstream->password);
@@ -215,10 +216,17 @@ static GPtrArray *list_support_tokens(Downstream *downstream) {
 	g_ptr_array_add(tokens, g_strdup_printf("BOUNCER_NETID=%" G_GINT64_FORMAT, downstream->upstream->record.id));
 	/* Where the server keeps pictures, the bouncer takes uploads for them: at its public address, or else at its
 	 * website's port on whatever address the app reached it by */
-	AvatarSettings *avatars = &downstream->bouncer->avatars;
-	if (avatars->is_enabled && has_irc_cap(get_irc_client_state(downstream->upstream->client), "draft/metadata-2"))
-		g_ptr_array_add(tokens, avatars->public_url ? g_strdup_printf("crimson-chat/AVATARS=%s/avatar",
-			avatars->public_url) : g_strdup_printf("crimson-chat/AVATARS=%s", downstream->bouncer->web_port));
+	Bouncer *bouncer = downstream->bouncer;
+	if (bouncer->avatars.is_enabled && has_irc_cap(get_irc_client_state(downstream->upstream->client),
+		"draft/metadata-2"))
+		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf("crimson-chat/AVATARS=%s/avatar",
+			bouncer->public_url) : g_strdup_printf("crimson-chat/AVATARS=%s", bouncer->web_port));
+	/* Files go to the standard upload address, which needs a whole address, so without a public one it is the
+	 * address the client reached the bouncer by */
+	if (bouncer->files.is_enabled)
+		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf("soju.im/FILEHOST=%s/upload",
+			bouncer->public_url) : g_strdup_printf("soju.im/FILEHOST=https://%s:%s/upload", downstream->local_host,
+			bouncer->web_port));
 	g_ptr_array_add(tokens, g_strdup_printf("CHATHISTORY=%d", HISTORY_PAGE_LIMIT));
 	g_ptr_array_add(tokens, g_strdup("MSGREFTYPES=timestamp,msgid"));
 	return tokens;
@@ -788,10 +796,11 @@ static gboolean drop_unregistered(gpointer data) {
 }
 
 
-void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address) {
+void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, const char *local_host) {
 	Downstream *downstream = g_new0(Downstream, 1);
 	downstream->bouncer = bouncer;
 	downstream->address = g_strdup(address);
+	downstream->local_host = g_strdup(local_host);
 	downstream->caps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
 	downstream->login = g_string_new(NULL);
 	downstream->stream = create_irc_stream(connection, handle_message, handle_closed, downstream);

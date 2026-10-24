@@ -24,6 +24,11 @@
 #define DEFAULT_AVATAR_SIZE 96
 #define DEFAULT_AVATAR_LARGEST_MB 2.5
 #define AVATAR_FOLDER "avatars"
+/* Shared files are on unless the owner turns them off, up to 20 MB each and kept for five weeks */
+#define DEFAULT_FILE_LARGEST_MB 20
+#define DEFAULT_FILE_KEPT_DAYS 35
+#define FILE_FOLDER "files"
+#define SECONDS_PER_DAY (24 * 60 * 60)
 
 typedef struct {
 	char *listen, *web;
@@ -152,25 +157,42 @@ static GKeyFile *load_config(void) {
 	g_key_file_set_boolean(config, GROUP, "avatars", TRUE);
 	g_key_file_set_comment(config, GROUP, "avatars", " Whether people can upload pictures for themselves and their "
 		"rooms, which the bouncer serves; avatar-format (png or jpeg), avatar-quality (1 to 100), avatar-size "
-		"(pixels), avatar-largest-mb and public-url (such as https://chat.example.com:8443) shape them", NULL);
+		"(pixels) and avatar-largest-mb shape them", NULL);
+	g_key_file_set_boolean(config, GROUP, "files", TRUE);
+	g_key_file_set_comment(config, GROUP, "files", " Whether people can share files in their chats, which the "
+		"bouncer serves; file-largest-mb and file-kept-days limit them", NULL);
+	g_key_file_set_comment(config, GROUP, NULL, " Set public-url, such as https://chat.example.com:8443, when "
+		"clients reach the website through another address than the bouncer's own", NULL);
 	g_key_file_save_to_file(config, path, NULL);
 	return config;
 }
 
 
-static void read_avatar_settings(GKeyFile *config, AvatarSettings *settings) {
+/* A missing setting counts as on */
+static gboolean read_switch(GKeyFile *config, const char *key) {
 	g_autoptr(GError) error = NULL;
-	gboolean is_enabled = g_key_file_get_boolean(config, GROUP, "avatars", &error);
-	settings->is_enabled = error ? TRUE : is_enabled;
-	settings->public_url = g_key_file_get_string(config, GROUP, "public-url", NULL);
-	if (settings->public_url) {
-		g_strstrip(settings->public_url);
-		/* A trailing slash would double up with the paths added after it */
-		while (g_str_has_suffix(settings->public_url, "/"))
-			settings->public_url[strlen(settings->public_url) - 1] = '\0';
-		if (!*settings->public_url)
-			g_clear_pointer(&settings->public_url, g_free);
-	}
+	gboolean is_on = g_key_file_get_boolean(config, GROUP, key, &error);
+	return error ? TRUE : is_on;
+}
+
+
+static char *read_public_url(GKeyFile *config) {
+	char *url = g_key_file_get_string(config, GROUP, "public-url", NULL);
+	if (!url)
+		return NULL;
+	g_strstrip(url);
+	/* A trailing slash would double up with the paths added after it */
+	while (g_str_has_suffix(url, "/"))
+		url[strlen(url) - 1] = '\0';
+	if (*url)
+		return url;
+	g_free(url);
+	return NULL;
+}
+
+
+static void read_avatar_settings(GKeyFile *config, AvatarSettings *settings) {
+	settings->is_enabled = read_switch(config, "avatars");
 	g_autofree char *format = g_key_file_get_string(config, GROUP, "avatar-format", NULL);
 	if (format)
 		g_strstrip(format);
@@ -183,6 +205,16 @@ static void read_avatar_settings(GKeyFile *config, AvatarSettings *settings) {
 	double largest = g_key_file_get_double(config, GROUP, "avatar-largest-mb", NULL);
 	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_AVATAR_LARGEST_MB) * 1024 * 1024);
 	settings->folder = build_path(g_get_user_data_dir(), AVATAR_FOLDER);
+}
+
+
+static void read_file_settings(GKeyFile *config, FileSettings *settings) {
+	settings->is_enabled = read_switch(config, "files");
+	double largest = g_key_file_get_double(config, GROUP, "file-largest-mb", NULL);
+	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_FILE_LARGEST_MB) * 1024 * 1024);
+	int days = g_key_file_get_integer(config, GROUP, "file-kept-days", NULL);
+	settings->kept_seconds = (gint64)(days > 0 ? days : DEFAULT_FILE_KEPT_DAYS) * SECONDS_PER_DAY;
+	settings->folder = build_path(g_get_user_data_dir(), FILE_FOLDER);
 }
 
 
@@ -215,7 +247,10 @@ static int run_bouncer(Options *options) {
 	const char *web = options->web ? options->web : configured_web ? configured_web : DEFAULT_WEB;
 	g_autofree char *name = g_key_file_get_string(config, GROUP, "name", NULL);
 	Bouncer *bouncer = create_bouncer(database, certificate, name ? name : g_get_host_name());
+	bouncer->public_url = read_public_url(config);
 	read_avatar_settings(config, &bouncer->avatars);
+	read_file_settings(config, &bouncer->files);
+	start_file_cleanup(bouncer);
 	if (!listen_bouncer(bouncer, listen, web, &error)) {
 		g_printerr("Could not listen on %s and %s: %s\n", listen, web, error->message);
 		return FAILURE_STATUS;

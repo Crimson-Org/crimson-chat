@@ -6,21 +6,22 @@
 #include "composer.h"
 #include "formatting.h"
 #include "session.h"
+#include "uploads.h"
 #include "window.h"
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
 #define SEND_SPINNER_SIZE 20
-#define SEND_ROOM_MS 325
+#define SEND_ROOM_MS 220
 /* The send button's width and the gap before it, which the field gives up while the button shows */
 #define SEND_ROOM 52
 /* How far the field has moved aside when the send button starts to grow in */
-#define SEND_GROW_POINT 0.5
+#define SEND_GROW_POINT 0.2
 #define PAUSE_SECONDS 6
 #define FIELD_MAXIMUM_HEIGHT 180
 #define DRAFTS_KEY "draft"
 
 struct Composer {
-	GtkWidget *box, *reply_bar, *reply_name, *reply_text, *field, *placeholder, *send_button;
+	GtkWidget *box, *reply_bar, *reply_name, *reply_text, *field, *placeholder, *send_button, *share_button;
 	GtkTextBuffer *buffer;
 	CrimsonRoom *room;
 	CrimsonMessage *reply_to;
@@ -232,7 +233,7 @@ static gboolean pause_typing(gpointer data) {
 
 
 /* The send button stays put at the row's end while the field moves aside for it, and the button grows in with a
- * little bounce once the field is halfway there */
+ * little bounce soon after the field starts moving */
 static void move_field_aside(double value, gpointer data) {
 	Composer *composer = data;
 	composer->send_room = value;
@@ -288,6 +289,24 @@ static void change_text(GtkTextBuffer *buffer, Composer *composer) {
 static void insert_emoji(GtkEmojiChooser *chooser, const char *emoji, Composer *composer) {
 	gtk_text_buffer_insert_at_cursor(composer->buffer, emoji, -1);
 	focus_composer_field(composer);
+}
+
+
+static void finish_choosing_file(GObject *source, GAsyncResult *result, gpointer data) {
+	g_autoptr(CrimsonRoom) room = data;
+	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
+	if (file)
+		share_file(room, file);
+}
+
+
+static void choose_file(GtkButton *button, Composer *composer) {
+	if (!composer->room)
+		return;
+	g_autoptr(GtkFileDialog) dialog = gtk_file_dialog_new();
+	gtk_file_dialog_set_title(dialog, TEXT_CHOOSE_FILE_TITLE);
+	gtk_file_dialog_open(dialog, GTK_WINDOW(gtk_widget_get_root(composer->box)), NULL, finish_choosing_file,
+		g_object_ref(composer->room));
 }
 
 
@@ -364,8 +383,23 @@ static GtkWidget *create_field(Composer *composer) {
 	gtk_widget_add_css_class(composer->placeholder, "composer-placeholder");
 	gtk_widget_set_valign(composer->placeholder, GTK_ALIGN_CENTER);
 	gtk_widget_set_can_target(composer->placeholder, FALSE);
+	/* The emoji button sits inside the field at its end, level with the first line when the text wraps */
+	GtkWidget *emoji = gtk_menu_button_new();
+	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(emoji), "face-smile-symbolic");
+	gtk_widget_set_tooltip_text(emoji, TEXT_EMOJI);
+	gtk_widget_add_css_class(emoji, "flat");
+	gtk_widget_add_css_class(emoji, "circular");
+	gtk_widget_add_css_class(emoji, "emoji-button");
+	gtk_widget_set_valign(emoji, GTK_ALIGN_START);
+	GtkWidget *chooser = gtk_emoji_chooser_new();
+	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), composer);
+	gtk_menu_button_set_popover(GTK_MENU_BUTTON(emoji), chooser);
+	GtkWidget *inside = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_box_append(GTK_BOX(inside), scroller);
+	gtk_box_append(GTK_BOX(inside), emoji);
 	GtkWidget *overlay = gtk_overlay_new();
-	gtk_overlay_set_child(GTK_OVERLAY(overlay), scroller);
+	gtk_widget_add_css_class(overlay, "composer-pill");
+	gtk_overlay_set_child(GTK_OVERLAY(overlay), inside);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), composer->placeholder);
 	gtk_widget_set_hexpand(overlay, TRUE);
 	return overlay;
@@ -380,17 +414,15 @@ Composer *create_composer(void) {
 	gtk_box_append(GTK_BOX(composer->box), composer->reply_bar);
 	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_add_css_class(row, "composer-row");
-	GtkWidget *emoji = gtk_menu_button_new();
-	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(emoji), "face-smile-symbolic");
-	gtk_widget_set_tooltip_text(emoji, TEXT_EMOJI);
-	gtk_widget_add_css_class(emoji, "flat");
-	gtk_widget_add_css_class(emoji, "circular");
-	gtk_widget_add_css_class(emoji, "emoji-button");
-	gtk_widget_set_valign(emoji, GTK_ALIGN_END);
-	GtkWidget *chooser = gtk_emoji_chooser_new();
-	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), composer);
-	gtk_menu_button_set_popover(GTK_MENU_BUTTON(emoji), chooser);
-	gtk_box_append(GTK_BOX(row), emoji);
+	composer->share_button = gtk_button_new_from_icon_name("mail-attachment-symbolic");
+	gtk_widget_set_tooltip_text(composer->share_button, TEXT_SHARE_FILE);
+	gtk_widget_add_css_class(composer->share_button, "flat");
+	gtk_widget_add_css_class(composer->share_button, "circular");
+	gtk_widget_add_css_class(composer->share_button, "share-button");
+	gtk_widget_set_valign(composer->share_button, GTK_ALIGN_END);
+	gtk_widget_set_visible(composer->share_button, FALSE);
+	g_signal_connect(composer->share_button, "clicked", G_CALLBACK(choose_file), composer);
+	gtk_box_append(GTK_BOX(row), composer->share_button);
 	composer->field_area = create_field(composer);
 	gtk_box_append(GTK_BOX(row), composer->field_area);
 	composer->send_button = gtk_button_new();
@@ -447,6 +479,14 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 	refresh_send_button(composer);
 	gtk_label_set_text(GTK_LABEL(composer->placeholder), room && room->kind == ROOM_SERVER ? TEXT_SEND_COMMAND
 		: TEXT_WRITE_MESSAGE);
+	refresh_composer_sharing(composer);
+}
+
+
+void refresh_composer_sharing(Composer *composer) {
+	g_autofree char *address = composer->room && composer->room->kind != ROOM_SERVER
+		? find_file_upload_url(composer->room->network) : NULL;
+	gtk_widget_set_visible(composer->share_button, address != NULL);
 }
 
 

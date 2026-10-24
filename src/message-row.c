@@ -23,6 +23,10 @@
 /* Room kept between a line's last word and the time beside it, and between stacked parts of the text */
 #define TIME_GAP 10
 #define TEXT_PART_SPACING 3
+#define UPLOAD_RING_SIZE 32
+#define UPLOAD_RING_WIDTH 3
+/* The part of the way to the real progress the ring moves each frame, so it fills smoothly between updates */
+#define UPLOAD_RING_EASING 0.18
 
 static const char *const QUICK_REACTIONS[] = {"👍", "❤️", "😂", "😮", "😢", "🙏", NULL};
 
@@ -168,6 +172,9 @@ static GtkWidget *create_reaction_strip(RowContext *context) {
 /* The menu a right click or a long press opens, with quick reactions on top as in other messengers */
 static void open_message_menu(RowContext *context, double x, double y) {
 	CrimsonMessage *message = context->message;
+	/* A file still on its way is not a message yet */
+	if (message->is_uploading)
+		return;
 	CrimsonRoom *room = g_object_get_data(G_OBJECT(context->bubble), "room");
 	GtkWidget *popover = gtk_popover_new();
 	gtk_widget_add_css_class(popover, "message-menu");
@@ -300,7 +307,7 @@ static char *build_text_markup(CrimsonMessage *message, const char *text) {
 	if (message->kind != MESSAGE_ACTION)
 		return g_steal_pointer(&markup);
 	g_autofree char *sender = g_markup_escape_text(message->sender ? message->sender : "", -1);
-	return g_strdup_printf("<i>%s %s</i>", sender, markup);
+	return g_strdup_printf("<b>%s</b> %s", sender, markup);
 }
 
 
@@ -376,6 +383,109 @@ static void add_previews(GtkWidget *box, CrimsonMessage *message) {
 		else
 			preload_image(url, refresh_message, G_OBJECT(message));
 	}
+}
+
+
+/* The ring of a file on its way, showing how much has gone */
+typedef struct {
+	CrimsonMessage *message;
+	double shown;
+} UploadRing;
+
+
+static void free_upload_ring(gpointer data) {
+	UploadRing *ring = data;
+	g_object_unref(ring->message);
+	g_free(ring);
+}
+
+
+static void draw_upload_ring(GtkDrawingArea *area, cairo_t *cairo, int width, int height, gpointer data) {
+	UploadRing *ring = data;
+	GdkRGBA color;
+	gtk_widget_get_color(GTK_WIDGET(area), &color);
+	double radius = (MIN(width, height) - UPLOAD_RING_WIDTH) / 2.0;
+	cairo_set_line_width(cairo, UPLOAD_RING_WIDTH);
+	cairo_set_line_cap(cairo, CAIRO_LINE_CAP_ROUND);
+	cairo_set_source_rgba(cairo, color.red, color.green, color.blue, color.alpha * 0.2);
+	cairo_arc(cairo, width / 2.0, height / 2.0, radius, 0, 2 * G_PI);
+	cairo_stroke(cairo);
+	if (ring->shown <= 0)
+		return;
+	gdk_cairo_set_source_rgba(cairo, &color);
+	cairo_arc(cairo, width / 2.0, height / 2.0, radius, -G_PI / 2, -G_PI / 2 + ring->shown * 2 * G_PI);
+	cairo_stroke(cairo);
+}
+
+
+static gboolean follow_upload(GtkWidget *area, GdkFrameClock *clock, gpointer data) {
+	UploadRing *ring = data;
+	ring->shown += (ring->message->upload_progress - ring->shown) * UPLOAD_RING_EASING;
+	gtk_widget_queue_draw(area);
+	return ring->message->is_uploading ? G_SOURCE_CONTINUE : G_SOURCE_REMOVE;
+}
+
+
+/* A file as a card with the icon of its kind, its name and size, and what shows at its end */
+static GtkWidget *create_file_card(const char *name, const char *size, GtkWidget *end) {
+	GtkWidget *card = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+	gtk_widget_add_css_class(card, "file-card");
+	gtk_widget_set_halign(card, GTK_ALIGN_START);
+	g_autofree char *kind = g_content_type_guess(name, NULL, 0, NULL);
+	g_autoptr(GIcon) icon = g_content_type_get_symbolic_icon(kind);
+	GtkWidget *image = gtk_image_new_from_gicon(icon);
+	gtk_widget_add_css_class(image, "file-icon");
+	gtk_widget_set_valign(image, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(card), image);
+	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+	gtk_widget_set_hexpand(texts, TRUE);
+	gtk_widget_set_valign(texts, GTK_ALIGN_CENTER);
+	GtkWidget *name_label = gtk_label_new(name);
+	gtk_label_set_xalign(GTK_LABEL(name_label), 0);
+	gtk_label_set_ellipsize(GTK_LABEL(name_label), PANGO_ELLIPSIZE_MIDDLE);
+	gtk_label_set_max_width_chars(GTK_LABEL(name_label), TEXT_WIDTH_CHARS / 2);
+	gtk_widget_add_css_class(name_label, "file-name");
+	gtk_box_append(GTK_BOX(texts), name_label);
+	GtkWidget *size_label = gtk_label_new(size);
+	gtk_label_set_xalign(GTK_LABEL(size_label), 0);
+	gtk_widget_add_css_class(size_label, "dim-label");
+	gtk_widget_set_visible(size_label, size != NULL);
+	gtk_box_append(GTK_BOX(texts), size_label);
+	gtk_box_append(GTK_BOX(card), texts);
+	gtk_widget_set_valign(end, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(card), end);
+	return card;
+}
+
+
+/* A shared file opens its address on a click, after the same question as any link */
+static GtkWidget *create_shared_file_card(const SharedFile *file) {
+	GtkWidget *download = gtk_image_new_from_icon_name("folder-download-symbolic");
+	gtk_widget_add_css_class(download, "file-action");
+	GtkWidget *card = create_file_card(file->name, file->size, download);
+	gtk_widget_set_tooltip_text(card, file->url);
+	gtk_widget_set_cursor_from_name(card, "pointer");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect_data(click, "released", G_CALLBACK(open_preview), g_strdup(file->url), free_link, 0);
+	gtk_widget_add_controller(card, GTK_EVENT_CONTROLLER(click));
+	return card;
+}
+
+
+static GtkWidget *create_upload_card(CrimsonMessage *message) {
+	g_autofree char *size = message->upload_size ? g_format_size((guint64)message->upload_size) : NULL;
+	UploadRing *ring = g_new0(UploadRing, 1);
+	ring->message = g_object_ref(message);
+	ring->shown = message->upload_progress;
+	GtkWidget *area = gtk_drawing_area_new();
+	gtk_widget_set_size_request(area, UPLOAD_RING_SIZE, UPLOAD_RING_SIZE);
+	gtk_widget_add_css_class(area, "upload-ring");
+	g_object_set_data_full(G_OBJECT(area), "ring", ring, free_upload_ring);
+	gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_upload_ring, ring, NULL);
+	gtk_widget_add_tick_callback(area, follow_upload, ring, NULL);
+	GtkWidget *card = create_file_card(message->text, size, area);
+	gtk_widget_add_css_class(card, "uploading");
+	return card;
 }
 
 
@@ -776,9 +886,10 @@ static void show_footer(RowParts *parts, CrimsonMessage *message) {
 	g_autofree char *moment = format_clock_time(message->time);
 	gtk_label_set_text(GTK_LABEL(parts->time), moment);
 	gtk_widget_set_visible(parts->state, message->is_own);
-	gtk_image_set_from_icon_name(GTK_IMAGE(parts->state), message->is_pending ? "crimson-clock-symbolic"
+	gboolean is_waiting = message->is_pending || message->is_uploading;
+	gtk_image_set_from_icon_name(GTK_IMAGE(parts->state), is_waiting ? "crimson-clock-symbolic"
 		: "crimson-sent-symbolic");
-	gtk_widget_set_tooltip_text(parts->state, message->is_pending ? TEXT_SENDING : TEXT_SENT);
+	gtk_widget_set_tooltip_text(parts->state, is_waiting ? TEXT_SENDING : TEXT_SENT);
 }
 
 
@@ -793,7 +904,22 @@ static void show_text(RowParts *parts, CrimsonMessage *message, const char *text
 	set_class(parts->body, "redacted", message->is_redacted);
 	set_class(parts->body, "body", !message->is_redacted);
 	clear_children(parts->previews);
-	add_previews(parts->previews, message);
+	/* A file on its way or shared shows its card in place of the text, with a picture's preview under it */
+	SharedFile shared = {0};
+	gboolean is_shared = !message->is_uploading && !message->is_redacted && read_shared_file(text, &shared);
+	gtk_widget_set_visible(parts->body, !message->is_uploading && !is_shared);
+	if (message->is_uploading)
+		gtk_box_append(GTK_BOX(parts->previews), create_upload_card(message));
+	if (is_shared)
+		gtk_box_append(GTK_BOX(parts->previews), create_shared_file_card(&shared));
+	if (!message->is_uploading)
+		add_previews(parts->previews, message);
+	/* A shared picture's preview sits centred under its card */
+	for (GtkWidget *child = gtk_widget_get_first_child(parts->previews); is_shared && child;
+		child = gtk_widget_get_next_sibling(child))
+		gtk_widget_set_halign(child, gtk_widget_has_css_class(child, "file-card") ? GTK_ALIGN_FILL
+			: GTK_ALIGN_CENTER);
+	clear_shared_file(&shared);
 	gtk_widget_set_visible(parts->previews, gtk_widget_get_first_child(parts->previews) != NULL);
 }
 
@@ -804,6 +930,7 @@ static void show_bubble(RowParts *parts, CrimsonMessage *message, CrimsonRoom *r
 	set_class(parts->bubble, "own", message->is_own);
 	set_class(parts->bubble, "mention", is_mention);
 	set_class(parts->bubble, "notice", message->kind == MESSAGE_NOTICE);
+	set_class(parts->bubble, "action", message->kind == MESSAGE_ACTION);
 	set_class(parts->bubble, "first", is_first);
 	/* Only a group's last bubble rounds its lower corner on the avatar's side */
 	set_class(parts->bubble, "group-end", ends_group);
@@ -821,7 +948,8 @@ static void show_bubble(RowParts *parts, CrimsonMessage *message, CrimsonRoom *r
 		clear_text_quote(&text_quote);
 	show_text(parts, message, text);
 	show_footer(parts, message);
-	gtk_widget_set_visible(parts->tail, is_first);
+	/* An action is told about the person rather than said by them, so it has no tail pointing at them */
+	gtk_widget_set_visible(parts->tail, is_first && message->kind != MESSAGE_ACTION);
 	gtk_widget_set_halign(parts->tail, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
 	set_class(parts->tail, "own", message->is_own);
 	set_class(parts->tail, "mention", is_mention);

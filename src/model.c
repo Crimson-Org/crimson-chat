@@ -322,6 +322,22 @@ gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 }
 
 
+void add_upload_message(CrimsonRoom *room, CrimsonMessage *message) {
+	guint position = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+	g_list_store_append(room->messages, message);
+	redraw_around(room, position, 1);
+}
+
+
+void remove_room_message(CrimsonRoom *room, CrimsonMessage *message) {
+	guint position = 0;
+	if (!g_list_store_find(room->messages, message, &position))
+		return;
+	g_list_store_remove(room->messages, position);
+	redraw_around(room, position, 0);
+}
+
+
 CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id) {
 	return id ? g_hash_table_lookup(room->by_id, id) : NULL;
 }

@@ -87,7 +87,9 @@ GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(window->chat->networks));
 	if (!window->has_rail && count > 1)
 		append_network_item(about, TEXT_SHOW_CHATS, "win.choose-server", network);
-	append_network_item(about, TEXT_MARK_READ, "win.mark-server-read", network);
+	gboolean has_mention = FALSE;
+	if (count_network_badges(network, &has_mention))
+		append_network_item(about, TEXT_MARK_READ, "win.mark-server-read", network);
 	append_network_item(about, TEXT_ACCOUNT_MENU, "win.own-profile", network);
 	append_network_item(about, TEXT_SERVER_MESSAGES, "win.server-messages", network);
 	append_network_item(about, TEXT_SERVER_SETTINGS, "win.network-settings", network);

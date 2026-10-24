@@ -46,6 +46,7 @@ Long and multi-line messages arrive in one piece on servers with multiline batch
 Avatars, display names, pronouns, status lines, homepages and network icons come from the IRCv3 metadata the server shares, and you set your own in Account.\
 Clicking the picture of a person, room or server lets you choose your own, which stays on this computer.\
 Links to pictures over HTTPS show the picture, and bold, italics, colours and monospace keep their formatting.\
+On servers with a file host, the paperclip shares a file and posts its name, size and link once it has uploaded.\
 Typing **bold** or *italics*, with stars or underscores, sends them formatted.
 
 ### Your own bouncer
@@ -56,7 +57,8 @@ Add the bouncer in Crimson Chat with that login, trust the fingerprint once, and
 The bouncer joins your channels, keeps their history in [SQLite](https://sqlite.org) and replays it to each client you connect.\
 Admins invite people with links made in Crimson Chat or on the bouncer's website, where the invited pick their own login.\
 On the website admins also see every account with its servers, make other admins, set passwords, delete accounts and delete uploaded pictures.\
-It speaks the bouncer network extension of [soju](https://soju.im), which other modern IRC clients understand as well.
+It speaks the bouncer network extension of [soju](https://soju.im), which other modern IRC clients understand as well.\
+Files shared through it go to its own file host, up to 20 MB each and kept for five weeks.
 
 ### Notifications and the tray
 
@@ -80,4 +82,6 @@ Clone it with `git clone --recurse-submodules` so the shared Crimson Core code c
 `sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, SQLite and GnuTLS but no graphical libraries.\
 `crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.\
 People can upload pictures for themselves and for rooms they run, which the bouncer scales, keeps and sets as their avatar on servers with IRCv3 metadata.\
-The settings file takes `avatars`, `avatar-format`, `avatar-quality`, `avatar-size`, `avatar-largest-mb` and `public-url`, the address pictures are served from, which needs a certificate other people's apps trust.
+The settings file takes `avatars`, `avatar-format`, `avatar-quality`, `avatar-size` and `avatar-largest-mb` for pictures.\
+`files`, `file-largest-mb` and `file-kept-days` set up shared files, served by soju's [file host extension](https://codeberg.org/emersion/soju/src/branch/master/doc/ext/filehost.md).\
+`public-url` is the address pictures and files are served from, which needs a certificate other people's apps trust.

@@ -5,6 +5,7 @@
 
 #include "common/identity.h"
 #include "images.h"
+#include "window.h"
 
 #define LARGEST_IMAGE_BYTES (10 * 1024 * 1024)
 #define SIZE_PLACEHOLDER "{size}"
@@ -237,6 +238,13 @@ static void finish_download(GObject *source, GAsyncResult *result, gpointer data
 }
 
 
+static gboolean accept_trusted_certificate(SoupMessage *message, GTlsCertificate *certificate,
+	GTlsCertificateFlags errors, gpointer data) {
+	Window *window = get_main_window();
+	return window && is_trusted_certificate(window->chat, certificate);
+}
+
+
 /* A kept picture is requested again only where its server named a version, and an unchanged one costs no
  * download, while a server that named none changes the address for a new picture */
 static void download_image(Fetch *fetch) {
@@ -252,6 +260,7 @@ static void download_image(Fetch *fetch) {
 	}
 	if (parts)
 		soup_message_headers_replace(soup_message_get_request_headers(message), parts[0], parts[1]);
+	g_signal_connect(message, "accept-certificate", G_CALLBACK(accept_trusted_certificate), NULL);
 	soup_session_send_and_read_async(web, message, G_PRIORITY_LOW, NULL, finish_download, fetch);
 }
 

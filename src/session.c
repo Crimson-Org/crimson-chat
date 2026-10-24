@@ -1223,3 +1223,14 @@ gboolean collect_registration(CrimsonNetwork *network, const IrcMessage *message
 		read_nickserv_reply(network, get_last_irc_parameter(message));
 	return FALSE;
 }
+
+
+gboolean is_trusted_certificate(Chat *chat, GTlsCertificate *certificate) {
+	g_autofree char *hash = hash_certificate(certificate);
+	for (guint index = 0; hash && index < chat->sessions->len; index++) {
+		Session *session = g_ptr_array_index(chat->sessions, index);
+		if (g_strcmp0(session->record->trusted_certificate, hash) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}

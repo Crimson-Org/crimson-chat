@@ -56,6 +56,11 @@ struct _CrimsonMessage {
 	gboolean is_membership;
 	/* The monotonic moment a live message arrived, or 0 for one loaded from history */
 	gint64 arrival_time;
+	/* A file of this many bytes on its way to the bouncer, shown as a card under its name until it is sent, and how
+	 * much of it has gone from 0 to 1 */
+	gboolean is_uploading;
+	goffset upload_size;
+	double upload_progress;
 };
 
 #define CRIMSON_TYPE_ROOM (crimson_room_get_type())
@@ -169,6 +174,9 @@ gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message);
 guint begin_room_batch(CrimsonRoom *room);
 guint end_room_batch(CrimsonRoom *room, guint start);
 CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id);
+/* An upload's card goes at the end of the room without becoming the room's latest line, and goes away once sent */
+void add_upload_message(CrimsonRoom *room, CrimsonMessage *message);
+void remove_room_message(CrimsonRoom *room, CrimsonMessage *message);
 CrimsonMessage *get_last_message(CrimsonRoom *room);
 /* Counts the unread messages again after the read marker or the messages changed */
 void count_unread(CrimsonRoom *room);
