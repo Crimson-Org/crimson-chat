@@ -719,6 +719,12 @@ headerbar.title-bar {
 	padding: 1px 0;
 }
 
+.older-loading {
+	border-radius: 9999px;
+	padding: 8px;
+	margin: 12px;
+}
+
 .jump-button {
 	margin: 18px;
 	min-width: 44px;

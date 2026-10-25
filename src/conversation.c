@@ -75,6 +75,8 @@ struct Conversation {
 	GtkWidget *still_page;
 	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
 	GtkWidget *jump_button, *jump_icons, *jump_count;
+	/* Slides down from the top while the page before the earliest message is on the way */
+	GtkWidget *older_loading;
 	/* The kept rooms' chats, of which the open room's shows, and the rooms waiting to be built ahead of time */
 	GtkWidget *views_stack;
 	GHashTable *views;
@@ -197,10 +199,25 @@ static gboolean is_near_top(RoomView *view) {
 }
 
 
+/* The sign slides in as the request goes out and fades once the page lands or the server says history ended */
+static void show_older_loading(Conversation *conversation) {
+	GtkRevealer *revealer = GTK_REVEALER(conversation->older_loading);
+	gboolean is_loading = conversation->room && conversation->room->history_request == HISTORY_OLDER;
+	if (is_loading == gtk_revealer_get_reveal_child(revealer))
+		return;
+	gtk_revealer_set_transition_type(revealer, is_loading ? GTK_REVEALER_TRANSITION_TYPE_SLIDE_DOWN
+		: GTK_REVEALER_TRANSITION_TYPE_CROSSFADE);
+	gtk_revealer_set_reveal_child(revealer, is_loading);
+}
+
+
 /* Asking again as each page lands also fills a chat whose pages held mostly hidden joins and leaves */
 static void load_when_near_top(RoomView *view) {
-	if (view && is_shown_view(view) && is_near_top(view))
+	if (!view || !is_shown_view(view))
+		return;
+	if (is_near_top(view))
 		load_older_history(view->room);
+	show_older_loading(view->conversation);
 }
 
 
@@ -593,6 +610,20 @@ static GtkWidget *create_jump_button(Conversation *conversation) {
 }
 
 
+static GtkWidget *create_older_loading(Conversation *conversation) {
+	GtkWidget *pill = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(pill, "osd");
+	gtk_widget_add_css_class(pill, "older-loading");
+	gtk_box_append(GTK_BOX(pill), create_spinner());
+	conversation->older_loading = gtk_revealer_new();
+	gtk_revealer_set_child(GTK_REVEALER(conversation->older_loading), pill);
+	gtk_widget_set_halign(conversation->older_loading, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(conversation->older_loading, GTK_ALIGN_START);
+	gtk_widget_set_can_target(conversation->older_loading, FALSE);
+	return conversation->older_loading;
+}
+
+
 static GtkWidget *create_centred_note(GtkWidget *note) {
 	gtk_widget_set_halign(note, GTK_ALIGN_CENTER);
 	gtk_widget_set_valign(note, GTK_ALIGN_CENTER);
@@ -633,6 +664,7 @@ static GtkWidget *create_message_area(Conversation *conversation) {
 	gtk_widget_set_size_request(conversation->loading_spinner, LOADING_SPINNER_SIZE, LOADING_SPINNER_SIZE);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), create_centred_note(conversation->loading_spinner));
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), create_jump_button(conversation));
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), create_older_loading(conversation));
 	gtk_widget_add_css_class(overlay, "chat-background");
 	return overlay;
 }
