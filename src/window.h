@@ -2,6 +2,7 @@
 
 #include <adwaita.h>
 
+#include "common/panes.h"
 #include "common/tray.h"
 #include "common/window-geometry.h"
 #include "session.h"
@@ -25,7 +26,7 @@ struct Window {
 	/* The server whose connection the corner is about, so switching servers does not count as reconnecting */
 	CrimsonNetwork *lost_network;
 	gboolean is_problem;
-	AdwNavigationSplitView *split;
+	CrimsonPanes *panes;
 	GtkWidget *rail, *rail_list;
 	RoomList *room_list;
 	Conversation *conversation;

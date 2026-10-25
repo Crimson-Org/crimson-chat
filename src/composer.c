@@ -292,6 +292,16 @@ static void insert_emoji(GtkEmojiChooser *chooser, const char *emoji, Composer *
 }
 
 
+/* The chooser is made on first use, since a new one lays out every emoji in the background and holds up frames */
+static void create_emoji_chooser(GtkMenuButton *button, gpointer data) {
+	if (gtk_menu_button_get_popover(button))
+		return;
+	GtkWidget *chooser = gtk_emoji_chooser_new();
+	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), data);
+	gtk_menu_button_set_popover(button, chooser);
+}
+
+
 static void finish_choosing_file(GObject *source, GAsyncResult *result, gpointer data) {
 	g_autoptr(CrimsonRoom) room = data;
 	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
@@ -391,9 +401,7 @@ static GtkWidget *create_field(Composer *composer) {
 	gtk_widget_add_css_class(emoji, "circular");
 	gtk_widget_add_css_class(emoji, "emoji-button");
 	gtk_widget_set_valign(emoji, GTK_ALIGN_START);
-	GtkWidget *chooser = gtk_emoji_chooser_new();
-	g_signal_connect(chooser, "emoji-picked", G_CALLBACK(insert_emoji), composer);
-	gtk_menu_button_set_popover(GTK_MENU_BUTTON(emoji), chooser);
+	gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(emoji), create_emoji_chooser, composer, NULL);
 	GtkWidget *inside = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_box_append(GTK_BOX(inside), scroller);
 	gtk_box_append(GTK_BOX(inside), emoji);

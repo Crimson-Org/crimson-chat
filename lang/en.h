@@ -6,8 +6,6 @@
 #define TEXT_AWAY_DEFAULT "Away"
 
 /* Window and menus */
-#define TEXT_CHATS "Chats"
-#define TEXT_CONVERSATION "Conversation"
 #define TEXT_MENU "Main Menu"
 #define TEXT_ADD "Add"
 #define TEXT_SEARCH "Search"

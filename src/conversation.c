@@ -85,6 +85,8 @@ struct Conversation {
 	guint build_source, read_source;
 	/* A narrow window slides whole pages itself, so the chat view does not fade on top of that */
 	gboolean is_narrow;
+	/* Headers at the window's left edge only when narrow, where the room header also offers Back */
+	GtkWidget *room_header, *empty_header, *back_button;
 	GtkWidget *member_view, *empty_note, *loading_spinner, *members_title;
 	GtkStringList *members;
 	gboolean shows_events;
@@ -553,6 +555,20 @@ static void rise_typing_faces(double value, gpointer data) {
 }
 
 
+static void remove_typing_faces(Conversation *conversation) {
+	GtkWidget *child;
+	while ((child = gtk_widget_get_first_child(conversation->typing_faces)))
+		gtk_fixed_remove(GTK_FIXED(conversation->typing_faces), child);
+}
+
+
+/* Sunk faces are taken away, since their endless hop would otherwise restyle and redraw the window every frame */
+static void finish_typing_rise(AdwAnimation *animation, Conversation *conversation) {
+	if (!conversation->shows_typing_faces)
+		remove_typing_faces(conversation);
+}
+
+
 static void create_typing_faces(Conversation *conversation, GtkWidget *overlay) {
 	conversation->typing_faces = gtk_fixed_new();
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), conversation->typing_faces);
@@ -560,6 +576,7 @@ static void create_typing_faces(Conversation *conversation, GtkWidget *overlay) 
 	AdwAnimationTarget *target = adw_callback_animation_target_new(rise_typing_faces, conversation, NULL);
 	conversation->typing_animation = adw_timed_animation_new(conversation->typing_faces, 0, 1, TYPING_RISE_MS,
 		target);
+	g_signal_connect(conversation->typing_animation, "done", G_CALLBACK(finish_typing_rise), conversation);
 }
 
 
@@ -633,6 +650,19 @@ static GtkWidget *create_centred_note(GtkWidget *note) {
 }
 
 
+/* Kept chats out of sight are hidden, so a style change above them, such as the window narrowing, never restyles
+ * their rows, which stay built since only the list itself drops them when hidden */
+static void hide_unseen_views(Conversation *conversation) {
+	GtkStack *stack = GTK_STACK(conversation->views_stack);
+	if (gtk_stack_get_transition_running(stack))
+		return;
+	GtkWidget *shown = gtk_stack_get_visible_child(stack);
+	for (GtkWidget *child = gtk_widget_get_first_child(conversation->views_stack); child;
+		child = gtk_widget_get_next_sibling(child))
+		gtk_widget_set_visible(child, child == shown);
+}
+
+
 /* The kept rooms' chats sit in one place under the floating avatars, notes and jump button they all share */
 static GtkWidget *create_message_area(Conversation *conversation) {
 	conversation->shows_events = get_settings()->shows_events;
@@ -643,6 +673,8 @@ static GtkWidget *create_message_area(Conversation *conversation) {
 	gtk_stack_set_vhomogeneous(GTK_STACK(conversation->views_stack), FALSE);
 	gtk_stack_set_transition_duration(GTK_STACK(conversation->views_stack), FADE_DURATION_MS);
 	gtk_widget_set_vexpand(conversation->views_stack, TRUE);
+	g_signal_connect_swapped(conversation->views_stack, "notify::transition-running", G_CALLBACK(hide_unseen_views),
+		conversation);
 	GtkWidget *overlay = gtk_overlay_new();
 	conversation->message_overlay = overlay;
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), conversation->views_stack);
@@ -775,8 +807,10 @@ static gboolean build_next_view(gpointer data) {
 		conversation->build_source = 0;
 		return G_SOURCE_REMOVE;
 	}
-	if (!g_hash_table_contains(conversation->views, room) && g_hash_table_size(conversation->views) < KEPT_VIEWS)
+	if (!g_hash_table_contains(conversation->views, room) && g_hash_table_size(conversation->views) < KEPT_VIEWS) {
 		measure_view(create_room_view(conversation, room));
+		hide_unseen_views(conversation);
+	}
 	g_object_unref(room);
 	return G_SOURCE_CONTINUE;
 }
@@ -1187,7 +1221,12 @@ static void place_member_panel(Conversation *conversation) {
 
 static GtkWidget *create_header(Conversation *conversation) {
 	GtkWidget *header = adw_header_bar_new();
+	conversation->room_header = header;
 	gtk_widget_add_css_class(header, "title-bar");
+	conversation->back_button = gtk_button_new_from_icon_name("go-previous-symbolic");
+	gtk_widget_set_tooltip_text(conversation->back_button, TEXT_BACK);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(conversation->back_button), "win.go-back");
+	adw_header_bar_pack_start(ADW_HEADER_BAR(header), conversation->back_button);
 	GtkWidget *title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
 	conversation->avatar = adw_avatar_new(HEADER_AVATAR_SIZE, NULL, TRUE);
 	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -1219,10 +1258,11 @@ static GtkWidget *create_header(Conversation *conversation) {
 }
 
 
-static GtkWidget *create_empty_page(void) {
+static GtkWidget *create_empty_page(Conversation *conversation) {
 	GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(page, "chat-background");
 	GtkWidget *header = adw_header_bar_new();
+	conversation->empty_header = header;
 	gtk_widget_add_css_class(header, "title-bar");
 	gtk_widget_add_css_class(header, "flat");
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), gtk_label_new(NULL));
@@ -1288,7 +1328,7 @@ Conversation *create_conversation(Window *window) {
 	/* Coming back to the window counts as seeing the open chat, so what arrived meanwhile is read */
 	g_signal_connect_swapped(window->window, "notify::is-active", G_CALLBACK(mark_read_when_seen), conversation);
 	conversation->stack = gtk_stack_new();
-	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(), "empty");
+	gtk_stack_add_named(GTK_STACK(conversation->stack), create_empty_page(conversation), "empty");
 	gtk_stack_add_named(GTK_STACK(conversation->stack), create_room_page(conversation), "room");
 	conversation->still_page = gtk_picture_new();
 	gtk_picture_set_can_shrink(GTK_PICTURE(conversation->still_page), TRUE);
@@ -1407,8 +1447,7 @@ static void fill_typing_faces(Conversation *conversation) {
 	}
 	if (!child && shown == nicks->len)
 		return;
-	while ((child = gtk_widget_get_first_child(conversation->typing_faces)))
-		gtk_fixed_remove(GTK_FIXED(conversation->typing_faces), child);
+	remove_typing_faces(conversation);
 	for (guint index = 0; index < nicks->len; index++) {
 		const char *nick = g_ptr_array_index(nicks, index);
 		GtkWidget *face = adw_avatar_new(MESSAGE_AVATAR_SIZE, nick, TRUE);
@@ -1538,9 +1577,11 @@ static void show_room_view(Conversation *conversation, RoomView *view) {
 	/* The wide window fades quickly from one chat to the next, while the narrow window's own page slide moves it */
 	gtk_stack_set_transition_type(GTK_STACK(conversation->views_stack), conversation->is_narrow
 		? GTK_STACK_TRANSITION_TYPE_NONE : GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+	gtk_widget_set_visible(view->scroller, TRUE);
 	gtk_stack_set_visible_child(GTK_STACK(conversation->views_stack), view->scroller);
 	show_empty_note(conversation);
 	drop_old_views(conversation);
+	hide_unseen_views(conversation);
 }
 
 
@@ -1574,6 +1615,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 	adw_animation_reset(conversation->typing_animation);
 	conversation->typing_rise = 0;
 	conversation->shows_typing_faces = FALSE;
+	remove_typing_faces(conversation);
 	GtkStackTransitionType slide = is_going_back ? GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT
 		: GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT;
 	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), slides_page ? slide : GTK_STACK_TRANSITION_TYPE_NONE);
@@ -1630,6 +1672,9 @@ void clear_read_line(Conversation *conversation, CrimsonRoom *room) {
 
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow) {
 	conversation->is_narrow = is_narrow;
+	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(conversation->room_header), is_narrow);
+	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(conversation->empty_header), is_narrow);
+	gtk_widget_set_visible(conversation->back_button, is_narrow);
 }
 
 

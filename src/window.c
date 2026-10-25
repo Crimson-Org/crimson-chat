@@ -676,8 +676,8 @@ CrimsonRoom *get_open_room(Window *window) {
 gboolean is_room_in_view(Window *window, CrimsonRoom *room) {
 	return room && get_open_room(window) == room && gtk_widget_get_visible(GTK_WIDGET(window->window))
 		&& gtk_window_is_active(GTK_WINDOW(window->window))
-		&& (!adw_navigation_split_view_get_collapsed(window->split)
-		|| adw_navigation_split_view_get_show_content(window->split));
+		&& (!crimson_panes_get_collapsed(window->panes)
+		|| crimson_panes_get_show_content(window->panes));
 }
 
 
@@ -686,7 +686,7 @@ static void show_room(Window *window, CrimsonRoom *room, gboolean is_going_back)
 		choose_network(window, room->network);
 	select_listed_room(window->room_list, room);
 	show_conversation_room(window->conversation, room, is_going_back);
-	adw_navigation_split_view_set_show_content(window->split, TRUE);
+	crimson_panes_set_show_content(window->panes, TRUE);
 	save_window_choice(room->network->key, room);
 	focus_composer(window->conversation);
 }
@@ -835,8 +835,11 @@ static GtkWidget *create_welcome(Window *window) {
 }
 
 
-static void follow_collapse(AdwNavigationSplitView *split, GParamSpec *spec, Window *window) {
-	window->is_narrow = adw_navigation_split_view_get_collapsed(split);
+/* Side by side, the list's header leaves the window buttons to the chat's header at the window's right edge */
+static void follow_collapse(CrimsonPanes *panes, GParamSpec *spec, Window *window) {
+	window->is_narrow = crimson_panes_get_collapsed(panes);
+	adw_header_bar_set_show_end_title_buttons(ADW_HEADER_BAR(get_room_list_header(window->room_list)),
+		window->is_narrow);
 	set_conversation_narrow(window->conversation, window->is_narrow);
 	update_view(window);
 }
@@ -1044,7 +1047,7 @@ static void remove_network_action(GSimpleAction *action, GVariant *parameter, gp
 static void leave_room_now(Window *window, CrimsonRoom *room) {
 	if (get_open_room(window) == room) {
 		show_conversation_room(window->conversation, NULL, FALSE);
-		adw_navigation_split_view_set_show_content(window->split, FALSE);
+		crimson_panes_set_show_content(window->panes, FALSE);
 	}
 	leave_room(room);
 }
@@ -1150,7 +1153,7 @@ static void mark_server_read_action(GSimpleAction *action, GVariant *parameter, 
 
 static void search_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
-	adw_navigation_split_view_set_show_content(window->split, FALSE);
+	crimson_panes_set_show_content(window->panes, FALSE);
 	focus_room_search(window->room_list);
 }
 
@@ -1194,9 +1197,7 @@ static void go_back(Window *window) {
 }
 
 
-/* The press is claimed so a narrow window's page view does not also go back to the list */
 static void press_back_button(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
-	gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
 	go_back(window);
 }
 
@@ -1207,21 +1208,9 @@ static void go_back_action(GSimpleAction *action, GVariant *parameter, gpointer 
 
 
 /* Back to the list starts over, so a chat opened from there goes back to the list again */
-static void follow_shown_content(AdwNavigationSplitView *split, GParamSpec *spec, Window *window) {
-	if (!adw_navigation_split_view_get_show_content(split))
+static void follow_shown_content(CrimsonPanes *panes, GParamSpec *spec, Window *window) {
+	if (!crimson_panes_get_show_content(panes))
 		g_ptr_array_set_size(window->room_history, 0);
-}
-
-
-/* A narrow window's back button asks the page view to go back, so the chat answers that request itself */
-static void take_over_back_button(Window *window) {
-	static const GActionEntry ENTRIES[] = {
-		{"pop", go_back_action, NULL, NULL, NULL, {0}},
-	};
-	GSimpleActionGroup *group = g_simple_action_group_new();
-	g_action_map_add_action_entries(G_ACTION_MAP(group), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
-	gtk_widget_insert_action_group(get_conversation_widget(window->conversation), "navigation", G_ACTION_GROUP(group));
-	g_object_unref(group);
 }
 
 
@@ -1278,7 +1267,7 @@ static GtkWidget *create_sidebar(Window *window) {
 void close_open_room(Window *window) {
 	show_conversation_room(window->conversation, NULL, FALSE);
 	select_listed_room(window->room_list, NULL);
-	adw_navigation_split_view_set_show_content(window->split, FALSE);
+	crimson_panes_set_show_content(window->panes, FALSE);
 	save_window_choice(window->network ? window->network->key : NULL, NULL);
 }
 
@@ -1288,7 +1277,7 @@ static void add_breakpoint(Window *window) {
 	GValue collapsed = G_VALUE_INIT;
 	g_value_init(&collapsed, G_TYPE_BOOLEAN);
 	g_value_set_boolean(&collapsed, TRUE);
-	adw_breakpoint_add_setter(breakpoint, G_OBJECT(window->split), "collapsed", &collapsed);
+	adw_breakpoint_add_setter(breakpoint, G_OBJECT(window->panes), "collapsed", &collapsed);
 	adw_application_window_add_breakpoint(window->window, breakpoint);
 }
 
@@ -1377,16 +1366,12 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	gtk_widget_set_size_request(GTK_WIDGET(window->window), MINIMUM_WIDTH, MINIMUM_HEIGHT);
 	window->room_list = create_room_list(window);
 	window->conversation = create_conversation(window);
-	window->split = ADW_NAVIGATION_SPLIT_VIEW(adw_navigation_split_view_new());
-	AdwNavigationPage *sidebar = adw_navigation_page_new(create_sidebar(window), TEXT_CHATS);
-	AdwNavigationPage *content = adw_navigation_page_new(get_conversation_widget(window->conversation),
-		TEXT_CONVERSATION);
-	adw_navigation_split_view_set_sidebar(window->split, sidebar);
-	adw_navigation_split_view_set_content(window->split, content);
-	g_signal_connect(window->split, "notify::collapsed", G_CALLBACK(follow_collapse), window);
+	window->panes = CRIMSON_PANES(crimson_panes_new(create_sidebar(window),
+		get_conversation_widget(window->conversation)));
+	g_signal_connect(window->panes, "notify::collapsed", G_CALLBACK(follow_collapse), window);
 	window->pages = gtk_stack_new();
 	/* The side panel's edge drags it wider or narrower, and the width is kept for the next launch */
-	GtkWidget *chats = add_navigation_sidebar_handle(window->split, load_sidebar_width(SIDEBAR_WIDTH),
+	GtkWidget *chats = add_panes_sidebar_handle(window->panes, load_sidebar_width(SIDEBAR_WIDTH),
 		SIDEBAR_MINIMUM, SIDEBAR_MAXIMUM, remember_sidebar_width, NULL);
 	gtk_stack_add_named(GTK_STACK(window->pages), chats, "chats");
 	gtk_stack_add_named(GTK_STACK(window->pages), create_welcome(window), "welcome");
@@ -1402,8 +1387,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	g_signal_connect(back, "pressed", G_CALLBACK(press_back_button), window);
 	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
 	add_window_actions(window);
-	take_over_back_button(window);
-	g_signal_connect(window->split, "notify::show-content", G_CALLBACK(follow_shown_content), window);
+	g_signal_connect(window->panes, "notify::show-content", G_CALLBACK(follow_shown_content), window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
 	static const TrayEntry TRAY_ENTRIES[] = {
 		{TEXT_SHOW_WINDOW, "app.show"},
@@ -1412,7 +1396,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	};
 	TraySetup tray = {TRAY_ENTRIES, G_N_ELEMENTS(TRAY_ENTRIES), NULL, NULL};
 	window->tray = create_tray(G_APPLICATION(application), GTK_WINDOW(window->window), &tray);
-	update_view(window);
+	follow_collapse(window->panes, NULL, window);
 	note_first_frame(GTK_WIDGET(window->window));
 	return window;
 }
