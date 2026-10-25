@@ -22,6 +22,9 @@
 #define SIDEBAR_MINIMUM 410
 #define SIDEBAR_MAXIMUM 640
 #define BADGE_LIMIT 99
+/* The room a toast's padding, close button and margins take from the window's width, in pixels */
+#define TOAST_CHROME_WIDTH 120
+#define INVITE_TOAST_SECONDS 10
 #define NETWORK_KEY "network"
 #define CONNECTION_DELAY_MS 1500
 #define RAIL_DIMMED 0.45
@@ -43,11 +46,41 @@ Window *get_main_window(void) {
 }
 
 
+/* Whether the text fits on one line of a toast in the window as wide as it is now, in the toast's bold font */
+static gboolean fits_toast(Window *window, const char *text) {
+	g_autoptr(PangoLayout) layout = gtk_widget_create_pango_layout(GTK_WIDGET(window->toasts), text);
+	g_autoptr(PangoAttrList) attributes = pango_attr_list_new();
+	pango_attr_list_insert(attributes, pango_attr_weight_new(PANGO_WEIGHT_BOLD));
+	pango_layout_set_attributes(layout, attributes);
+	int width = 0;
+	pango_layout_get_pixel_size(layout, &width, NULL);
+	return width <= gtk_widget_get_width(GTK_WIDGET(window->toasts)) - TOAST_CHROME_WIDTH;
+}
+
+
+/* A message too long for one line of a toast shows in a dialog instead, so it is never cut or wrapped */
 void show_toast(Window *window, const char *text) {
 	if (!text || !*text)
 		return;
+	if (!fits_toast(window, text)) {
+		AdwDialog *alert = adw_alert_dialog_new(NULL, text);
+		adw_alert_dialog_add_response(ADW_ALERT_DIALOG(alert), "close", TEXT_CLOSE);
+		adw_dialog_present(alert, GTK_WIDGET(window->window));
+		return;
+	}
 	AdwToast *toast = adw_toast_new(text);
 	adw_toast_set_timeout(toast, 4);
+	adw_toast_overlay_add_toast(window->toasts, toast);
+}
+
+
+void offer_room_invite(Window *window, CrimsonNetwork *network, const char *room_name) {
+	g_autofree char *title = g_strdup_printf(TEXT_INVITED_TO, room_name);
+	AdwToast *toast = adw_toast_new(title);
+	adw_toast_set_timeout(toast, INVITE_TOAST_SECONDS);
+	adw_toast_set_button_label(toast, TEXT_JOIN);
+	adw_toast_set_action_name(toast, "win.join-invited");
+	adw_toast_set_action_target_value(toast, g_variant_new("(ss)", network->key, room_name));
 	adw_toast_overlay_add_toast(window->toasts, toast);
 }
 
@@ -137,30 +170,11 @@ static gboolean is_stuck(CrimsonNetwork *network) {
 }
 
 
-/* What stopped a connection, in kind: a refused login, an untrusted certificate, or anything else */
-typedef enum {
-	STOP_OTHER,
-	STOP_LOGIN,
-	STOP_CERTIFICATE,
-} StopKind;
-
-
-static StopKind read_stop_kind(const char *error) {
-	g_autofree char *reason = error ? g_ascii_strdown(error, -1) : NULL;
-	if (reason && strstr(reason, "certificate"))
-		return STOP_CERTIFICATE;
-	if (reason && (strstr(reason, "sasl") || strstr(reason, "authentication") || strstr(reason, "password")
-		|| strstr(reason, "login")))
-		return STOP_LOGIN;
-	return STOP_OTHER;
-}
-
-
 /* A stopped connection is described in a few plain words, while the server's messages keep the technical reason */
-static char *describe_stop(const char *error) {
-	switch (read_stop_kind(error)) {
-	case STOP_LOGIN: return g_strdup(TEXT_LOGIN_REFUSED);
-	case STOP_CERTIFICATE: return g_strdup(TEXT_CERTIFICATE_REFUSED);
+static char *describe_stop(IrcFailure failure) {
+	switch (failure) {
+	case IRC_FAILURE_LOGIN: return g_strdup(TEXT_LOGIN_REFUSED);
+	case IRC_FAILURE_CERTIFICATE: return g_strdup(TEXT_CERTIFICATE_REFUSED);
 	default: return g_strdup(TEXT_CANNOT_CONNECT);
 	}
 }
@@ -172,13 +186,13 @@ char *describe_connection_wait(CrimsonNetwork *network) {
 	gboolean is_stopped = is_stuck(network);
 	if (session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED) {
 		if (is_stopped)
-			return describe_stop(read_account_error(session));
+			return describe_stop(read_account_failure(session));
 		return g_strdup(session->has_connected ? TEXT_RECONNECTING : TEXT_CONNECTING);
 	}
 	if (network->state == NETWORK_CONNECTED)
 		return NULL;
 	if (is_stopped)
-		return describe_stop(read_network_error(network));
+		return describe_stop(read_network_failure(network));
 	return g_strdup(network->state == NETWORK_CONNECTING && !session->has_connected ? TEXT_CONNECTING
 		: TEXT_RECONNECTING);
 }
@@ -396,9 +410,9 @@ static void refresh_welcome(Window *window) {
 	/* A bouncer reached before only waits to reconnect, while one never reached says why */
 	const char *shown = state == NETWORK_DISCONNECTED && bouncer->has_connected ? TEXT_RECONNECTING
 		: describe_state(state);
+	g_autofree char *stop = describe_stop(read_account_failure(bouncer));
 	g_autofree char *description = state == NETWORK_DISCONNECTED && error && !bouncer->has_connected
-		? g_strdup_printf("%s · %s · %s", TEXT_BOUNCER, TEXT_DISCONNECTED, error)
-		: g_strdup_printf("%s · %s", TEXT_BOUNCER, shown);
+		? g_strdup_printf("%s · %s", TEXT_BOUNCER, stop) : g_strdup_printf("%s · %s", TEXT_BOUNCER, shown);
 	adw_status_page_set_description(page, description);
 }
 
@@ -436,15 +450,15 @@ static void show_connection(Window *window) {
 	if (window->is_problem && network) {
 		Session *session = network->session;
 		gboolean is_bouncer_down = session->record->is_bouncer && read_account_state(session) != NETWORK_CONNECTED;
-		StopKind kind = read_stop_kind(is_bouncer_down ? read_account_error(session) : read_network_error(network));
-		if (kind == STOP_LOGIN && is_bouncer_down) {
+		IrcFailure kind = is_bouncer_down ? read_account_failure(session) : read_network_failure(network);
+		if (kind == IRC_FAILURE_LOGIN && is_bouncer_down) {
 			note.fix_label = TEXT_LOG_IN;
 			note.fix_action = "win.bouncer-settings";
-		} else if (kind == STOP_LOGIN) {
+		} else if (kind == IRC_FAILURE_LOGIN) {
 			note.fix_label = TEXT_LOG_IN;
 			note.fix_action = "win.own-profile";
 			note.fix_target = target;
-		} else if (kind == STOP_OTHER) {
+		} else if (kind != IRC_FAILURE_CERTIFICATE) {
 			note.fix_label = TEXT_TRY_AGAIN;
 			note.fix_action = "win.reconnect-server";
 			note.fix_target = target;
@@ -1122,7 +1136,7 @@ static void leave_chat_action(GSimpleAction *action, GVariant *parameter, gpoint
 }
 
 
-static void mark_read_in_window(Window *window, CrimsonRoom *room) {
+void mark_read_in_window(Window *window, CrimsonRoom *room) {
 	mark_room_read(room);
 	clear_read_line(window->conversation, room);
 }
@@ -1137,6 +1151,29 @@ static void mark_read_action(GSimpleAction *action, GVariant *parameter, gpointe
 	CrimsonRoom *room = network ? find_room(network, name) : NULL;
 	if (room)
 		mark_read_in_window(window, room);
+}
+
+
+/* Ignoring a person, or no longer ignoring them, from their private chat's menu */
+static void ignore_person_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	const char *key = NULL, *nick = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &nick);
+	GPtrArray *ignored = get_settings()->ignored_people;
+	if (find_room_override(ignored, key, nick))
+		clear_room_override(ignored, key, nick);
+	else
+		set_room_override(ignored, key, nick, TRUE, 0);
+}
+
+
+static void join_invited_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	const char *key = NULL, *name = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &name);
+	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
+	CrimsonNetwork *network = find_keyed_network(window, network_key);
+	if (network)
+		join_channel(network, name, NULL);
 }
 
 
@@ -1155,6 +1192,12 @@ static void search_action(GSimpleAction *action, GVariant *parameter, gpointer d
 	Window *window = data;
 	crimson_panes_set_show_content(window->panes, FALSE);
 	focus_room_search(window->room_list);
+}
+
+
+static void search_messages_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Window *window = data;
+	search_conversation(window->conversation);
 }
 
 
@@ -1237,8 +1280,11 @@ static void add_window_actions(Window *window) {
 		{"leave-chat", leave_chat_action, "(ss)", NULL, NULL, {0}},
 		{"chat-details", chat_details_action, "(ss)", NULL, NULL, {0}},
 		{"mark-read", mark_read_action, "(ss)", NULL, NULL, {0}},
+		{"ignore-person", ignore_person_action, "(ss)", NULL, NULL, {0}},
+		{"join-invited", join_invited_action, "(ss)", NULL, NULL, {0}},
 		{"mark-server-read", mark_server_read_action, "s", NULL, NULL, {0}},
 		{"search", search_action, NULL, NULL, NULL, {0}},
+		{"search-messages", search_messages_action, NULL, NULL, NULL, {0}},
 		{"step-room", step_room_action, "i", NULL, NULL, {0}},
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
 		{"invite-people", invite_action, NULL, NULL, NULL, {0}},

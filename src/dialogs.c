@@ -356,19 +356,22 @@ void show_network_settings(Window *window, CrimsonNetwork *network) {
 }
 
 
-/* The people a new private chat can go to: everyone in the user's rooms, those who spoke last first, filtered by
- * what is typed, while the typed name itself reaches anyone on the server */
+/* The people a new private chat or an invite can go to, everyone in the user's rooms with those who spoke last first,
+ * filtered by what is typed, while the typed name itself reaches anyone on the server */
 typedef struct {
 	CrimsonNetwork *network;
 	Window *window;
 	AdwDialog *alert;
 	GtkWidget *entry, *people;
 	GPtrArray *nicks;
+	/* The room the picked person is invited to, or NULL to open a private chat with them */
+	CrimsonRoom *inviting_to;
 } MessageForm;
 
 
 static void free_message_form(MessageForm *form) {
 	g_ptr_array_unref(form->nicks);
+	g_clear_object(&form->inviting_to);
 	g_free(form);
 }
 
@@ -377,7 +380,10 @@ static void open_chat_with(MessageForm *form, const char *nick) {
 	g_autofree char *trimmed = g_strstrip(g_strdup(nick));
 	if (!*trimmed)
 		return;
-	open_room(form->window, open_private_room(form->network, trimmed));
+	if (form->inviting_to && form->network->client)
+		send_irc_client_command(form->network->client, "INVITE", trimmed, form->inviting_to->name, NULL);
+	else if (!form->inviting_to)
+		open_room(form->window, open_private_room(form->network, trimmed));
 }
 
 
@@ -497,10 +503,12 @@ static void show_people(MessageForm *form) {
 }
 
 
-void show_message_dialog(Window *window, CrimsonNetwork *network) {
-	g_autofree char *body = g_strdup_printf(TEXT_MESSAGE_BODY, network->name);
-	AdwDialog *alert = adw_alert_dialog_new(TEXT_MESSAGE_SOMEONE, body);
+static void show_person_dialog(Window *window, CrimsonNetwork *network, CrimsonRoom *inviting_to) {
+	g_autofree char *where = inviting_to ? describe_room_title(inviting_to) : NULL;
+	g_autofree char *body = g_strdup_printf(TEXT_MESSAGE_BODY, inviting_to ? where : network->name);
+	AdwDialog *alert = adw_alert_dialog_new(inviting_to ? TEXT_INVITE_SOMEONE : TEXT_MESSAGE_SOMEONE, body);
 	MessageForm *form = g_new0(MessageForm, 1);
+	form->inviting_to = inviting_to ? g_object_ref(inviting_to) : NULL;
 	form->network = network;
 	form->window = window;
 	form->alert = alert;
@@ -519,13 +527,24 @@ void show_message_dialog(Window *window, CrimsonNetwork *network) {
 	gtk_box_append(GTK_BOX(box), form->people);
 	show_people(form);
 	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), box);
-	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "go", TEXT_OPEN_CHAT, NULL);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "go", inviting_to ? TEXT_INVITE
+		: TEXT_OPEN_CHAT, NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "go", ADW_RESPONSE_SUGGESTED);
 	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "go");
 	g_object_set_data_full(G_OBJECT(alert), "form", form, (GDestroyNotify)free_message_form);
 	g_signal_connect(alert, "response", G_CALLBACK(finish_message), form);
 	adw_dialog_present(alert, GTK_WIDGET(window->window));
 	gtk_widget_grab_focus(form->entry);
+}
+
+
+void show_message_dialog(Window *window, CrimsonNetwork *network) {
+	show_person_dialog(window, network, NULL);
+}
+
+
+void show_room_invite_dialog(Window *window, CrimsonRoom *room) {
+	show_person_dialog(window, room->network, room);
 }
 
 

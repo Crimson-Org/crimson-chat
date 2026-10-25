@@ -10,6 +10,8 @@ void show_bouncer_dialog(Window *window, Session *editing);
 /* Edits a direct server, or a network the bouncer keeps */
 void show_network_settings(Window *window, CrimsonNetwork *network);
 void show_message_dialog(Window *window, CrimsonNetwork *network);
+/* Picks someone to invite to the room, the same way as someone to message */
+void show_room_invite_dialog(Window *window, CrimsonRoom *room);
 void ask_certificate_trust(Window *window, Session *session, const char *hash);
 void confirm_network_removal(Window *window, CrimsonNetwork *network);
 /* Forgets the bouncer login, leaving its servers on the bouncer */

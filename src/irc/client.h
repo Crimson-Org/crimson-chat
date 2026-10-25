@@ -5,7 +5,15 @@
 #include "message.h"
 #include "state.h"
 
-/* One connection to an IRC server or bouncer, which registers, negotiates capabilities and reconnects */
+/* The tag that names which of a bouncer's networks a line between Crimson Chat and its bouncer is about */
+#define IRC_NETWORK_TAG "crimson-chat/network"
+/* The capabilities a bouncer's network has only where the server behind it supports them */
+#define BOUNCER_NETWORK_CAPS "labeled-response", "account-notify", "away-notify", "extended-join", \
+	"userhost-in-names", "chghost", "setname", "invite-notify", "account-tag", "draft/message-redaction", \
+	"draft/metadata-2", "draft/channel-rename", "extended-monitor", "draft/account-registration"
+
+/* One connection to an IRC server or bouncer, which registers, negotiates capabilities and reconnects, or one of a
+ * bouncer's networks carried over such a connection */
 typedef struct IrcClient IrcClient;
 
 typedef enum {
@@ -28,8 +36,6 @@ typedef struct {
 	gboolean uses_tls;
 	char *nick, *username, *realname, *password;
 	char *sasl_username, *sasl_password;
-	/* The bouncer network to bind to, for a connection that goes through a bouncer */
-	char *bound_network;
 	/* SHA-256 of a certificate the user chose to trust, as lowercase hex */
 	char *trusted_certificate;
 	/* A bouncer paces lines to the network itself, so lines to it need no flood pacing */
@@ -51,6 +57,10 @@ typedef struct {
 
 IrcClient *create_irc_client(const IrcClientSettings *settings, const char *const *wanted_caps,
 	const IrcClientEvents *events, gpointer data);
+/* A network of the bouncer the carrier is connected to, which has its own state and registers when the bouncer
+ * welcomes it, while its lines travel over the carrier tagged with its id */
+IrcClient *create_irc_network_client(IrcClient *carrier, const char *network_id, const IrcClientEvents *events,
+	gpointer data);
 void free_irc_client(IrcClient *client);
 
 void connect_irc_client(IrcClient *client);
@@ -58,6 +68,8 @@ void connect_irc_client(IrcClient *client);
 void disconnect_irc_client(IrcClient *client, const char *reason);
 /* Replaces the settings for the next connection */
 void change_irc_client_settings(IrcClient *client, const IrcClientSettings *settings);
+/* Checks a connection at once after the computer woke or changed networks, and retries a lost one without waiting */
+void check_irc_client_link(IrcClient *client);
 
 void send_irc_client_message(IrcClient *client, const IrcMessage *message);
 void send_irc_client_command(IrcClient *client, const char *command, ...) G_GNUC_NULL_TERMINATED;

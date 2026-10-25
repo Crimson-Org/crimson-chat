@@ -52,6 +52,7 @@ static void finalize_message(GObject *object) {
 	g_free(message->sender);
 	g_free(message->text);
 	g_free(message->reply_to);
+	g_free(message->problem);
 	g_hash_table_unref(message->reactions);
 	g_ptr_array_unref(message->reaction_order);
 	G_OBJECT_CLASS(crimson_message_parent_class)->finalize(object);
@@ -317,6 +318,25 @@ gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 }
 
 
+void fail_pending_message(CrimsonMessage *message, const char *problem) {
+	if (!message->is_own || !message->is_pending)
+		return;
+	message->is_pending = FALSE;
+	g_free(message->problem);
+	message->problem = g_strdup(problem);
+	announce_message_change(message);
+}
+
+
+void fail_pending_messages(CrimsonRoom *room, const char *problem) {
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonMessage) line = g_list_model_get_item(G_LIST_MODEL(room->messages), index);
+		fail_pending_message(line, problem);
+	}
+}
+
+
 void add_upload_message(CrimsonRoom *room, CrimsonMessage *message) {
 	guint position = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
 	g_list_store_append(room->messages, message);
@@ -340,11 +360,13 @@ CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id) {
 
 CrimsonMessage *get_last_message(CrimsonRoom *room) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
-	if (!count)
-		return NULL;
-	CrimsonMessage *message = g_list_model_get_item(G_LIST_MODEL(room->messages), count - 1);
-	g_object_unref(message);
-	return message;
+	for (guint index = count; index-- > 0;) {
+		CrimsonMessage *message = g_list_model_get_item(G_LIST_MODEL(room->messages), index);
+		g_object_unref(message);
+		if (message->id && !message->is_pending && !message->problem)
+			return message;
+	}
+	return NULL;
 }
 
 

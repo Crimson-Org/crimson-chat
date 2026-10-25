@@ -13,11 +13,11 @@
 #define DEFAULT_PLAIN_PORT 6667
 
 static const char *const OFFERED_CAPS[] = {
-	"sasl=PLAIN", "soju.im/bouncer-networks", "soju.im/bouncer-networks-notify", "server-time", "message-tags",
+	"sasl=PLAIN", BOUNCER_CAP, "server-time", "message-tags", "labeled-response",
 	"batch", "echo-message", "draft/chathistory", "draft/event-playback", "draft/read-marker", "cap-notify",
 	"account-notify", "away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname",
 	"invite-notify", "account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename",
-	"extended-monitor", "crimson-chat/invites", "crimson-chat/reconnect", "draft/account-registration", NULL,
+	"extended-monitor", "draft/account-registration", NULL,
 };
 
 /* Commands a client only receives once it took the capability that describes them */
@@ -30,11 +30,7 @@ static const struct {
 };
 
 /* Capabilities the network itself has to support, since the bouncer only passes their commands on */
-static const char *const NETWORK_CAPS[] = {
-	"account-notify", "away-notify", "extended-join", "userhost-in-names", "chghost", "setname", "invite-notify",
-	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor",
-	"draft/account-registration", NULL,
-};
+static const char *const NETWORK_CAPS[] = {BOUNCER_NETWORK_CAPS, NULL};
 
 static const char *const NETWORK_ATTRIBUTES[] = {
 	"name", "host", "port", "tls", "nickname", "username", "realname", "pass", "sasl-username", "sasl-password", NULL,
@@ -54,19 +50,19 @@ static gboolean is_tag_allowed(Downstream *downstream, const char *name) {
 	if (g_str_equal(name, "batch"))
 		return has_downstream_cap(downstream, "batch");
 	if (g_str_equal(name, "label"))
-		return FALSE;
+		return has_downstream_cap(downstream, "labeled-response");
 	return has_downstream_cap(downstream, "message-tags");
 }
 
 
 /* Rewrites a NAMES reply for a client without multi-prefix or userhost-in-names */
-static void shape_names(Downstream *downstream, IrcMessage *message) {
+static void shape_names(Downstream *downstream, Upstream *upstream, IrcMessage *message) {
 	gboolean keeps_prefixes = has_downstream_cap(downstream, "multi-prefix");
 	gboolean keeps_hosts = has_downstream_cap(downstream, "userhost-in-names");
 	const char *names = get_irc_parameter(message, 3);
-	if ((keeps_prefixes && keeps_hosts) || !names || !downstream->upstream)
+	if ((keeps_prefixes && keeps_hosts) || !names || !upstream)
 		return;
-	IrcState *state = get_irc_client_state(downstream->upstream->client);
+	IrcState *state = get_irc_client_state(upstream->client);
 	g_auto(GStrv) entries = g_strsplit(names, " ", -1);
 	GString *shaped = g_string_new(NULL);
 	for (int index = 0; entries[index]; index++) {
@@ -98,7 +94,7 @@ static gboolean is_command_allowed(Downstream *downstream, const IrcMessage *mes
 }
 
 
-void send_to_downstream(Downstream *downstream, const IrcMessage *message) {
+void send_to_downstream(Downstream *downstream, Upstream *upstream, const IrcMessage *message) {
 	if (!is_command_allowed(downstream, message))
 		return;
 	g_autoptr(IrcMessage) shaped = copy_irc_message(message);
@@ -112,25 +108,32 @@ void send_to_downstream(Downstream *downstream, const IrcMessage *message) {
 	if (g_str_equal(shaped->command, "JOIN") && !has_downstream_cap(downstream, "extended-join"))
 		g_ptr_array_set_size(shaped->parameters, MIN(shaped->parameters->len, 1));
 	if (g_str_equal(shaped->command, "353"))
-		shape_names(downstream, shaped);
+		shape_names(downstream, upstream, shaped);
+	if (upstream) {
+		g_autofree char *network_id = g_strdup_printf("%" G_GINT64_FORMAT, upstream->record.id);
+		set_irc_tag(shaped, IRC_NETWORK_TAG, network_id);
+	}
 	send_irc_message(downstream->stream, shaped);
 }
 
 
-static void send_downstream_list(Downstream *downstream, const char *numeric, va_list parameters) {
-	g_autoptr(IrcMessage) message = create_irc_message(numeric, downstream->nick ? downstream->nick : "*", NULL);
+static void send_downstream_list(Downstream *downstream, Upstream *upstream, const char *numeric,
+	va_list parameters) {
+	g_autofree char *nick = upstream ? get_upstream_nick(upstream) : g_strdup(downstream->nick ? downstream->nick
+		: "*");
+	g_autoptr(IrcMessage) message = create_irc_message(numeric, nick, NULL);
 	message->source = g_strdup(BOUNCER_NAME);
 	for (const char *parameter = va_arg(parameters, const char *); parameter;
 		parameter = va_arg(parameters, const char *))
 		add_irc_parameter(message, parameter);
-	send_to_downstream(downstream, message);
+	send_to_downstream(downstream, upstream, message);
 }
 
 
-void send_downstream_numeric(Downstream *downstream, const char *numeric, ...) {
+void send_downstream_numeric(Downstream *downstream, Upstream *upstream, const char *numeric, ...) {
 	va_list parameters;
 	va_start(parameters, numeric);
-	send_downstream_list(downstream, numeric, parameters);
+	send_downstream_list(downstream, upstream, numeric, parameters);
 	va_end(parameters);
 }
 
@@ -144,7 +147,7 @@ static void send_from_bouncer(Downstream *downstream, const char *command, ...) 
 		parameter = va_arg(parameters, const char *))
 		add_irc_parameter(message, parameter);
 	va_end(parameters);
-	send_to_downstream(downstream, message);
+	send_to_downstream(downstream, NULL, message);
 }
 
 
@@ -156,7 +159,6 @@ static gboolean free_downstream(gpointer data) {
 	g_free(downstream->nick);
 	g_free(downstream->username);
 	g_free(downstream->password);
-	g_free(downstream->bound_network);
 	g_string_free(downstream->login, TRUE);
 	g_free(downstream);
 	return G_SOURCE_REMOVE;
@@ -196,9 +198,9 @@ static char *format_support_token(const char *name, const char *value) {
 }
 
 
-static GPtrArray *list_support_tokens(Downstream *downstream) {
+static GPtrArray *list_support_tokens(Downstream *downstream, Upstream *upstream) {
 	GPtrArray *tokens = g_ptr_array_new_with_free_func(g_free);
-	if (!downstream->upstream) {
+	if (!upstream) {
 		g_ptr_array_add(tokens, g_strdup("CASEMAPPING=ascii"));
 		/* The name the owner gave the bouncer, which an app shows instead of its address */
 		const char *name = downstream->bouncer->name ? downstream->bouncer->name : BOUNCER_NAME;
@@ -207,130 +209,113 @@ static GPtrArray *list_support_tokens(Downstream *downstream) {
 	}
 	GHashTableIter iterator;
 	gpointer name, value;
-	g_hash_table_iter_init(&iterator, get_irc_client_state(downstream->upstream->client)->support);
+	IrcState *state = get_irc_client_state(upstream->client);
+	g_hash_table_iter_init(&iterator, state->support);
 	while (g_hash_table_iter_next(&iterator, &name, &value)) {
-		if (!g_str_equal(name, "CHATHISTORY") && !g_str_equal(name, "MSGREFTYPES")
-			&& !g_str_equal(name, "BOUNCER_NETID"))
+		if (!g_str_equal(name, "CHATHISTORY") && !g_str_equal(name, "MSGREFTYPES"))
 			g_ptr_array_add(tokens, format_support_token(name, value));
 	}
-	g_ptr_array_add(tokens, g_strdup_printf("BOUNCER_NETID=%" G_GINT64_FORMAT, downstream->upstream->record.id));
-	/* Where the server keeps pictures, the bouncer takes uploads for them: at its public address, or else at its
-	 * website's port on whatever address the app reached it by */
+	/* Pictures and files go to the bouncer's website, at its public address or else at its port on whatever
+	 * address the app reached the bouncer by */
 	Bouncer *bouncer = downstream->bouncer;
-	if (bouncer->avatars.is_enabled && has_irc_cap(get_irc_client_state(downstream->upstream->client),
-		"draft/metadata-2"))
-		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf("crimson-chat/AVATARS=%s/avatar",
-			bouncer->public_url) : g_strdup_printf("crimson-chat/AVATARS=%s", bouncer->web_port));
-	/* Files go to the standard upload address, which needs a whole address, so without a public one it is the
-	 * address the client reached the bouncer by */
-	if (bouncer->files.is_enabled)
-		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf("soju.im/FILEHOST=%s/upload",
-			bouncer->public_url) : g_strdup_printf("soju.im/FILEHOST=https://%s:%s/upload", downstream->local_host,
-			bouncer->web_port));
+	if (bouncer->avatars.is_enabled && has_irc_cap(state, "draft/metadata-2"))
+		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf(AVATARS_TOKEN "=%s/avatar",
+			bouncer->public_url) : g_strdup_printf(AVATARS_TOKEN "=%s", bouncer->web_port));
+	if (bouncer->files.is_enabled) {
+		g_ptr_array_add(tokens, bouncer->public_url ? g_strdup_printf(FILES_TOKEN "=%s/upload",
+			bouncer->public_url) : g_strdup_printf(FILES_TOKEN "=%s", bouncer->web_port));
+		g_ptr_array_add(tokens, g_strdup_printf(FILE_LIMIT_TOKEN "=%" G_GSIZE_FORMAT, bouncer->files.largest_bytes));
+	}
 	g_ptr_array_add(tokens, g_strdup_printf("CHATHISTORY=%d", HISTORY_PAGE_LIMIT));
 	g_ptr_array_add(tokens, g_strdup("MSGREFTYPES=timestamp,msgid"));
 	return tokens;
 }
 
 
-void send_support_tokens(Downstream *downstream) {
-	g_autoptr(GPtrArray) tokens = list_support_tokens(downstream);
+static void send_support_tokens(Downstream *downstream, Upstream *upstream) {
+	g_autoptr(GPtrArray) tokens = list_support_tokens(downstream, upstream);
+	g_autofree char *nick = upstream ? get_upstream_nick(upstream) : g_strdup(downstream->nick);
 	for (guint start = 0; start < tokens->len; start += SUPPORT_TOKENS_PER_LINE) {
-		g_autoptr(IrcMessage) message = create_irc_message("005", downstream->nick, NULL);
-		message->source = g_strdup(BOUNCER_NAME);
+		g_autoptr(IrcMessage) message = create_irc_message("005", nick, NULL);
 		for (guint index = start; index < tokens->len && index < start + SUPPORT_TOKENS_PER_LINE; index++)
 			add_irc_parameter(message, g_ptr_array_index(tokens, index));
 		add_irc_parameter(message, "are supported by this server");
-		send_to_downstream(downstream, message);
+		message->source = g_strdup(BOUNCER_NAME);
+		send_to_downstream(downstream, upstream, message);
 	}
 }
 
 
 static void send_welcome(Downstream *downstream) {
 	g_autofree char *welcome = g_strdup_printf("Welcome to the Crimson Chat bouncer, %s", downstream->nick);
-	send_downstream_numeric(downstream, "001", welcome, NULL);
-	send_downstream_numeric(downstream, "002", "Your host is " BOUNCER_NAME, NULL);
-	send_downstream_numeric(downstream, "003", "This bouncer keeps your networks connected", NULL);
-	send_downstream_numeric(downstream, "004", BOUNCER_NAME, APPLICATION_VERSION, NULL);
-	send_support_tokens(downstream);
-	send_downstream_numeric(downstream, "422", "No message of the day", NULL);
+	send_downstream_numeric(downstream, NULL, "001", welcome, NULL);
+	send_downstream_numeric(downstream, NULL, "004", BOUNCER_NAME, APPLICATION_VERSION, NULL);
+	send_support_tokens(downstream, NULL);
+	send_downstream_numeric(downstream, NULL, "422", "No message of the day", NULL);
 }
 
 
 static void send_network_list(Downstream *downstream) {
 	g_autofree char *reference = create_irc_identifier();
-	gboolean uses_batch = has_downstream_cap(downstream, "batch");
 	g_autofree char *opening = g_strconcat("+", reference, NULL);
 	g_autofree char *closing = g_strconcat("-", reference, NULL);
-	if (uses_batch)
-		send_from_bouncer(downstream, "BATCH", opening, "soju.im/bouncer-networks", NULL);
+	send_from_bouncer(downstream, "BATCH", opening, NETWORK_LISTING_BATCH, NULL);
 	GPtrArray *upstreams = downstream->user->upstreams;
 	for (guint index = 0; index < upstreams->len; index++) {
 		Upstream *upstream = g_ptr_array_index(upstreams, index);
 		g_autoptr(GHashTable) attributes = describe_upstream(upstream);
 		g_autofree char *text = format_irc_attributes(attributes);
 		g_autofree char *network_id = g_strdup_printf("%" G_GINT64_FORMAT, upstream->record.id);
-		g_autoptr(IrcMessage) message = create_irc_message("BOUNCER", "NETWORK", network_id, text, NULL);
+		g_autoptr(IrcMessage) message = create_irc_message("CRIMSON", "NETWORK", network_id, text, NULL);
 		message->source = g_strdup(BOUNCER_NAME);
-		if (uses_batch)
-			set_irc_tag(message, "batch", reference);
-		send_to_downstream(downstream, message);
+		set_irc_tag(message, "batch", reference);
+		send_to_downstream(downstream, NULL, message);
 	}
-	if (uses_batch)
-		send_from_bouncer(downstream, "BATCH", closing, NULL);
+	send_from_bouncer(downstream, "BATCH", closing, NULL);
 }
 
 
-/* A client bound to a network loses the capabilities that network lacks, so it never sends their commands */
-void drop_missing_caps(Downstream *downstream, gpointer data) {
-	if (!downstream->upstream || !has_downstream_cap(downstream, "cap-notify"))
-		return;
-	IrcClient *client = downstream->upstream->client;
-	if (get_irc_client_status(client) != IRC_CLIENT_REGISTERED)
-		return;
-	IrcState *state = get_irc_client_state(client);
-	g_autoptr(GString) missing = g_string_new(NULL);
-	for (int index = 0; NETWORK_CAPS[index]; index++) {
-		if (has_irc_cap(state, NETWORK_CAPS[index]))
+/* CRIMSON CAPS lists which of the capabilities that depend on the network it has, with their values, so the app
+ * knows what the network itself supports, such as how it registers accounts */
+void send_network_caps(Downstream *downstream, gpointer data) {
+	Upstream *upstream = data;
+	IrcState *state = get_irc_client_state(upstream->client);
+	g_autoptr(GString) list = g_string_new(NULL);
+	for (int index = 0; state->is_registered && NETWORK_CAPS[index]; index++) {
+		if (!has_irc_cap(state, NETWORK_CAPS[index]))
 			continue;
-		g_string_append_printf(missing, "%s%s", missing->len ? " " : "", NETWORK_CAPS[index]);
-		g_hash_table_remove(downstream->caps, NETWORK_CAPS[index]);
+		const char *value = g_hash_table_lookup(state->available_caps, NETWORK_CAPS[index]);
+		g_string_append_printf(list, "%s%s%s%s", list->len ? " " : "", NETWORK_CAPS[index], value && *value ? "="
+			: "", value ? value : "");
 	}
-	if (missing->len)
-		send_from_bouncer(downstream, "CAP", downstream->nick, "DEL", missing->str, NULL);
+	g_autoptr(IrcMessage) message = create_irc_message("CRIMSON", "CAPS", list->str, NULL);
+	message->source = g_strdup(BOUNCER_NAME);
+	send_to_downstream(downstream, upstream, message);
+}
+
+
+void welcome_network(Downstream *downstream, gpointer data) {
+	Upstream *upstream = data;
+	send_downstream_numeric(downstream, upstream, "001", "Welcome", NULL);
+	send_support_tokens(downstream, upstream);
+	send_network_caps(downstream, upstream);
+	replay_upstream(downstream, upstream);
 }
 
 
 static void finish_registration(Downstream *downstream) {
-	if (downstream->bound_network) {
-		downstream->upstream = find_upstream(downstream->user, downstream->bound_network);
-		if (!downstream->upstream) {
-			send_from_bouncer(downstream, "FAIL", "BOUNCER", "INVALID_NETID", "BIND", downstream->bound_network,
-				"Network not found", NULL);
-			refuse_downstream(downstream, "Network not found");
-			return;
-		}
-		g_free(downstream->nick);
-		downstream->nick = get_upstream_nick(downstream->upstream);
-	}
 	downstream->is_registered = TRUE;
 	g_clear_handle_id(&downstream->registration_source, g_source_remove);
-	g_message("%s logged in from %s%s%s", downstream->user->name, downstream->address,
-		downstream->upstream ? " to " : "", downstream->upstream ? downstream->upstream->record.host : "");
-	drop_missing_caps(downstream, NULL);
+	g_message("%s logged in from %s", downstream->user->name, downstream->address);
 	send_welcome(downstream);
 	/* An admin's app offers invites and the website's admin page, so it learns the website's port */
-	if (!downstream->upstream && downstream->user->is_admin && has_downstream_cap(downstream, "crimson-chat/invites"))
+	if (downstream->user->is_admin)
 		send_from_bouncer(downstream, "CRIMSON", "ADMIN", downstream->bouncer->web_port, NULL);
-	if (downstream->upstream)
-		replay_upstream(downstream);
-	/* A client joining while the network is down learns why, and whether the bouncer is trying again */
-	if (downstream->upstream && get_irc_client_status(downstream->upstream->client) != IRC_CLIENT_REGISTERED) {
-		g_autofree char *progress = describe_upstream_progress(downstream->upstream);
-		send_from_bouncer(downstream, "NOTICE", downstream->nick, progress, NULL);
-	}
-	else if (has_downstream_cap(downstream, "soju.im/bouncer-networks-notify"))
-		send_network_list(downstream);
+	send_network_list(downstream);
+	GPtrArray *upstreams = downstream->user->upstreams;
+	for (guint index = 0; index < upstreams->len; index++)
+		welcome_network(downstream, g_ptr_array_index(upstreams, index));
+	follow_user_presence(downstream->user);
 }
 
 
@@ -351,7 +336,7 @@ static void try_registering(Downstream *downstream) {
 	if (downstream->is_registered || downstream->is_negotiating || !downstream->nick || !downstream->username)
 		return;
 	if (!downstream->user && !log_in_with_pass(downstream)) {
-		send_downstream_numeric(downstream, "464", "Password incorrect", NULL);
+		send_downstream_numeric(downstream, NULL, "464", "Password incorrect", NULL);
 		refuse_downstream(downstream, "Login failed");
 		return;
 	}
@@ -452,7 +437,7 @@ static void check_login(Downstream *downstream) {
 	if (plain)
 		memset(plain, 0, length);
 	if (!user) {
-		send_downstream_numeric(downstream, "904", "SASL authentication failed", NULL);
+		send_downstream_numeric(downstream, NULL, "904", "SASL authentication failed", NULL);
 		if (++downstream->failed_logins >= LOGIN_ATTEMPTS)
 			refuse_downstream(downstream, "Too many failed logins");
 		return;
@@ -461,22 +446,22 @@ static void check_login(Downstream *downstream) {
 	g_autofree char *mask = g_strdup_printf("%s!%s@%s", downstream->nick ? downstream->nick : "*", user->name,
 		BOUNCER_NAME);
 	g_autofree char *greeting = g_strdup_printf("You are now logged in as %s", user->name);
-	send_downstream_numeric(downstream, "900", mask, user->name, greeting, NULL);
-	send_downstream_numeric(downstream, "903", "SASL authentication successful", NULL);
+	send_downstream_numeric(downstream, NULL, "900", mask, user->name, greeting, NULL);
+	send_downstream_numeric(downstream, NULL, "903", "SASL authentication successful", NULL);
 }
 
 
 static void handle_authenticate(Downstream *downstream, const IrcMessage *message) {
 	const char *data = get_irc_parameter(message, 0);
 	if (downstream->user) {
-		send_downstream_numeric(downstream, "907", "You have already authenticated", NULL);
+		send_downstream_numeric(downstream, NULL, "907", "You have already authenticated", NULL);
 		return;
 	}
 	if (!data)
 		return;
 	if (g_str_equal(data, "*")) {
 		g_string_truncate(downstream->login, 0);
-		send_downstream_numeric(downstream, "906", "SASL authentication aborted", NULL);
+		send_downstream_numeric(downstream, NULL, "906", "SASL authentication aborted", NULL);
 	} else if (g_ascii_strcasecmp(data, "PLAIN") == 0) {
 		send_from_bouncer(downstream, "AUTHENTICATE", "+", NULL);
 	} else if (!g_str_equal(data, "+") && downstream->login->len + strlen(data) > LONGEST_LOGIN_BYTES) {
@@ -515,7 +500,7 @@ static gboolean check_attributes(Downstream *downstream, const char *subcommand,
 		else if (g_str_equal(name, "host") && !*(const char *)value)
 			problem = "INVALID_ATTRIBUTE";
 		if (problem) {
-			send_from_bouncer(downstream, "FAIL", "BOUNCER", problem, subcommand, network_id, name,
+			send_from_bouncer(downstream, "FAIL", "CRIMSON", problem, subcommand, network_id, name,
 				"Cannot use this attribute", NULL);
 			return FALSE;
 		}
@@ -556,7 +541,7 @@ static void add_network_for(Downstream *downstream, const char *text) {
 	if (!check_attributes(downstream, "ADDNETWORK", "*", attributes))
 		return;
 	if (!g_hash_table_lookup(attributes, "host")) {
-		send_from_bouncer(downstream, "FAIL", "BOUNCER", "NEED_ATTRIBUTE", "ADDNETWORK", "host",
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "NEED_ATTRIBUTE", "ADDNETWORK", "host",
 			"Missing required attribute", NULL);
 		return;
 	}
@@ -566,8 +551,6 @@ static void add_network_for(Downstream *downstream, const char *text) {
 		record.port = record.uses_tls ? DEFAULT_TLS_PORT : DEFAULT_PLAIN_PORT;
 	record.id = add_network(downstream->bouncer->database, &record);
 	add_upstream(downstream->user, &record);
-	g_autofree char *network_id = g_strdup_printf("%" G_GINT64_FORMAT, record.id);
-	send_from_bouncer(downstream, "BOUNCER", "ADDNETWORK", network_id, NULL);
 	clear_network_record(&record);
 }
 
@@ -575,7 +558,7 @@ static void add_network_for(Downstream *downstream, const char *text) {
 static void change_network_for(Downstream *downstream, const char *network_id, const char *text) {
 	Upstream *upstream = find_upstream(downstream->user, network_id);
 	if (!upstream) {
-		send_from_bouncer(downstream, "FAIL", "BOUNCER", "INVALID_NETID", "CHANGENETWORK", network_id ? network_id
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "INVALID_NETID", "CHANGENETWORK", network_id ? network_id
 			: "*", "Network not found", NULL);
 		return;
 	}
@@ -604,7 +587,6 @@ static void change_network_for(Downstream *downstream, const char *network_id, c
 	announce_network(upstream, g_hash_table_ref(attributes));
 	if (needs_restart)
 		restart_upstream(upstream);
-	send_from_bouncer(downstream, "BOUNCER", "CHANGENETWORK", network_id, NULL);
 }
 
 
@@ -612,7 +594,7 @@ static void change_network_for(Downstream *downstream, const char *network_id, c
 static void reconnect_network_for(Downstream *downstream, const char *network_id) {
 	Upstream *upstream = find_upstream(downstream->user, network_id);
 	if (!upstream) {
-		send_from_bouncer(downstream, "FAIL", "BOUNCER", "INVALID_NETID", "RECONNECTNETWORK", network_id ? network_id
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "INVALID_NETID", "RECONNECT", network_id ? network_id
 			: "*", "Network not found", NULL);
 		return;
 	}
@@ -623,46 +605,11 @@ static void reconnect_network_for(Downstream *downstream, const char *network_id
 static void delete_network_for(Downstream *downstream, const char *network_id) {
 	Upstream *upstream = find_upstream(downstream->user, network_id);
 	if (!upstream) {
-		send_from_bouncer(downstream, "FAIL", "BOUNCER", "INVALID_NETID", "DELNETWORK", network_id ? network_id
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "INVALID_NETID", "DELNETWORK", network_id ? network_id
 			: "*", "Network not found", NULL);
 		return;
 	}
-	g_autofree char *kept_id = g_strdup(network_id);
 	remove_upstream(upstream);
-	send_from_bouncer(downstream, "BOUNCER", "DELNETWORK", kept_id, NULL);
-}
-
-
-static void handle_bouncer(Downstream *downstream, const IrcMessage *message) {
-	const char *subcommand = get_irc_parameter(message, 0);
-	if (!subcommand)
-		return;
-	if (g_ascii_strcasecmp(subcommand, "BIND") == 0) {
-		if (downstream->is_registered)
-			send_from_bouncer(downstream, "FAIL", "BOUNCER", "REGISTRATION_IS_COMPLETED", "BIND",
-				"Cannot bind to a network after registration", NULL);
-		else if (!downstream->user)
-			send_from_bouncer(downstream, "FAIL", "BOUNCER", "ACCOUNT_REQUIRED", "BIND", "Authentication required",
-				NULL);
-		else {
-			g_free(downstream->bound_network);
-			downstream->bound_network = g_strdup(get_irc_parameter(message, 1));
-		}
-	} else if (!downstream->is_registered) {
-		send_downstream_numeric(downstream, "451", "You have not registered", NULL);
-	} else if (g_ascii_strcasecmp(subcommand, "LISTNETWORKS") == 0) {
-		send_network_list(downstream);
-	} else if (g_ascii_strcasecmp(subcommand, "ADDNETWORK") == 0) {
-		add_network_for(downstream, get_irc_parameter(message, 1));
-	} else if (g_ascii_strcasecmp(subcommand, "CHANGENETWORK") == 0) {
-		change_network_for(downstream, get_irc_parameter(message, 1), get_irc_parameter(message, 2));
-	} else if (g_ascii_strcasecmp(subcommand, "DELNETWORK") == 0) {
-		delete_network_for(downstream, get_irc_parameter(message, 1));
-	} else if (g_ascii_strcasecmp(subcommand, "RECONNECTNETWORK") == 0) {
-		reconnect_network_for(downstream, get_irc_parameter(message, 1));
-	} else {
-		send_from_bouncer(downstream, "FAIL", "BOUNCER", "UNKNOWN_COMMAND", subcommand, "Unknown subcommand", NULL);
-	}
 }
 
 
@@ -683,19 +630,16 @@ static void handle_registering(Downstream *downstream, const IrcMessage *message
 		set_text(&downstream->username, get_irc_parameter(message, 0));
 		try_registering(downstream);
 	} else if (!g_str_equal(command, "PONG")) {
-		send_downstream_numeric(downstream, "451", "You have not registered", NULL);
+		send_downstream_numeric(downstream, NULL, "451", "You have not registered", NULL);
 	}
 }
 
 
 /* CRIMSON INVITE CREATE with a use count, or * for unlimited, lets an admin make invite links from a client,
  * and the answer names the website's port the link points to */
-static void handle_invite_command(Downstream *downstream, const IrcMessage *message) {
-	const char *subcommand = get_irc_parameter(message, 0);
-	const char *action = get_irc_parameter(message, 1);
-	if (g_strcmp0(subcommand, "INVITE") != 0 || g_strcmp0(action, "CREATE") != 0) {
-		send_from_bouncer(downstream, "FAIL", "CRIMSON", "UNKNOWN_COMMAND", subcommand ? subcommand : "*",
-			"Unknown subcommand", NULL);
+static void create_invite_for(Downstream *downstream, const IrcMessage *message) {
+	if (g_strcmp0(get_irc_parameter(message, 1), "CREATE") != 0) {
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "UNKNOWN_COMMAND", "INVITE", "Unknown subcommand", NULL);
 		return;
 	}
 	if (!downstream->user->is_admin) {
@@ -707,6 +651,27 @@ static void handle_invite_command(Downstream *downstream, const IrcMessage *mess
 	g_autofree char *token = create_invite(downstream->bouncer, downstream->user, uses);
 	g_autofree char *uses_text = uses < 0 ? g_strdup("*") : g_strdup_printf("%d", uses);
 	send_from_bouncer(downstream, "CRIMSON", "INVITE", token, uses_text, downstream->bouncer->web_port, NULL);
+}
+
+
+/* The bouncer's own commands, which manage the user's networks and invites */
+static void handle_crimson(Downstream *downstream, const IrcMessage *message) {
+	const char *subcommand = get_irc_parameter(message, 0);
+	const char *network_id = get_irc_parameter(message, 1);
+	if (!subcommand)
+		return;
+	if (g_ascii_strcasecmp(subcommand, "ADDNETWORK") == 0)
+		add_network_for(downstream, network_id);
+	else if (g_ascii_strcasecmp(subcommand, "CHANGENETWORK") == 0)
+		change_network_for(downstream, network_id, get_irc_parameter(message, 2));
+	else if (g_ascii_strcasecmp(subcommand, "DELNETWORK") == 0)
+		delete_network_for(downstream, network_id);
+	else if (g_ascii_strcasecmp(subcommand, "RECONNECT") == 0)
+		reconnect_network_for(downstream, network_id);
+	else if (g_ascii_strcasecmp(subcommand, "INVITE") == 0)
+		create_invite_for(downstream, message);
+	else
+		send_from_bouncer(downstream, "FAIL", "CRIMSON", "UNKNOWN_COMMAND", subcommand, "Unknown subcommand", NULL);
 }
 
 
@@ -722,60 +687,80 @@ static const struct {
 
 /* A client can send such a command before it learns the network lacks it, as while the bouncer reconnects, so the
  * bouncer answers for the network instead of passing on a command it would only call unknown */
-static void forward_supported(Downstream *downstream, const IrcMessage *message) {
-	IrcClient *client = downstream->upstream->client;
+static void forward_supported(Downstream *downstream, Upstream *upstream, const IrcMessage *message) {
+	IrcClient *client = upstream->client;
 	gboolean is_registered = get_irc_client_status(client) == IRC_CLIENT_REGISTERED;
 	for (guint index = 0; index < G_N_ELEMENTS(NETWORK_COMMANDS); index++) {
 		if (!g_str_equal(message->command, NETWORK_COMMANDS[index].command))
 			continue;
 		if (is_registered && has_irc_cap(get_irc_client_state(client), NETWORK_COMMANDS[index].cap))
 			break;
-		send_from_bouncer(downstream, "FAIL", message->command, "UNSUPPORTED",
+		g_autoptr(IrcMessage) failure = create_irc_message("FAIL", message->command, "UNSUPPORTED",
 			"The network does not support this", NULL);
+		failure->source = g_strdup(BOUNCER_NAME);
+		send_to_downstream(downstream, upstream, failure);
 		return;
 	}
-	forward_to_upstream(downstream->upstream, downstream, message);
+	forward_to_upstream(upstream, downstream, message);
 }
 
 
 /* A PING the network answers comes back after the network's replies to what the client sent before it, which
  * tells the client where those replies end */
-static void handle_ping(Downstream *downstream, const IrcMessage *message) {
-	Upstream *upstream = downstream->upstream;
-	if (downstream->is_registered && upstream && get_irc_client_status(upstream->client) == IRC_CLIENT_REGISTERED)
+static void handle_ping(Downstream *downstream, Upstream *upstream, const IrcMessage *message) {
+	if (upstream && get_irc_client_status(upstream->client) == IRC_CLIENT_REGISTERED) {
 		forward_to_upstream(upstream, downstream, message);
+		return;
+	}
+	g_autoptr(IrcMessage) pong = create_irc_message("PONG", BOUNCER_NAME, get_last_irc_parameter(message), NULL);
+	pong->source = g_strdup(BOUNCER_NAME);
+	send_to_downstream(downstream, upstream, pong);
+}
+
+
+/* A line tagged with a network is for that network, and one naming a network the user no longer has tells the app
+ * it is gone */
+static void handle_network_line(Downstream *downstream, const char *network_id, const IrcMessage *message) {
+	Upstream *upstream = find_upstream(downstream->user, network_id);
+	if (!upstream) {
+		send_from_bouncer(downstream, "CRIMSON", "NETWORK", network_id, "*", NULL);
+		return;
+	}
+	if (g_str_equal(message->command, "PING"))
+		handle_ping(downstream, upstream, message);
+	else if (g_str_equal(message->command, "CHATHISTORY"))
+		answer_history_request(downstream, upstream, message);
+	else if (g_str_equal(message->command, "MARKREAD"))
+		answer_read_marker(downstream, upstream, message);
+	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(get_irc_parameter(message, 0), "SEARCH") == 0)
+		answer_search(downstream, upstream, message);
 	else
-		send_from_bouncer(downstream, "PONG", BOUNCER_NAME, get_last_irc_parameter(message), NULL);
+		forward_supported(downstream, upstream, message);
 }
 
 
 static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
 	Downstream *downstream = data;
 	const char *command = message->command;
-	if (g_str_equal(command, "PING"))
-		handle_ping(downstream, message);
+	const char *network_id = get_irc_tag(message, IRC_NETWORK_TAG);
+	if (g_str_equal(command, "PING") && !network_id)
+		handle_ping(downstream, NULL, message);
 	else if (g_str_equal(command, "QUIT"))
 		close_downstream(downstream);
 	else if (g_str_equal(command, "CAP"))
 		handle_cap(downstream, message);
 	else if (g_str_equal(command, "AUTHENTICATE"))
 		handle_authenticate(downstream, message);
-	else if (g_str_equal(command, "BOUNCER"))
-		handle_bouncer(downstream, message);
 	else if (!downstream->is_registered)
 		handle_registering(downstream, message);
 	else if (g_str_equal(command, "PASS") || g_str_equal(command, "USER"))
-		send_downstream_numeric(downstream, "462", "You may not reregister", NULL);
+		send_downstream_numeric(downstream, NULL, "462", "You may not reregister", NULL);
+	else if (network_id)
+		handle_network_line(downstream, network_id, message);
 	else if (g_str_equal(command, "CRIMSON"))
-		handle_invite_command(downstream, message);
-	else if (!downstream->upstream)
-		send_downstream_numeric(downstream, "421", command, "Bind to a network to use this command", NULL);
-	else if (g_str_equal(command, "CHATHISTORY"))
-		answer_history_request(downstream, message);
-	else if (g_str_equal(command, "MARKREAD"))
-		answer_read_marker(downstream, message);
+		handle_crimson(downstream, message);
 	else
-		forward_supported(downstream, message);
+		send_downstream_numeric(downstream, NULL, "421", command, "Name a network to use this command", NULL);
 }
 
 
@@ -798,7 +783,9 @@ static gboolean drop_unregistered(gpointer data) {
 
 void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, const char *local_host) {
 	Downstream *downstream = g_new0(Downstream, 1);
+	static guint next_id = 1;
 	downstream->bouncer = bouncer;
+	downstream->id = next_id++;
 	downstream->address = g_strdup(address);
 	downstream->local_host = g_strdup(local_host);
 	downstream->caps = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);

@@ -10,6 +10,8 @@
 #define CTCP_MARK "\001"
 /* How much of a message a reply quotes where the server strips reply tags */
 #define REPLY_EXCERPT_CHARS 30
+/* A message the server has not echoed by then counts as not sent */
+#define ECHO_WAIT_SECONDS 30
 
 
 static char *get_own_nick(CrimsonNetwork *network) {
@@ -51,6 +53,13 @@ static void track_pending(CrimsonRoom *room, CrimsonMessage *line) {
 }
 
 
+static gboolean give_up_waiting(gpointer data) {
+	g_autoptr(CrimsonMessage) line = data;
+	fail_pending_message(line, TEXT_NOT_SENT_UNANSWERED);
+	return G_SOURCE_REMOVE;
+}
+
+
 /* Shows a sent message at once, waiting for the server's echo to confirm it where the server echoes */
 static CrimsonMessage *add_own_message(CrimsonRoom *room, MessageKind kind, const char *text,
 	CrimsonMessage *reply_to) {
@@ -63,6 +72,8 @@ static CrimsonMessage *add_own_message(CrimsonRoom *room, MessageKind kind, cons
 	line->reply_to = reply_to && reply_to->id ? g_strdup(reply_to->id) : NULL;
 	if (line->is_pending && can_network(network, "labeled-response"))
 		line->label = create_irc_identifier();
+	if (line->is_pending)
+		g_timeout_add_seconds(ECHO_WAIT_SECONDS, give_up_waiting, g_object_ref(line));
 	return line;
 }
 
@@ -203,9 +214,8 @@ static gboolean run_room_command(CrimsonRoom *room, const char *name, const char
 	} else if (g_str_equal(name, "invite") && is_channel && !strchr(rest, ' ')) {
 		note_user_target(network, rest);
 		send_irc_client_command(network->client, "INVITE", rest, room->name, NULL);
-	} else if (g_str_equal(name, "whois")) {
-		note_user_target(network, rest);
-		send_irc_client_command(network->client, "WHOIS", rest, NULL);
+	} else if (g_str_equal(name, "whois") && *rest && !strchr(rest, ' ')) {
+		network->session->chat->events.profile_requested(room, rest, network->session->chat->data);
 	} else {
 		return FALSE;
 	}

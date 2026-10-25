@@ -11,6 +11,8 @@ struct Database {
 
 static const char SCHEMA[] =
 	"PRAGMA journal_mode = WAL;"
+	/* With the write-ahead log a crash loses at most the last moments of history, never the file itself */
+	"PRAGMA synchronous = NORMAL;"
 	"PRAGMA foreign_keys = ON;"
 	"CREATE TABLE IF NOT EXISTS users ("
 	" id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, password TEXT NOT NULL, is_admin INTEGER NOT NULL);"
@@ -30,6 +32,9 @@ static const char SCHEMA[] =
 	" kind INTEGER NOT NULL, line TEXT NOT NULL);"
 	"CREATE INDEX IF NOT EXISTS history_by_target ON history (network_id, folded, time, id);"
 	"CREATE INDEX IF NOT EXISTS history_by_message ON history (network_id, message_id);"
+	"CREATE TABLE IF NOT EXISTS own_profiles ("
+	" network_id INTEGER NOT NULL REFERENCES networks(id) ON DELETE CASCADE,"
+	" key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (network_id, key));"
 	"CREATE TABLE IF NOT EXISTS read_markers ("
 	" network_id INTEGER NOT NULL REFERENCES networks(id) ON DELETE CASCADE,"
 	" folded TEXT NOT NULL, time TEXT NOT NULL, PRIMARY KEY (network_id, folded));";
@@ -482,6 +487,23 @@ GPtrArray *query_history_targets(Database *database, gint64 network_id, const ch
 }
 
 
+GPtrArray *search_history(Database *database, gint64 network_id, const char *folded, const char *words, int scanned) {
+	sqlite3_stmt *statement = prepare(database,
+		"SELECT line FROM history WHERE network_id = ?1 AND kind = ?2 AND (?3 IS NULL OR folded = ?3)"
+		" AND instr(lower(line), lower(?4)) > 0 ORDER BY time DESC, id DESC LIMIT ?5");
+	sqlite3_bind_int64(statement, 1, network_id);
+	sqlite3_bind_int(statement, 2, HISTORY_MESSAGE);
+	bind_text(statement, 3, folded);
+	bind_text(statement, 4, words);
+	sqlite3_bind_int(statement, 5, scanned);
+	GPtrArray *lines = g_ptr_array_new_with_free_func(g_free);
+	while (statement && sqlite3_step(statement) == SQLITE_ROW)
+		g_ptr_array_add(lines, read_text(statement, 0));
+	sqlite3_finalize(statement);
+	return lines;
+}
+
+
 char *load_read_marker(Database *database, gint64 network_id, const char *folded) {
 	sqlite3_stmt *statement = prepare(database, "SELECT time FROM read_markers WHERE network_id = ? AND folded = ?");
 	sqlite3_bind_int64(statement, 1, network_id);
@@ -489,6 +511,41 @@ char *load_read_marker(Database *database, gint64 network_id, const char *folded
 	char *time = statement && sqlite3_step(statement) == SQLITE_ROW ? read_text(statement, 0) : NULL;
 	sqlite3_finalize(statement);
 	return time;
+}
+
+
+void save_own_profile_value(Database *database, gint64 network_id, const char *key, const char *value) {
+	sqlite3_stmt *statement = prepare(database, value
+		? "INSERT INTO own_profiles (network_id, key, value) VALUES (?, ?, ?)"
+		" ON CONFLICT (network_id, key) DO UPDATE SET value = excluded.value"
+		: "DELETE FROM own_profiles WHERE network_id = ? AND key = ?");
+	sqlite3_bind_int64(statement, 1, network_id);
+	bind_text(statement, 2, key);
+	if (value)
+		bind_text(statement, 3, value);
+	finish_change(database, statement);
+}
+
+
+GHashTable *load_own_profile(Database *database, gint64 network_id) {
+	sqlite3_stmt *statement = prepare(database, "SELECT key, value FROM own_profiles WHERE network_id = ?");
+	sqlite3_bind_int64(statement, 1, network_id);
+	GHashTable *values = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	while (statement && sqlite3_step(statement) == SQLITE_ROW)
+		g_hash_table_insert(values, read_text(statement, 0), read_text(statement, 1));
+	sqlite3_finalize(statement);
+	return values;
+}
+
+
+GHashTable *load_read_markers(Database *database, gint64 network_id) {
+	sqlite3_stmt *statement = prepare(database, "SELECT folded, time FROM read_markers WHERE network_id = ?");
+	sqlite3_bind_int64(statement, 1, network_id);
+	GHashTable *markers = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	while (statement && sqlite3_step(statement) == SQLITE_ROW)
+		g_hash_table_insert(markers, read_text(statement, 0), read_text(statement, 1));
+	sqlite3_finalize(statement);
+	return markers;
 }
 
 

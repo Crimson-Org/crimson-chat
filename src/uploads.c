@@ -7,8 +7,10 @@
 #include "window.h"
 
 #define UPLOAD_SECONDS 60
+/* Where the bouncer takes pictures and files, as a whole address or its website's port, and the largest file */
 #define AVATARS_TOKEN "crimson-chat/AVATARS"
-#define FILEHOST_TOKEN "soju.im/FILEHOST"
+#define FILES_TOKEN "crimson-chat/FILES"
+#define FILE_LIMIT_TOKEN "crimson-chat/FILE-LIMIT"
 #define FILE_ATTRIBUTES G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE
 /* Long names are cut in the middle in the line sent to the room, so the line keeps its address whole */
 #define SHARED_NAME_CHARS 60
@@ -19,23 +21,34 @@
 static SoupSession *uploads;
 
 
-char *find_avatar_upload_url(CrimsonNetwork *network) {
+/* A bouncer without a public address names its website's port, on the address the app reaches it by, and
+ * uploads only go over an encrypted address, as the connection to the bouncer itself is */
+static char *find_bouncer_url(CrimsonNetwork *network, const char *token, const char *path) {
 	IrcState *state = get_network_state(network);
-	const char *value = state && network->bouncer_id ? get_irc_support(state, AVATARS_TOKEN) : NULL;
+	const char *value = state && network->bouncer_id ? get_irc_support(state, token) : NULL;
 	if (!value || !*value)
 		return NULL;
 	if (g_str_has_prefix(value, "https://"))
 		return g_strdup(value);
-	/* A bouncer without a public address names its website's port, on the address the app reaches it by */
-	return g_strdup_printf("https://%s:%s/avatar", network->session->record->host, value);
+	return g_strdup_printf("https://%s:%s%s", network->session->record->host, value, path);
 }
 
 
-/* Files only go over an encrypted address, as the IRC connection itself is */
+char *find_avatar_upload_url(CrimsonNetwork *network) {
+	return find_bouncer_url(network, AVATARS_TOKEN, "/avatar");
+}
+
+
 char *find_file_upload_url(CrimsonNetwork *network) {
+	return find_bouncer_url(network, FILES_TOKEN, "/upload");
+}
+
+
+/* The largest file the bouncer keeps in bytes, or zero when it names no limit */
+static goffset find_file_limit(CrimsonNetwork *network) {
 	IrcState *state = get_network_state(network);
-	const char *value = state ? get_irc_support(state, FILEHOST_TOKEN) : NULL;
-	return value && g_str_has_prefix(value, "https://") ? g_strdup(value) : NULL;
+	const char *value = state ? get_irc_support(state, FILE_LIMIT_TOKEN) : NULL;
+	return value ? (goffset)g_ascii_strtoll(value, NULL, 10) : 0;
 }
 
 
@@ -49,6 +62,8 @@ typedef struct {
 	char *address, *file_name, *content_type;
 	const char *unreadable, *failed;
 	goffset sent, total;
+	/* The largest file the server takes in bytes, so a larger one is refused before any of it is sent */
+	goffset largest;
 	UploadProgress progress;
 	UploadDone done;
 	gpointer data;
@@ -181,6 +196,12 @@ static void finish_asking(GObject *source, GAsyncResult *result, gpointer data) 
 		return;
 	}
 	upload->total = g_file_info_get_size(info);
+	if (upload->largest && upload->total > upload->largest) {
+		g_autofree char *limit = g_format_size((guint64)upload->largest);
+		g_autofree char *problem = g_strdup_printf(TEXT_FILE_LIMIT, limit);
+		finish_upload(upload, NULL, problem);
+		return;
+	}
 	upload->content_type = g_strdup(g_file_info_get_content_type(info));
 	if (upload->progress)
 		upload->progress(0, upload->total, upload->data);
@@ -283,6 +304,7 @@ void share_file(CrimsonRoom *room, GFile *file) {
 	upload->file_name = g_strdup(name);
 	upload->unreadable = TEXT_FILE_UNREADABLE;
 	upload->failed = TEXT_FILE_UPLOAD_FAILED;
+	upload->largest = find_file_limit(room->network);
 	upload->progress = show_sharing_progress;
 	start_upload(upload);
 }

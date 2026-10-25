@@ -33,10 +33,19 @@ The guide suggests Crimson's own server, chat.skenliv.se, first, followed by wel
 Once a server connects, it lists its rooms busiest first, so you can tick several and join them at once.\
 Each server's rooms and private chats sit in one list, newest first, with rooms as rounded squares and people as circles.\
 A rail of servers appears down the left only when you use more than one.\
-Right-click a room to leave it, or a person to message, mention or look them up, with moderation in rooms you run.\
+Right-click a room to leave it, or a person to message, mention, ignore or look them up.\
 Your account on each server sets your nickname, display name, picture and login, wherever that server supports them.\
 Without an account, a banner offers to register your nickname, with the IRCv3 commands or NickServ, and to log in when the nickname turns out to be registered already.\
 Messages from the same person group into bubbles under one avatar, with your own on the right.
+
+### Rooms in plain words
+
+Changes to a room read as sentences, such as "Alice made Bob a moderator and muted the room".\
+Server replies read the same way, and a message the server refused can be sent again or deleted.\
+A room's page shows its settings, invite only, hidden, muted, members only, locked topic, password and size.\
+Moderators switch them there and keep its ban, exception and invite lists, while everyone else sees them.\
+The room's page also invites people, and an invite to you comes with a Join button.\
+Removing or banning someone asks first and takes an optional reason.
 
 ### Modern IRC
 
@@ -47,7 +56,12 @@ Avatars, display names, pronouns, status lines, homepages and network icons come
 Clicking the picture of a person, room or server lets you choose your own, which stays on this computer.\
 Links to pictures over HTTPS show the picture, and bold, italics, colours and monospace keep their formatting.\
 On servers with a file host, the paperclip shares a file and posts its name, size and link once it has uploaded.\
-Typing **bold** or *italics*, with stars or underscores, sends them formatted.
+Typing **bold**, *italics*, ~~struck~~, `code` or ||spoilers|| sends them formatted.\
+Pasting or dropping a file or a screenshot shares it the same way as the paperclip.\
+Links to web pages show a card with the page's title, description and picture.\
+The search button finds what was said in a room, through the bouncer's full history.\
+Picking a result or a quoted reply scrolls to the message and makes it glow for a moment.\
+Typing @ suggests people in the room, and / suggests commands with what each does.
 
 ### Your own bouncer
 
@@ -57,17 +71,19 @@ Add the bouncer in Crimson Chat with that login, trust the fingerprint once, and
 The bouncer joins your channels, keeps their history in [SQLite](https://sqlite.org) and replays it to each client you connect.\
 Admins invite people with links made in Crimson Chat or on the bouncer's website, where the invited pick their own login.\
 On the website admins also see every account with its servers, make other admins, set passwords, delete accounts and delete uploaded pictures.\
-It speaks the bouncer network extension of [soju](https://soju.im), which other modern IRC clients understand as well.\
-Files shared through it go to its own file host, up to 20 MB each and kept for five weeks.
+Crimson Chat uses one connection to it for all of your networks.\
+Files shared through it go to its own file host, up to 20 MB each and kept for five weeks.\
+While none of your devices is connected it shows you as away, and it answers version requests for you.\
+It keeps your display name and picture for each network and sets them again whenever the network reconnects.
 
 ### Notifications and the tray
 
-Mentions and private messages raise a desktop notification that opens the conversation.\
+Mentions and private messages raise a desktop notification that opens the conversation or marks it read.\
 Closing the window keeps the chats connected in the tray, and Ctrl+Q quits.
 
 ### Keyboard
 
-Ctrl+J joins a room, Ctrl+N messages someone and Ctrl+K searches the chats.\
+Ctrl+J joins a room, Ctrl+N messages someone, Ctrl+K searches the chats and Ctrl+Shift+F the open room.\
 Alt+Up and Alt+Down step through the rooms, Alt+Left or the mouse back button returns to the last chat, and Tab completes nicks in the message field.\
 Commands such as /join, /msg, /me, /topic, /away and /whois work in any room, and other commands go to the server unchanged.
 
@@ -83,5 +99,5 @@ Clone it with `git clone --recurse-submodules` so the shared Crimson Core code c
 `crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.\
 People can upload pictures for themselves and for rooms they run, which the bouncer scales, keeps and sets as their avatar on servers with IRCv3 metadata.\
 The settings file takes `avatars`, `avatar-format`, `avatar-quality`, `avatar-size` and `avatar-largest-mb` for pictures.\
-`files`, `file-largest-mb` and `file-kept-days` set up shared files, served by soju's [file host extension](https://codeberg.org/emersion/soju/src/branch/master/doc/ext/filehost.md).\
+`files`, `file-largest-mb` and `file-kept-days` set up shared files.\
 `public-url` is the address pictures and files are served from, which needs a certificate other people's apps trust.

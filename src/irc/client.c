@@ -12,6 +12,8 @@
 #define AUTHENTICATE_CHUNK 400
 #define TLS_PORT 6697
 
+static const char *const NETWORK_CAPS[] = {BOUNCER_NETWORK_CAPS, NULL};
+
 struct IrcClient {
 	IrcClientSettings settings;
 	GStrv wanted_caps;
@@ -30,6 +32,11 @@ struct IrcClient {
 	GHashTable *batches;
 	/* The label every line sent gets until it is cleared, so the server's replies to them can be told apart */
 	char *label;
+	/* For a bouncer's network, the connection to the bouncer and the network's id there */
+	IrcClient *carrier;
+	char *network_id;
+	/* For a connection to a bouncer, its networks by id */
+	GHashTable *networks;
 };
 
 static void start_connecting(IrcClient *client);
@@ -46,7 +53,6 @@ void copy_irc_client_settings(IrcClientSettings *target, const IrcClientSettings
 		.password = g_strdup(source->password),
 		.sasl_username = g_strdup(source->sasl_username),
 		.sasl_password = g_strdup(source->sasl_password),
-		.bound_network = g_strdup(source->bound_network),
 		.trusted_certificate = g_strdup(source->trusted_certificate),
 		.is_bouncer = source->is_bouncer,
 	};
@@ -61,7 +67,6 @@ void clear_irc_client_settings(IrcClientSettings *settings) {
 	g_free(settings->password);
 	g_free(settings->sasl_username);
 	g_free(settings->sasl_password);
-	g_free(settings->bound_network);
 	g_free(settings->trusted_certificate);
 	*settings = (IrcClientSettings){0};
 }
@@ -104,13 +109,44 @@ IrcClient *create_irc_client(const IrcClientSettings *settings, const char *cons
 	client->state = create_irc_state();
 	client->retry_seconds = FIRST_RETRY_SECONDS;
 	client->batches = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, (GDestroyNotify)free_batch);
+	client->networks = g_hash_table_new(g_str_hash, g_str_equal);
 	return client;
+}
+
+
+IrcClient *create_irc_network_client(IrcClient *carrier, const char *network_id, const IrcClientEvents *events,
+	gpointer data) {
+	IrcClient *client = create_irc_client(&carrier->settings, (const char *const *)carrier->wanted_caps, events,
+		data);
+	client->carrier = carrier;
+	client->network_id = g_strdup(network_id);
+	g_hash_table_insert(carrier->networks, client->network_id, client);
+	return client;
+}
+
+
+static void set_status(IrcClient *client, IrcClientStatus status, const char *reason);
+
+
+/* A bouncer's networks wait for their welcome while the connection to it comes up, and go down with it */
+static void pass_status_to_networks(IrcClient *carrier, IrcClientStatus status, const char *reason) {
+	if (status == IRC_CLIENT_REGISTERED)
+		return;
+	g_autoptr(GPtrArray) networks = g_hash_table_get_values_as_ptr_array(carrier->networks);
+	for (guint index = 0; index < networks->len; index++) {
+		IrcClient *network = g_ptr_array_index(networks, index);
+		if (network->wants_connection && network->status != status) {
+			g_hash_table_remove_all(network->batches);
+			set_status(network, status, reason);
+		}
+	}
 }
 
 
 static void set_status(IrcClient *client, IrcClientStatus status, const char *reason) {
 	client->status = status;
 	client->events.status_changed(client, status, reason, client->data);
+	pass_status_to_networks(client, status, reason);
 }
 
 
@@ -128,6 +164,15 @@ static void drop_connection(IrcClient *client) {
 void free_irc_client(IrcClient *client) {
 	if (!client)
 		return;
+	if (client->carrier)
+		g_hash_table_remove(client->carrier->networks, client->network_id);
+	GHashTableIter iterator;
+	gpointer network;
+	g_hash_table_iter_init(&iterator, client->networks);
+	while (g_hash_table_iter_next(&iterator, NULL, &network))
+		((IrcClient *)network)->carrier = NULL;
+	g_hash_table_unref(client->networks);
+	g_free(client->network_id);
 	drop_connection(client);
 	g_clear_object(&client->connector);
 	clear_irc_client_settings(&client->settings);
@@ -188,8 +233,6 @@ static void end_caps(IrcClient *client) {
 	if (client->has_ended_caps)
 		return;
 	client->has_ended_caps = TRUE;
-	if (client->settings.bound_network)
-		send_irc_command(client->stream, "BOUNCER", "BIND", client->settings.bound_network, NULL);
 	send_irc_command(client->stream, "CAP", "END", NULL);
 }
 
@@ -438,14 +481,8 @@ static void track_batch(IrcClient *client, const IrcMessage *message) {
 }
 
 
-static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
-	IrcClient *client = data;
-	if (handle_registration(client, message) || client->status == IRC_CLIENT_DISCONNECTED)
-		return;
-	if (g_str_equal(message->command, "ERROR")) {
-		end_connection(client, get_irc_parameter(message, 0));
-		return;
-	}
+/* Hands a registered connection's message on after the state took it in */
+static void take_message(IrcClient *client, const IrcMessage *message) {
 	if (g_str_equal(message->command, "BATCH"))
 		track_batch(client, message);
 	g_autoptr(GPtrArray) affected = g_ptr_array_new_with_free_func(g_free);
@@ -457,8 +494,75 @@ static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data
 	}
 	client->events.received(client, message, affected, client->data);
 	const char *reference = get_irc_parameter(message, 0);
-	if (g_str_equal(message->command, "BATCH") && reference && *reference == '-' && client->stream)
+	if (g_str_equal(message->command, "BATCH") && reference && *reference == '-'
+		&& client->status != IRC_CLIENT_DISCONNECTED)
 		g_hash_table_remove(client->batches, reference + 1);
+}
+
+
+/* CRIMSON CAPS names which of the capabilities that depend on the network it has, with their values, replacing
+ * the connection's own ones that the bouncer passes on for every network */
+static void take_network_caps(IrcClient *network, const IrcMessage *message) {
+	g_auto(GStrv) items = g_strsplit(get_irc_parameter(message, 1) ? get_irc_parameter(message, 1) : "", " ", -1);
+	GHashTable *available = network->state->available_caps, *enabled = network->state->enabled_caps;
+	for (int index = 0; NETWORK_CAPS[index]; index++) {
+		g_hash_table_remove(available, NETWORK_CAPS[index]);
+		g_hash_table_remove(enabled, NETWORK_CAPS[index]);
+	}
+	for (int index = 0; items[index]; index++) {
+		if (!*items[index])
+			continue;
+		char *equals = strchr(items[index], '=');
+		if (equals)
+			*equals = '\0';
+		g_hash_table_insert(available, g_strdup(items[index]), g_strdup(equals ? equals + 1 : ""));
+		g_hash_table_add(enabled, g_strdup(items[index]));
+	}
+}
+
+
+/* The bouncer's welcome starts a network afresh with the capabilities of the connection, after which the bouncer
+ * says which of the network's own ones it has */
+static void take_network_message(IrcClient *network, const IrcMessage *message) {
+	IrcState *carried = network->carrier->state;
+	if (g_str_equal(message->command, "001")) {
+		reset_irc_state(network->state);
+		g_hash_table_remove_all(network->batches);
+		GHashTableIter iterator;
+		gpointer name, value;
+		g_hash_table_iter_init(&iterator, carried->available_caps);
+		while (g_hash_table_iter_next(&iterator, &name, &value))
+			g_hash_table_insert(network->state->available_caps, g_strdup(name), g_strdup(value));
+		g_hash_table_iter_init(&iterator, carried->enabled_caps);
+		while (g_hash_table_iter_next(&iterator, &name, NULL))
+			g_hash_table_add(network->state->enabled_caps, g_strdup(name));
+	}
+	if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(get_irc_parameter(message, 0), "CAPS") == 0) {
+		take_network_caps(network, message);
+		return;
+	}
+	if (network->status == IRC_CLIENT_DISCONNECTED)
+		return;
+	take_message(network, message);
+}
+
+
+static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
+	IrcClient *client = data;
+	const char *network_id = get_irc_tag(message, IRC_NETWORK_TAG);
+	if (network_id) {
+		IrcClient *network = g_hash_table_lookup(client->networks, network_id);
+		if (network && network->wants_connection)
+			take_network_message(network, message);
+		return;
+	}
+	if (handle_registration(client, message) || client->status == IRC_CLIENT_DISCONNECTED)
+		return;
+	if (g_str_equal(message->command, "ERROR")) {
+		end_connection(client, get_irc_parameter(message, 0));
+		return;
+	}
+	take_message(client, message);
 }
 
 
@@ -532,6 +636,12 @@ static void start_connecting(IrcClient *client) {
 
 
 void connect_irc_client(IrcClient *client) {
+	if (client->carrier) {
+		client->wants_connection = TRUE;
+		if (client->status == IRC_CLIENT_DISCONNECTED && client->carrier->status != IRC_CLIENT_DISCONNECTED)
+			set_status(client, IRC_CLIENT_CONNECTING, NULL);
+		return;
+	}
 	client->wants_connection = TRUE;
 	client->failure = IRC_FAILURE_NONE;
 	client->retry_seconds = FIRST_RETRY_SECONDS;
@@ -541,11 +651,30 @@ void connect_irc_client(IrcClient *client) {
 
 void disconnect_irc_client(IrcClient *client, const char *reason) {
 	client->wants_connection = FALSE;
+	if (client->carrier) {
+		if (client->status != IRC_CLIENT_DISCONNECTED)
+			set_status(client, IRC_CLIENT_DISCONNECTED, NULL);
+		return;
+	}
 	if (client->stream && client->status != IRC_CLIENT_DISCONNECTED)
 		send_irc_command(client->stream, "QUIT", reason ? reason : "", NULL);
 	drop_connection(client);
 	if (client->status != IRC_CLIENT_DISCONNECTED)
 		set_status(client, IRC_CLIENT_DISCONNECTED, NULL);
+}
+
+
+void check_irc_client_link(IrcClient *client) {
+	if (client->carrier)
+		return;
+	if (client->stream && client->status == IRC_CLIENT_REGISTERED) {
+		probe_irc_stream(client->stream);
+		return;
+	}
+	if (client->reconnect_source && will_irc_client_retry(client)) {
+		g_clear_handle_id(&client->reconnect_source, g_source_remove);
+		start_connecting(client);
+	}
 }
 
 
@@ -556,16 +685,21 @@ void change_irc_client_settings(IrcClient *client, const IrcClientSettings *sett
 
 
 void send_irc_client_message(IrcClient *client, const IrcMessage *message) {
-	if (!client->stream)
+	IrcStream *stream = client->carrier ? client->carrier->stream : client->stream;
+	if (!stream || (client->carrier && client->status != IRC_CLIENT_REGISTERED))
 		return;
 	/* Lines inside a batch go without, since the batch's opening line has the label for all of them */
-	if (!client->label || has_irc_tag(message, "label") || has_irc_tag(message, "batch")) {
-		send_irc_message(client->stream, message);
+	gboolean needs_label = client->label && !has_irc_tag(message, "label") && !has_irc_tag(message, "batch");
+	if (!needs_label && !client->network_id) {
+		send_irc_message(stream, message);
 		return;
 	}
-	g_autoptr(IrcMessage) labeled = copy_irc_message(message);
-	set_irc_tag(labeled, "label", client->label);
-	send_irc_message(client->stream, labeled);
+	g_autoptr(IrcMessage) shaped = copy_irc_message(message);
+	if (needs_label)
+		set_irc_tag(shaped, "label", client->label);
+	if (client->network_id)
+		set_irc_tag(shaped, IRC_NETWORK_TAG, client->network_id);
+	send_irc_message(stream, shaped);
 }
 
 
@@ -628,6 +762,8 @@ IrcBatch *find_enclosing_batch(IrcClient *client, const IrcMessage *message, con
 
 
 gboolean will_irc_client_retry(IrcClient *client) {
+	if (client->carrier)
+		return client->wants_connection && will_irc_client_retry(client->carrier);
 	return client->wants_connection && client->failure != IRC_FAILURE_CERTIFICATE
 		&& client->failure != IRC_FAILURE_LOGIN;
 }

@@ -9,10 +9,15 @@
 #define KEEPALIVE_CHECK_SECONDS 30
 #define PING_AFTER_SECONDS 60
 #define GIVE_UP_AFTER_SECONDS 150
+#define PROBE_ANSWER_SECONDS 15
 #define KEEPALIVE_TOKEN "crimson-keepalive"
 #define BURST_LINES 5.0
 #define LINES_PER_SECOND 1.0
 #define CLOSE_DEADLINE_SECONDS 5
+/* Lines waiting together go out in one write of up to this much, rather than as many small encrypted records */
+#define WRITE_BATCH_BYTES 16384
+/* A peer that has stopped reading falls this far behind before it is let go, so its queue cannot grow without end */
+#define LARGEST_QUEUE_BYTES (8 * 1024 * 1024)
 /* Each chunk read is handled after any waiting redraw, so a steady stream of lines never holds up a window */
 #define READ_PRIORITY (G_PRIORITY_HIGH_IDLE + 30)
 
@@ -23,13 +28,16 @@ struct IrcStream {
 	GByteArray *unread;
 	guint8 chunk[READ_CHUNK_BYTES];
 	GQueue outgoing;
+	gsize queued_bytes;
 	/* The line being written, which the output stream reads until the write finishes */
 	GBytes *current;
 	gboolean is_writing, is_closing, has_failed, has_finished, is_ping_sent, is_rate_limited, passes_pings;
 	gint64 last_received;
 	double send_credit;
 	gint64 credit_time;
-	guint keepalive_source, rate_source, deadline_source;
+	guint keepalive_source, rate_source, deadline_source, probe_source;
+	/* When the last probe went out, which anything received afterwards answers */
+	gint64 probe_time;
 	IrcStreamReceived received;
 	IrcStreamClosed closed;
 	gpointer data;
@@ -51,6 +59,7 @@ static void release_stream(IrcStream *stream) {
 	g_clear_handle_id(&stream->keepalive_source, g_source_remove);
 	g_clear_handle_id(&stream->rate_source, g_source_remove);
 	g_clear_handle_id(&stream->deadline_source, g_source_remove);
+	g_clear_handle_id(&stream->probe_source, g_source_remove);
 	g_queue_clear_full(&stream->outgoing, (GDestroyNotify)g_bytes_unref);
 	g_clear_pointer(&stream->current, g_bytes_unref);
 	g_byte_array_unref(stream->unread);
@@ -209,6 +218,17 @@ static void write_next(IrcStream *stream) {
 	if (!take_send_credit(stream))
 		return;
 	stream->current = g_queue_pop_head(&stream->outgoing);
+	stream->queued_bytes -= g_bytes_get_size(stream->current);
+	/* Pacing to a server counts lines one by one, while other peers take everything waiting at once */
+	if (!stream->is_rate_limited && !g_queue_is_empty(&stream->outgoing)) {
+		GByteArray *batch = g_bytes_unref_to_array(stream->current);
+		while (!g_queue_is_empty(&stream->outgoing) && batch->len < WRITE_BATCH_BYTES) {
+			g_autoptr(GBytes) line = g_queue_pop_head(&stream->outgoing);
+			stream->queued_bytes -= g_bytes_get_size(line);
+			g_byte_array_append(batch, g_bytes_get_data(line, NULL), (guint)g_bytes_get_size(line));
+		}
+		stream->current = g_byte_array_free_to_bytes(batch);
+	}
 	gsize length = 0;
 	const void *bytes = g_bytes_get_data(stream->current, &length);
 	stream->is_writing = TRUE;
@@ -254,6 +274,24 @@ IrcStream *create_irc_stream(GIOStream *connection, IrcStreamReceived received, 
 }
 
 
+static gboolean check_probe(gpointer data) {
+	IrcStream *stream = data;
+	stream->probe_source = 0;
+	if (stream->last_received < stream->probe_time)
+		fail_stream(stream, "Connection timed out");
+	return G_SOURCE_REMOVE;
+}
+
+
+void probe_irc_stream(IrcStream *stream) {
+	if (stream->is_closing || stream->has_failed || stream->probe_source)
+		return;
+	stream->probe_time = g_get_monotonic_time();
+	send_irc_command(stream, "PING", KEEPALIVE_TOKEN, NULL);
+	stream->probe_source = g_timeout_add_seconds(PROBE_ANSWER_SECONDS, check_probe, stream);
+}
+
+
 void limit_irc_stream_rate(IrcStream *stream) {
 	stream->is_rate_limited = TRUE;
 }
@@ -268,6 +306,11 @@ void send_irc_message(IrcStream *stream, const IrcMessage *message) {
 	if (stream->is_closing || stream->has_failed)
 		return;
 	g_autofree char *line = format_irc_line(message);
+	stream->queued_bytes += strlen(line) + 2;
+	if (stream->queued_bytes > LARGEST_QUEUE_BYTES) {
+		fail_stream(stream, "The other end stopped reading");
+		return;
+	}
 	g_queue_push_tail(&stream->outgoing, g_bytes_new_take(g_strconcat(line, "\r\n", NULL), strlen(line) + 2));
 	write_next(stream);
 }

@@ -6,12 +6,16 @@
 #include "formatting.h"
 #include "images.h"
 #include "message-row.h"
+#include "message-search.h"
 #include "notifications.h"
 #include "room-look.h"
 #include "sounds.h"
 #include "window.h"
 #include "pictures.h"
 
+/* A message a search or reply took the user to glows this long, starting once the scroll has settled */
+#define SPOTLIGHT_MS 2000
+#define SPOTLIGHT_DELAY_MS 150
 #define FADE_DURATION_MS 160
 #define PAGE_SLIDE_MS 260
 #define ACTIVITY_SECONDS 120
@@ -70,7 +74,9 @@ typedef struct {
 
 struct Conversation {
 	Window *window;
-	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button;
+	GtkWidget *stack, *split, *avatar, *title, *subtitle, *members_button, *search_button;
+	/* A message picked in a search that older pages are loaded for until it shows */
+	char *wanted_message;
 	/* A still image of the chat a narrow window is leaving, which slides away as the next chat slides in */
 	GtkWidget *still_page;
 	/* The button down to the latest message, which shows an arrow or how many new messages wait below */
@@ -218,7 +224,7 @@ static void load_when_near_top(RoomView *view) {
 	if (!view || !is_shown_view(view))
 		return;
 	if (is_near_top(view))
-		load_older_history(view->room);
+		load_older_history(view->room, HISTORY_PAGE);
 	show_older_loading(view->conversation);
 }
 
@@ -363,10 +369,24 @@ static void react_to(CrimsonMessage *message, const char *reaction, gpointer dat
 }
 
 
+/* A message the server never took only exists here, so deleting it takes it away at once */
 static void remove_message(CrimsonMessage *message, gpointer data) {
 	Conversation *conversation = data;
-	if (conversation->room)
+	if (conversation->room && message->problem)
+		remove_room_message(conversation->room, message);
+	else if (conversation->room)
 		redact_message(conversation->room, message);
+}
+
+
+static void resend_message(CrimsonMessage *message, gpointer data) {
+	Conversation *conversation = data;
+	CrimsonRoom *room = conversation->room;
+	if (!room)
+		return;
+	g_autoptr(CrimsonMessage) failed = g_object_ref(message);
+	remove_room_message(room, failed);
+	send_room_line(room, failed->text);
 }
 
 
@@ -383,6 +403,24 @@ static gboolean find_shown_position(RoomView *view, CrimsonMessage *target, guin
 }
 
 
+static gboolean end_spotlight(gpointer data) {
+	g_autoptr(CrimsonMessage) message = data;
+	message->is_spotlit = FALSE;
+	announce_message_change(message);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* The message glows once the list has scrolled it into view, and fades back after a moment */
+static gboolean start_spotlight(gpointer data) {
+	CrimsonMessage *message = data;
+	message->is_spotlit = TRUE;
+	announce_message_change(message);
+	g_timeout_add(SPOTLIGHT_MS, end_spotlight, message);
+	return G_SOURCE_REMOVE;
+}
+
+
 static void show_message(const char *message_id, gpointer data) {
 	Conversation *conversation = data;
 	RoomView *view = conversation->view;
@@ -393,6 +431,7 @@ static void show_message(const char *message_id, gpointer data) {
 		view->has_user_scrolled = TRUE;
 		gtk_widget_set_visible(conversation->jump_button, TRUE);
 		gtk_list_view_scroll_to(GTK_LIST_VIEW(view->list_view), position, GTK_LIST_SCROLL_NONE, NULL);
+		g_timeout_add(SPOTLIGHT_DELAY_MS, start_spotlight, g_object_ref(target));
 	}
 }
 
@@ -838,14 +877,6 @@ static const char *describe_role(char symbol) {
 }
 
 
-/* Whether the user can moderate the open channel, as its operator or half-operator */
-static gboolean can_moderate(Conversation *conversation, IrcState *state, IrcChannel *channel) {
-	g_autofree char *own = fold_state_name(state, state->nick);
-	const char *symbols = g_hash_table_lookup(channel->members, own);
-	return symbols && strpbrk(symbols, "~&@%");
-}
-
-
 static void append_member_item(GMenu *menu, const char *label, const char *action, const char *nick) {
 	g_autoptr(GMenuItem) item = g_menu_item_new(label, NULL);
 	g_menu_item_set_action_and_target_value(item, action, g_variant_new_string(nick));
@@ -859,11 +890,16 @@ static GMenuModel *create_member_menu(Conversation *conversation, const char *ni
 	append_member_item(person, TEXT_VIEW_PROFILE, "member.profile", nick);
 	append_member_item(person, TEXT_SEND_MESSAGE, "member.message", nick);
 	append_member_item(person, TEXT_MENTION, "member.mention", nick);
+	IrcState *state = get_network_state(conversation->room->network);
+	if (!state || !is_own_nick(state, nick)) {
+		gboolean is_ignored = find_room_override(get_settings()->ignored_people, conversation->room->network->key,
+			nick) != NULL;
+		append_member_item(person, is_ignored ? TEXT_STOP_IGNORING : TEXT_IGNORE, "member.ignore", nick);
+	}
 	g_menu_append_section(menu, NULL, G_MENU_MODEL(person));
 	g_object_unref(person);
-	IrcState *state = get_network_state(conversation->room->network);
 	IrcChannel *channel = state ? find_irc_channel(state, conversation->room->name) : NULL;
-	if (!channel || !can_moderate(conversation, state, channel) || is_own_nick(state, nick))
+	if (!channel || !is_irc_channel_moderator(state, channel) || is_own_nick(state, nick))
 		return G_MENU_MODEL(menu);
 	g_autofree char *folded = fold_state_name(state, nick);
 	const char *symbols = g_hash_table_lookup(channel->members, folded);
@@ -1012,6 +1048,67 @@ static char *describe_account_ban(IrcState *state, const char *account) {
 }
 
 
+/* A removal waiting for the user to confirm it, with the room and person it is about */
+typedef struct {
+	Conversation *conversation;
+	CrimsonRoom *room;
+	char *nick;
+	gboolean is_ban;
+	GtkWidget *reason;
+} Removal;
+
+
+static void free_removal(Removal *removal) {
+	g_object_unref(removal->room);
+	g_free(removal->nick);
+	g_free(removal);
+}
+
+
+/* A ban covers the person's account where the server bans by account, and otherwise their host, so a new nick or
+ * address does not get around it */
+static void finish_removal(AdwAlertDialog *alert, const char *response, Removal *removal) {
+	CrimsonRoom *room = removal->room;
+	if (g_strcmp0(response, "remove") != 0 || !room->network->client)
+		return;
+	if (removal->is_ban) {
+		IrcState *state = get_network_state(room->network);
+		IrcUser *user = state ? find_irc_user(state, removal->nick) : NULL;
+		g_autofree char *account_mask = user ? describe_account_ban(state, user->account) : NULL;
+		g_autofree char *mask = account_mask ? g_steal_pointer(&account_mask) : user && user->host
+			? g_strdup_printf("*!*@%s", user->host) : g_strdup_printf("%s!*@*", removal->nick);
+		send_irc_client_command(room->network->client, "MODE", room->name, "+b", mask, NULL);
+	}
+	const char *reason = gtk_editable_get_text(GTK_EDITABLE(removal->reason));
+	send_irc_client_command(room->network->client, "KICK", room->name, removal->nick, *reason ? reason : NULL,
+		NULL);
+}
+
+
+static void confirm_removal(Conversation *conversation, const char *nick, gboolean is_ban) {
+	Removal *removal = g_new0(Removal, 1);
+	removal->conversation = conversation;
+	removal->room = g_object_ref(conversation->room);
+	removal->nick = g_strdup(nick);
+	removal->is_ban = is_ban;
+	g_autofree char *where = describe_room_title(conversation->room);
+	g_autofree char *title = g_strdup_printf(is_ban ? TEXT_BAN_TITLE : TEXT_KICK_TITLE, nick);
+	AdwDialog *alert = adw_alert_dialog_new(title, where);
+	removal->reason = gtk_entry_new();
+	gtk_entry_set_placeholder_text(GTK_ENTRY(removal->reason), TEXT_REMOVAL_REASON);
+	gtk_entry_set_activates_default(GTK_ENTRY(removal->reason), TRUE);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), removal->reason);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "remove", is_ban ? TEXT_BAN_ACTION
+		: TEXT_REMOVE, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "remove", ADW_RESPONSE_DESTRUCTIVE);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "remove");
+	g_object_set_data_full(G_OBJECT(alert), "removal", removal, (GDestroyNotify)free_removal);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_removal), removal);
+	adw_dialog_present(alert, GTK_WIDGET(conversation->window->window));
+	gtk_widget_grab_focus(removal->reason);
+}
+
+
 static void moderate_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Conversation *conversation = data;
 	const char *name = g_action_get_name(G_ACTION(action));
@@ -1026,18 +1123,22 @@ static void moderate_member(GSimpleAction *action, GVariant *parameter, gpointer
 		if (g_str_equal(name, MODES[index].action))
 			send_channel_mode(conversation, MODES[index].mode, nick);
 	}
-	/* A ban covers the person's account where the server bans by account, and otherwise their host, so a new
-	 * nick or address does not get around it */
-	if (g_str_equal(name, "ban")) {
-		IrcState *state = get_network_state(room->network);
-		IrcUser *user = state ? find_irc_user(state, nick) : NULL;
-		g_autofree char *account_mask = user ? describe_account_ban(state, user->account) : NULL;
-		g_autofree char *mask = account_mask ? g_steal_pointer(&account_mask) : user && user->host
-			? g_strdup_printf("*!*@%s", user->host) : g_strdup_printf("%s!*@*", nick);
-		send_channel_mode(conversation, "+b", mask);
-	}
 	if (g_str_equal(name, "kick") || g_str_equal(name, "ban"))
-		send_irc_client_command(room->network->client, "KICK", room->name, nick, NULL);
+		confirm_removal(conversation, nick, g_str_equal(name, "ban"));
+}
+
+
+static void ignore_member(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	Conversation *conversation = data;
+	const char *nick = g_variant_get_string(parameter, NULL);
+	if (!conversation->room)
+		return;
+	GPtrArray *ignored = get_settings()->ignored_people;
+	const char *key = conversation->room->network->key;
+	if (find_room_override(ignored, key, nick))
+		clear_room_override(ignored, key, nick);
+	else
+		set_room_override(ignored, key, nick, TRUE, 0);
 }
 
 
@@ -1046,6 +1147,7 @@ static void add_member_actions(Conversation *conversation) {
 		{"message", message_member, "s", NULL, NULL, {0}},
 		{"mention", mention_member, "s", NULL, NULL, {0}},
 		{"profile", show_member_profile, "s", NULL, NULL, {0}},
+		{"ignore", ignore_member, "s", NULL, NULL, {0}},
 		{"op", moderate_member, "s", NULL, NULL, {0}},
 		{"deop", moderate_member, "s", NULL, NULL, {0}},
 		{"voice", moderate_member, "s", NULL, NULL, {0}},
@@ -1161,6 +1263,41 @@ static void show_members_panel(gpointer data) {
 }
 
 
+/* A picked message shows once it is loaded, with older pages asked for until it is or none are left */
+static void reach_wanted_message(Conversation *conversation) {
+	CrimsonRoom *room = conversation->room;
+	if (!conversation->wanted_message || !room)
+		return;
+	if (find_room_message(room, conversation->wanted_message)) {
+		g_autofree char *id = g_steal_pointer(&conversation->wanted_message);
+		show_message(id, conversation);
+	} else if (room->has_all_history) {
+		g_clear_pointer(&conversation->wanted_message, g_free);
+	} else {
+		load_older_history(room, HISTORY_JUMP_PAGE);
+	}
+}
+
+
+static void pick_found_message(CrimsonMessage *message, gpointer data) {
+	Conversation *conversation = data;
+	g_free(conversation->wanted_message);
+	conversation->wanted_message = g_strdup(message->id);
+	reach_wanted_message(conversation);
+}
+
+
+void search_conversation(Conversation *conversation) {
+	if (conversation->room && conversation->room->kind != ROOM_SERVER)
+		show_message_search(conversation->window, conversation->room, pick_found_message, conversation);
+}
+
+
+static void click_search(GtkButton *button, Conversation *conversation) {
+	search_conversation(conversation);
+}
+
+
 void show_conversation_details(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	if (!room)
@@ -1254,6 +1391,10 @@ static GtkWidget *create_header(Conversation *conversation) {
 	gtk_widget_set_tooltip_text(conversation->members_button, TEXT_MEMBERS_TOOLTIP);
 	g_signal_connect(conversation->members_button, "toggled", G_CALLBACK(toggle_members), conversation);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(header), conversation->members_button);
+	conversation->search_button = gtk_button_new_from_icon_name("system-search-symbolic");
+	gtk_widget_set_tooltip_text(conversation->search_button, TEXT_SEARCH_MESSAGES);
+	g_signal_connect(conversation->search_button, "clicked", G_CALLBACK(click_search), conversation);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), conversation->search_button);
 	return header;
 }
 
@@ -1278,6 +1419,7 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), create_message_area(conversation));
 	conversation->composer = create_composer();
 	adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar), get_composer_widget(conversation->composer));
+	accept_dropped_files(conversation->composer, toolbar);
 	adw_toolbar_view_set_bottom_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_FLAT);
 	conversation->split = adw_overlay_split_view_new();
 	adw_overlay_split_view_set_sidebar_position(ADW_OVERLAY_SPLIT_VIEW(conversation->split), GTK_PACK_END);
@@ -1323,8 +1465,8 @@ static void relabel_days(gpointer data) {
 Conversation *create_conversation(Window *window) {
 	Conversation *conversation = g_new0(Conversation, 1);
 	conversation->window = window;
-	conversation->actions = (MessageActions){reply_to, react_to, remove_message, show_message, show_person,
-		show_person_menu, conversation};
+	conversation->actions = (MessageActions){reply_to, react_to, remove_message, resend_message, show_message,
+		show_person, show_person_menu, conversation};
 	/* Coming back to the window counts as seeing the open chat, so what arrived meanwhile is read */
 	g_signal_connect_swapped(window->window, "notify::is-active", G_CALLBACK(mark_read_when_seen), conversation);
 	conversation->stack = gtk_stack_new();
@@ -1413,6 +1555,7 @@ static void fill_header(Conversation *conversation) {
 	gtk_widget_set_tooltip_text(conversation->subtitle, shows_topic ? topic : NULL);
 	fill_room_avatar(ADW_AVATAR(conversation->avatar), room, HEADER_AVATAR_SIZE);
 	gtk_widget_set_visible(conversation->members_button, room->kind == ROOM_CHANNEL);
+	gtk_widget_set_visible(conversation->search_button, room->kind != ROOM_SERVER);
 }
 
 
@@ -1563,6 +1706,7 @@ static void follow_room(CrimsonRoom *room, Conversation *conversation) {
 		set_read_line(view, TRUE, room->read_time);
 	view->was_unread = is_unread;
 	refresh_conversation(conversation);
+	reach_wanted_message(conversation);
 }
 
 
@@ -1612,6 +1756,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
+	g_clear_pointer(&conversation->wanted_message, g_free);
 	/* The same nick in another room can have another picture, so the floating avatar is filled again */
 	g_clear_pointer(&conversation->sticky_nick, g_free);
 	/* Another room starts with the typing avatars out of sight rather than sinking from the last one */

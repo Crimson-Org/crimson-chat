@@ -35,6 +35,8 @@ typedef struct {
 	/* Comma separated words that count as a mention besides the user's own nick */
 	char *highlight_words;
 	GPtrArray *notification_overrides, *badge_overrides;
+	/* People whose messages, reactions, typing and invites are not shown, as overrides naming their nick */
+	GPtrArray *ignored_people;
 } Settings;
 
 Settings *get_settings(void);

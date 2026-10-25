@@ -5,6 +5,8 @@
 
 /* How many messages people wrote one page of history holds, about a tall chat full */
 #define HISTORY_PAGE 30
+/* How many messages each step of a jump to an old message loads */
+#define HISTORY_JUMP_PAGE 400
 
 typedef struct Chat Chat;
 
@@ -24,6 +26,10 @@ typedef struct {
 	void (*room_read)(CrimsonRoom *room, gpointer data);
 	/* The user asked which rooms the server has, as with /list */
 	void (*rooms_requested)(CrimsonNetwork *network, gpointer data);
+	/* Someone invited the user to a room, which the user can join from there */
+	void (*room_invited)(CrimsonNetwork *network, const char *room_name, gpointer data);
+	/* The user asked about someone, as with /whois, which shows their profile */
+	void (*profile_requested)(CrimsonRoom *room, const char *nick, gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */
@@ -78,6 +84,10 @@ typedef struct {
 /* Hands over the profile, or NULL when the network went away before the answer */
 typedef void (*ProfileReady)(Profile *profile, gpointer data);
 
+/* Hands over the messages that say what was searched for, as CrimsonMessage items newest first, or NULL when the
+ * network went away before the answer */
+typedef void (*SearchReady)(GPtrArray *messages, gpointer data);
+
 /* How a registration went: done and logged in, waiting for a code the server sent, or refused for a reason */
 typedef enum {
 	REGISTRATION_DONE,
@@ -117,6 +127,14 @@ typedef struct {
 	Question *asking;
 	guint asking_depth;
 	GHashTable *answer_batches;
+	/* The message of the day while its lines arrive */
+	GString *welcome_message;
+	/* The search waiting for the bouncer's answer, with its room and words, the batch bringing it, what it found so far
+	 * and who waits for it */
+	char *search_room, *search_words, *search_batch;
+	GPtrArray *search_results;
+	SearchReady search_ready;
+	gpointer search_data;
 	/* A channel the user asked to join, opened once the server confirms it */
 	char *opening_room;
 	guint typing_source;
@@ -213,10 +231,17 @@ void reconnect_network(CrimsonNetwork *network);
 /* Incoming */
 void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, GPtrArray *affected);
 void request_latest_history(CrimsonRoom *room);
-void load_older_history(CrimsonRoom *room);
+/* Asks for this many messages before the earliest one loaded, a page for scrolling and many for a far jump */
+void load_older_history(CrimsonRoom *room, int count);
 void request_private_targets(CrimsonNetwork *network);
 /* Keeps the joined channels of a direct connection, which it joins again on the next start */
 void save_network_channels(CrimsonNetwork *network);
+
+/* Finds the messages in a room that say the words, through the bouncer's whole history where there is one and in
+ * the messages loaded so far otherwise, answering later either way */
+void search_room_messages(CrimsonRoom *room, const char *words, SearchReady ready, gpointer data);
+/* Stops waiting for a search, if the one asked for is still this caller's */
+void cancel_message_search(CrimsonNetwork *network, gpointer data);
 
 /* Outgoing */
 void send_room_text(CrimsonRoom *room, const char *text, CrimsonMessage *reply_to);
@@ -236,4 +261,7 @@ gboolean can_network(CrimsonNetwork *network, const char *cap);
 const char *read_network_error(CrimsonNetwork *network);
 /* Whether a network that is not connected will be tried again by itself, as its bouncer or its connection says */
 gboolean is_network_retrying(CrimsonNetwork *network);
+/* What kind of problem stopped a network or account that is down, as its bouncer or its connection says */
+IrcFailure read_network_failure(CrimsonNetwork *network);
+IrcFailure read_account_failure(Session *session);
 gint64 read_message_time(const IrcMessage *message);

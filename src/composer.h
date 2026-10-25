@@ -9,6 +9,8 @@ typedef struct Composer Composer;
 
 Composer *create_composer(void);
 GtkWidget *get_composer_widget(Composer *composer);
+/* Files dropped anywhere on the area are shared in the composer's room */
+void accept_dropped_files(Composer *composer, GtkWidget *area);
 /* Keeps the unsent text of the room being left and brings back the one of the room being opened */
 void switch_composer_room(Composer *composer, CrimsonRoom *room);
 void reply_in_composer(Composer *composer, CrimsonMessage *message);

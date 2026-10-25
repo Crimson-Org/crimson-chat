@@ -3,6 +3,7 @@
 #include <adwaita.h>
 
 #include "../lang/en.h"
+#include "common/identity.h"
 #include "composer.h"
 #include "formatting.h"
 #include "session.h"
@@ -19,6 +20,10 @@
 #define PAUSE_SECONDS 6
 #define FIELD_MAXIMUM_HEIGHT 180
 #define DRAFTS_KEY "draft"
+/* The cache folder a pasted picture is saved in while it uploads */
+#define PASTED_FOLDER "pasted"
+/* The most people or commands suggested at once */
+#define SUGGESTIONS_SHOWN 6
 
 struct Composer {
 	GtkWidget *box, *reply_bar, *reply_name, *reply_text, *field, *placeholder, *send_button, *share_button;
@@ -40,6 +45,23 @@ struct Composer {
 	GPtrArray *matches;
 	guint match_index;
 	int match_start;
+	/* The list over the field that suggests people after @ and commands after /, with what each row puts in, and
+	 * where the typed part it replaces starts */
+	GtkWidget *suggestions, *suggestion_rows;
+	GPtrArray *suggested;
+	int suggestion_start;
+	gboolean suggests_commands;
+};
+
+/* The commands the composer suggests while one is typed, with what each does */
+static const struct {
+	const char *name, *hint;
+} COMMANDS[] = {
+	{"me", TEXT_COMMAND_ME}, {"join", TEXT_COMMAND_JOIN}, {"msg", TEXT_COMMAND_MSG},
+	{"invite", TEXT_COMMAND_INVITE}, {"topic", TEXT_COMMAND_TOPIC}, {"whois", TEXT_COMMAND_WHOIS},
+	{"nick", TEXT_COMMAND_NICK}, {"away", TEXT_COMMAND_AWAY}, {"back", TEXT_COMMAND_BACK},
+	{"list", TEXT_COMMAND_LIST}, {"kick", TEXT_COMMAND_KICK}, {"leave", TEXT_COMMAND_LEAVE},
+	{"notice", TEXT_COMMAND_NOTICE}, {"quote", TEXT_COMMAND_QUOTE},
 };
 
 
@@ -92,6 +114,13 @@ static void click_send(GtkButton *button, Composer *composer) {
 
 static void clear_matches(Composer *composer) {
 	g_clear_pointer(&composer->matches, g_ptr_array_unref);
+}
+
+
+static void hide_suggestions(Composer *composer) {
+	g_clear_pointer(&composer->suggested, g_ptr_array_unref);
+	if (composer->suggestions)
+		gtk_popover_popdown(GTK_POPOVER(composer->suggestions));
 }
 
 
@@ -185,6 +214,142 @@ static void complete_nick(Composer *composer) {
 }
 
 
+static GtkWidget *create_suggestion_row(const char *title, const char *hint) {
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+	gtk_widget_add_css_class(box, "suggestion");
+	GtkWidget *name = gtk_label_new(title);
+	gtk_widget_add_css_class(name, "heading");
+	gtk_box_append(GTK_BOX(box), name);
+	if (hint) {
+		GtkWidget *note = gtk_label_new(hint);
+		gtk_label_set_ellipsize(GTK_LABEL(note), PANGO_ELLIPSIZE_END);
+		gtk_widget_add_css_class(note, "dim-label");
+		gtk_box_append(GTK_BOX(box), note);
+	}
+	return box;
+}
+
+
+/* Puts the picked suggestion in place of what was typed for it, a nick with a colon when it starts the message */
+static void take_suggestion(Composer *composer, guint index) {
+	if (!composer->suggested || index >= composer->suggested->len)
+		return;
+	GtkTextIter cursor, start;
+	gtk_text_buffer_get_iter_at_mark(composer->buffer, &cursor, gtk_text_buffer_get_insert(composer->buffer));
+	gtk_text_buffer_get_iter_at_offset(composer->buffer, &start, composer->suggestion_start);
+	const char *picked = g_ptr_array_index(composer->suggested, index);
+	g_autofree char *inserted = composer->suggests_commands ? g_strconcat("/", picked, " ", NULL)
+		: g_strconcat(picked, composer->suggestion_start == 0 ? ": " : " ", NULL);
+	hide_suggestions(composer);
+	gtk_text_buffer_delete(composer->buffer, &start, &cursor);
+	gtk_text_buffer_insert(composer->buffer, &start, inserted, -1);
+	hide_suggestions(composer);
+}
+
+
+static void pick_suggestion(GtkListBox *list, GtkListBoxRow *row, Composer *composer) {
+	take_suggestion(composer, (guint)gtk_list_box_row_get_index(row));
+	gtk_widget_grab_focus(composer->field);
+}
+
+
+static void create_suggestions(Composer *composer) {
+	composer->suggestion_rows = gtk_list_box_new();
+	gtk_list_box_set_selection_mode(GTK_LIST_BOX(composer->suggestion_rows), GTK_SELECTION_SINGLE);
+	gtk_widget_set_can_focus(composer->suggestion_rows, FALSE);
+	g_signal_connect(composer->suggestion_rows, "row-activated", G_CALLBACK(pick_suggestion), composer);
+	composer->suggestions = gtk_popover_new();
+	gtk_widget_add_css_class(composer->suggestions, "suggestions");
+	gtk_popover_set_child(GTK_POPOVER(composer->suggestions), composer->suggestion_rows);
+	gtk_popover_set_autohide(GTK_POPOVER(composer->suggestions), FALSE);
+	gtk_popover_set_has_arrow(GTK_POPOVER(composer->suggestions), FALSE);
+	gtk_popover_set_position(GTK_POPOVER(composer->suggestions), GTK_POS_TOP);
+	gtk_widget_set_can_focus(composer->suggestions, FALSE);
+	gtk_widget_set_halign(composer->suggestions, GTK_ALIGN_START);
+	gtk_widget_set_parent(composer->suggestions, composer->field_area);
+}
+
+
+/* The word before the cursor picks what is suggested, people after @ and commands while the first word starts
+ * with / */
+static void suggest(Composer *composer) {
+	GtkTextIter cursor, start;
+	gtk_text_buffer_get_iter_at_mark(composer->buffer, &cursor, gtk_text_buffer_get_insert(composer->buffer));
+	start = cursor;
+	while (!gtk_text_iter_starts_line(&start)) {
+		gtk_text_iter_backward_char(&start);
+		if (g_unichar_isspace(gtk_text_iter_get_char(&start))) {
+			gtk_text_iter_forward_char(&start);
+			break;
+		}
+	}
+	g_autofree char *word = gtk_text_iter_get_text(&start, &cursor);
+	gboolean is_first_word = gtk_text_iter_get_offset(&start) == 0;
+	g_autoptr(GPtrArray) shown = g_ptr_array_new_with_free_func(g_free);
+	g_autoptr(GPtrArray) hints = g_ptr_array_new();
+	composer->suggests_commands = is_first_word && *word == '/' && composer->room->kind != ROOM_SERVER;
+	if (composer->suggests_commands) {
+		for (guint index = 0; index < G_N_ELEMENTS(COMMANDS) && shown->len < SUGGESTIONS_SHOWN; index++) {
+			if (g_str_has_prefix(COMMANDS[index].name, word + 1)) {
+				g_ptr_array_add(shown, g_strdup(COMMANDS[index].name));
+				g_ptr_array_add(hints, (gpointer)COMMANDS[index].hint);
+			}
+		}
+	} else if (*word == '@') {
+		collect_matches(composer, word + 1);
+		for (guint index = 0; index < composer->matches->len && shown->len < SUGGESTIONS_SHOWN; index++) {
+			g_ptr_array_add(shown, g_strdup(g_ptr_array_index(composer->matches, index)));
+			g_ptr_array_add(hints, NULL);
+		}
+		clear_matches(composer);
+	}
+	if (!shown->len) {
+		hide_suggestions(composer);
+		return;
+	}
+	if (!composer->suggestions)
+		create_suggestions(composer);
+	gtk_list_box_remove_all(GTK_LIST_BOX(composer->suggestion_rows));
+	for (guint index = 0; index < shown->len; index++) {
+		const char *name = g_ptr_array_index(shown, index);
+		g_autofree char *title = composer->suggests_commands ? g_strconcat("/", name, NULL) : g_strdup(name);
+		gtk_list_box_append(GTK_LIST_BOX(composer->suggestion_rows), create_suggestion_row(title,
+			g_ptr_array_index(hints, index)));
+	}
+	gtk_list_box_select_row(GTK_LIST_BOX(composer->suggestion_rows),
+		gtk_list_box_get_row_at_index(GTK_LIST_BOX(composer->suggestion_rows), 0));
+	g_clear_pointer(&composer->suggested, g_ptr_array_unref);
+	composer->suggested = g_steal_pointer(&shown);
+	composer->suggestion_start = gtk_text_iter_get_offset(&start);
+	gtk_popover_popup(GTK_POPOVER(composer->suggestions));
+}
+
+
+/* While suggestions show, the arrow keys move through them and Tab or Enter takes the chosen one */
+static gboolean steer_suggestions(Composer *composer, guint key) {
+	if (!composer->suggested)
+		return FALSE;
+	GtkListBox *rows = GTK_LIST_BOX(composer->suggestion_rows);
+	GtkListBoxRow *selected = gtk_list_box_get_selected_row(rows);
+	int index = selected ? gtk_list_box_row_get_index(selected) : 0;
+	int count = (int)composer->suggested->len;
+	if (key == GDK_KEY_Down || key == GDK_KEY_Up) {
+		index = (index + (key == GDK_KEY_Down ? 1 : count - 1)) % count;
+		gtk_list_box_select_row(rows, gtk_list_box_get_row_at_index(rows, index));
+		return TRUE;
+	}
+	if (key == GDK_KEY_Tab || key == GDK_KEY_Return || key == GDK_KEY_KP_Enter) {
+		take_suggestion(composer, (guint)index);
+		return TRUE;
+	}
+	if (key == GDK_KEY_Escape) {
+		hide_suggestions(composer);
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
 /* Deleting past either end of the text does nothing, so the field is kept from answering it with the error sound */
 static gboolean is_deleting_past_edge(Composer *composer, guint key) {
 	if (gtk_text_buffer_get_has_selection(composer->buffer))
@@ -202,6 +367,8 @@ static gboolean is_deleting_past_edge(Composer *composer, guint key) {
 static gboolean press_key(GtkEventControllerKey *controller, guint key, guint code, GdkModifierType state,
 	Composer *composer) {
 	if (is_deleting_past_edge(composer, key))
+		return TRUE;
+	if (steer_suggestions(composer, key))
 		return TRUE;
 	if (key != GDK_KEY_Tab && key != GDK_KEY_ISO_Left_Tab)
 		clear_matches(composer);
@@ -267,6 +434,8 @@ static void change_text(GtkTextBuffer *buffer, Composer *composer) {
 	gboolean is_empty = !*text;
 	gtk_widget_set_visible(composer->placeholder, is_empty);
 	refresh_send_button(composer);
+	if (composer->room)
+		suggest(composer);
 	if (!composer->room || *text == '/')
 		return;
 	if (is_empty) {
@@ -307,6 +476,85 @@ static void finish_choosing_file(GObject *source, GAsyncResult *result, gpointer
 	g_autoptr(GFile) file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), result, NULL);
 	if (file)
 		share_file(room, file);
+}
+
+
+static gboolean can_share(Composer *composer) {
+	return composer->room && gtk_widget_get_visible(composer->share_button);
+}
+
+
+static void share_file_list(Composer *composer, GSList *files) {
+	for (GSList *item = files; item; item = item->next)
+		share_file(composer->room, item->data);
+}
+
+
+static gboolean drop_files(GtkDropTarget *target, const GValue *value, double x, double y, Composer *composer) {
+	if (!can_share(composer) || !G_VALUE_HOLDS(value, GDK_TYPE_FILE_LIST))
+		return FALSE;
+	share_file_list(composer, g_value_get_boxed(value));
+	return TRUE;
+}
+
+
+static void finish_pasting_files(GObject *source, GAsyncResult *result, gpointer data) {
+	Composer *composer = data;
+	const GValue *value = gdk_clipboard_read_value_finish(GDK_CLIPBOARD(source), result, NULL);
+	if (value && can_share(composer))
+		share_file_list(composer, g_value_get_boxed(value));
+}
+
+
+/* A pasted picture, such as a screenshot, is shared from a file in the cache, which replaces the last one */
+static void finish_pasting_picture(GObject *source, GAsyncResult *result, gpointer data) {
+	Composer *composer = data;
+	g_autoptr(GdkTexture) texture = gdk_clipboard_read_texture_finish(GDK_CLIPBOARD(source), result, NULL);
+	if (!texture || !can_share(composer))
+		return;
+	g_autofree char *folder = g_build_filename(g_get_user_cache_dir(), get_application_identity()->slug,
+		PASTED_FOLDER, NULL);
+	g_autoptr(GFile) old = g_file_new_for_path(folder);
+	g_autoptr(GFileEnumerator) entries = g_file_enumerate_children(old, G_FILE_ATTRIBUTE_STANDARD_NAME,
+		G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	for (GFileInfo *info = entries ? g_file_enumerator_next_file(entries, NULL, NULL) : NULL; info;
+		info = g_file_enumerator_next_file(entries, NULL, NULL)) {
+		g_autoptr(GFile) child = g_file_get_child(old, g_file_info_get_name(info));
+		g_file_delete(child, NULL, NULL);
+		g_object_unref(info);
+	}
+	g_mkdir_with_parents(folder, 0700);
+	g_autoptr(GDateTime) now = g_date_time_new_now_local();
+	g_autofree char *stamp = g_date_time_format(now, TEXT_PASTED_PICTURE_NAME);
+	g_autofree char *path = g_build_filename(folder, stamp, NULL);
+	if (!gdk_texture_save_to_png(texture, path))
+		return;
+	g_autoptr(GFile) file = g_file_new_for_path(path);
+	share_file(composer->room, file);
+}
+
+
+/* Pasting files or a picture shares them where the server takes files, and anything else pastes as text */
+static void paste_into_field(GtkTextView *field, Composer *composer) {
+	GdkClipboard *clipboard = gtk_widget_get_clipboard(GTK_WIDGET(field));
+	GdkContentFormats *formats = gdk_clipboard_get_formats(clipboard);
+	if (!can_share(composer))
+		return;
+	if (gdk_content_formats_contain_gtype(formats, GDK_TYPE_FILE_LIST)) {
+		g_signal_stop_emission_by_name(field, "paste-clipboard");
+		gdk_clipboard_read_value_async(clipboard, GDK_TYPE_FILE_LIST, G_PRIORITY_DEFAULT, NULL, finish_pasting_files,
+			composer);
+	} else if (gdk_content_formats_contain_gtype(formats, GDK_TYPE_TEXTURE)) {
+		g_signal_stop_emission_by_name(field, "paste-clipboard");
+		gdk_clipboard_read_texture_async(clipboard, NULL, finish_pasting_picture, composer);
+	}
+}
+
+
+void accept_dropped_files(Composer *composer, GtkWidget *area) {
+	GtkDropTarget *target = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
+	g_signal_connect(target, "drop", G_CALLBACK(drop_files), composer);
+	gtk_widget_add_controller(area, GTK_EVENT_CONTROLLER(target));
 }
 
 
@@ -371,6 +619,7 @@ static GtkWidget *create_field(Composer *composer) {
 	gtk_text_view_set_accepts_tab(GTK_TEXT_VIEW(composer->field), FALSE);
 	gtk_widget_add_css_class(composer->field, "composer-field");
 	composer->change_handler = g_signal_connect(composer->buffer, "changed", G_CALLBACK(change_text), composer);
+	g_signal_connect(composer->field, "paste-clipboard", G_CALLBACK(paste_into_field), composer);
 	GtkEventController *keys = gtk_event_controller_key_new();
 	gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
 	g_signal_connect(keys, "key-pressed", G_CALLBACK(press_key), composer);
@@ -478,6 +727,7 @@ void switch_composer_room(Composer *composer, CrimsonRoom *room) {
 	stop_typing_notice(composer);
 	cancel_reply(composer);
 	clear_matches(composer);
+	hide_suggestions(composer);
 	g_set_object(&composer->room, room);
 	const char *draft = room ? g_object_get_data(G_OBJECT(room), DRAFTS_KEY) : NULL;
 	g_signal_handler_block(composer->buffer, composer->change_handler);

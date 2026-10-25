@@ -66,6 +66,10 @@ GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network);
 /* The menu button for the whole app, which also names the bouncer and holds its settings */
 GtkWidget *create_main_menu_button(Window *window);
 void show_toast(Window *window, const char *text);
+/* Marks a room read here and on the user's other devices, and takes its line where reading stopped away */
+void mark_read_in_window(Window *window, CrimsonRoom *room);
+/* A toast saying the user was invited to a room, with a button that joins it */
+void offer_room_invite(Window *window, CrimsonNetwork *network, const char *room_name);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);
 /* A wait only shows once it has lasted this long, so quick ones pass without anything flashing up */
@@ -132,6 +136,8 @@ void refresh_conversation(Conversation *conversation);
 /* The open room's card, whose members button opens the members beside it, or the profile of the person a private
  * chat is with */
 void show_conversation_details(Conversation *conversation);
+/* Searches the open room's messages, in a dialog that shows a picked one in the chat */
+void search_conversation(Conversation *conversation);
 void set_conversation_narrow(Conversation *conversation, gboolean is_narrow);
 /* Takes the line where reading stopped out of a room's kept chat, for a room the user marked as read */
 void clear_read_line(Conversation *conversation, CrimsonRoom *room);

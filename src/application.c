@@ -4,6 +4,7 @@
 #include "application.h"
 #include "dialogs.h"
 #include "formatting.h"
+#include "profile.h"
 #include "room-picker.h"
 #include "settings-dialog.h"
 #include "settings.h"
@@ -58,6 +59,7 @@ static void notify_message(CrimsonRoom *room, CrimsonMessage *message, gpointer 
 	g_notification_set_category(notification, "im.received");
 	g_autofree char *key = describe_room_key(room);
 	g_notification_set_default_action_and_target(notification, "app.open-room", "s", key);
+	g_notification_add_button_with_target(notification, TEXT_MARK_READ, "app.mark-room-read", "s", key);
 	g_application_send_notification(g_application_get_default(), key, notification);
 }
 
@@ -101,6 +103,20 @@ static void share_invite(Session *session, const char *token, const char *uses, 
 	Window *window = get_main_window();
 	if (window)
 		show_invite_link(window, session, token, uses, port);
+}
+
+
+static void show_requested_profile(CrimsonRoom *room, const char *nick, gpointer data) {
+	Window *window = get_main_window();
+	if (window)
+		show_profile(window, room, nick);
+}
+
+
+static void offer_invited_room(CrimsonNetwork *network, const char *room_name, gpointer data) {
+	Window *window = get_main_window();
+	if (window)
+		offer_room_invite(window, network, room_name);
 }
 
 
@@ -178,6 +194,15 @@ static void open_room_action(GSimpleAction *action, GVariant *parameter, gpointe
 }
 
 
+/* Reading a chat from its notification marks it read without opening the window */
+static void mark_room_read_action(GSimpleAction *action, GVariant *parameter, gpointer application) {
+	CrimsonRoom *room = find_room_by_key(g_variant_get_string(parameter, NULL));
+	Window *window = get_main_window();
+	if (room && window)
+		mark_read_in_window(window, room);
+}
+
+
 /* The window is never destroyed, since connections closing queue work for it that would then find it gone */
 static void finish_quitting(gpointer application) {
 	stop_chat(chat);
@@ -199,7 +224,8 @@ static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, open_requested_room,
-		share_invite, forget_network, withdraw_notification, show_server_rooms};
+		share_invite, forget_network, withdraw_notification, show_server_rooms, offer_invited_room,
+		show_requested_profile};
 	chat = create_chat(&EVENTS, NULL);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},
@@ -208,6 +234,7 @@ static void start_up(GApplication *application) {
 		{"add-bouncer", add_bouncer, NULL, NULL, NULL, {0}},
 		{"show", show_window, NULL, NULL, NULL, {0}},
 		{"open-room", open_room_action, "s", NULL, NULL, {0}},
+		{"mark-room-read", mark_room_read_action, "s", NULL, NULL, {0}},
 		{"quit", quit, NULL, NULL, NULL, {0}},
 	};
 	static const struct {
@@ -217,6 +244,7 @@ static void start_up(GApplication *application) {
 		{"app.quit", {"<Control>q", NULL}},
 		{"win.hide", {"<Control>w", NULL}},
 		{"win.search", {"<Control>f", "<Control>k", NULL}},
+		{"win.search-messages", {"<Control><Shift>f", NULL}},
 		{"win.join-room", {"<Control>j", NULL}},
 		{"win.message-someone", {"<Control>n", NULL}},
 		{"win.step-room(-1)", {"<Alt>Up", "<Control>Page_Up", NULL}},

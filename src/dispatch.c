@@ -2,13 +2,18 @@
 
 #include "../lang/en.h"
 #include "formatting.h"
+#include "modes.h"
 #include "notifications.h"
 #include "questions.h"
+#include "replies.h"
 #include "settings.h"
 
 #define TYPING_ACTIVE_SECONDS 6
 #define TYPING_PAUSED_SECONDS 30
 #define TARGETS_DAYS 30
+#define SEARCH_BATCH "crimson-chat/search"
+/* Starts each line of the message of the day plain and in a fixed width font */
+#define FIXED_WIDTH_LINE "\x0f\x11"
 /* How much of the user's message the list quotes when someone reacts to it */
 #define REACTION_EXCERPT_CHARS 30
 #define TARGETS_LIMIT 100
@@ -150,8 +155,9 @@ static CrimsonRoom *find_conversation(CrimsonNetwork *network, const IrcMessage 
 }
 
 
+/* The bouncer answers for its networks itself, once for all of the user's devices */
 static void answer_ctcp(CrimsonNetwork *network, const char *sender, const char *request) {
-	if (g_ascii_strncasecmp(request, "VERSION", 7) != 0)
+	if (network->bouncer_id || g_ascii_strncasecmp(request, "VERSION", 7) != 0)
 		return;
 	g_autofree char *answer = g_strdup_printf("%cVERSION %s %s%c", CTCP_MARK, TEXT_APPLICATION_NAME,
 		APPLICATION_VERSION, CTCP_MARK);
@@ -204,6 +210,7 @@ static gboolean confirm_own_message(CrimsonNetwork *network, CrimsonRoom *room, 
 	if (!pending)
 		return FALSE;
 	pending->is_pending = FALSE;
+	pending->time = line->time;
 	g_free(pending->id);
 	pending->id = g_strdup(line->id);
 	if (pending->id)
@@ -240,7 +247,17 @@ static void offer_login(CrimsonNetwork *network, const CrimsonMessage *line) {
 }
 
 
+/* Whether the message comes from someone the user ignores, whose messages, reactions, typing and invites stay out
+ * of view while the bouncer still keeps them */
+static gboolean is_from_ignored(CrimsonNetwork *network, const IrcMessage *message) {
+	g_autofree char *sender = message->source ? get_source_nick(message->source) : NULL;
+	return sender && find_room_override(get_settings()->ignored_people, network->key, sender);
+}
+
+
 static void deliver_text(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *load) {
+	if (is_from_ignored(network, message))
+		return;
 	g_autoptr(CrimsonMessage) line = read_text_message(network, message, load != NULL);
 	if (!line)
 		return;
@@ -344,6 +361,8 @@ static void note_new_reaction(CrimsonNetwork *network, CrimsonRoom *room, Crimso
 
 
 static void deliver_tag_message(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *load) {
+	if (is_from_ignored(network, message))
+		return;
 	g_autofree char *sender = get_source_nick(message->source);
 	CrimsonRoom *room = load ? load->room : find_conversation(network, message);
 	IrcState *state = get_network_state(network);
@@ -411,6 +430,10 @@ void save_network_channels(CrimsonNetwork *network) {
 
 static void handle_own_join(CrimsonNetwork *network, CrimsonRoom *room) {
 	room->is_joined = TRUE;
+	/* A server reached directly is asked who the room's people are, which a bouncer asks for itself */
+	IrcState *joined_state = get_network_state(network);
+	if (!network->bouncer_id && joined_state && get_irc_support(joined_state, "WHOX"))
+		send_irc_client_command(network->client, "WHO", room->name, WHO_FIELDS, NULL);
 	save_network_channels(network);
 	request_latest_history(room);
 	announce_room_change(room);
@@ -445,13 +468,12 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 			room->is_joined = FALSE;
 			save_network_channels(network);
 		}
-		add_event(room, message, reason && *reason ? g_strdup_printf(TEXT_LEFT_SAYING, sender, reason)
-			: g_strdup_printf(TEXT_LEFT, sender), !is_self);
+		add_event(room, message, describe_leaving(sender, reason), !is_self);
 	} else if (g_str_equal(command, "KICK") && room) {
 		const char *kicked = get_irc_parameter(message, 1);
 		if (kicked && is_own_nick(state, kicked) && !load)
 			room->is_joined = FALSE;
-		add_event(room, message, g_strdup_printf(TEXT_KICKED, sender, kicked, get_last_irc_parameter(message)),
+		add_event(room, message, describe_kick(sender, kicked, get_irc_parameter(message, 2)),
 			FALSE);
 	} else if (g_str_equal(command, "TOPIC") && room) {
 		g_free(room->topic);
@@ -459,12 +481,10 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_irc_parameter(message)),
 			FALSE);
 	} else if (g_str_equal(command, "MODE") && room) {
-		g_autoptr(GPtrArray) parts = g_ptr_array_new();
-		for (guint index = 1; index < count_irc_parameters(message); index++)
-			g_ptr_array_add(parts, (gpointer)get_irc_parameter(message, index));
-		g_ptr_array_add(parts, NULL);
-		g_autofree char *modes = g_strjoinv(" ", (char **)parts->pdata);
-		add_event(room, message, g_strdup_printf(TEXT_MODE_CHANGED, sender, modes), TRUE);
+		/* Changes to the room and its people stay in view, unlike the comings and goings that are hidden by choice */
+		char *text = describe_room_modes(state, message, 1);
+		if (text)
+			add_event(room, message, text, FALSE);
 	}
 }
 
@@ -495,7 +515,7 @@ static void deliver_departure(CrimsonNetwork *network, const IrcMessage *message
 	}
 	for (guint index = 0; index < rooms->len; index++) {
 		char *text = is_nick ? g_strdup_printf(TEXT_RENAMED, sender, new_nick)
-			: g_strdup_printf(TEXT_QUIT_EVENT, sender, get_last_irc_parameter(message));
+			: describe_leaving(sender, get_irc_parameter(message, 0));
 		add_event(g_ptr_array_index(rooms, index), message, text, !is_own_rename);
 	}
 	for (guint index = 0; index < rooms->len; index++) {
@@ -537,11 +557,99 @@ static void deliver_presence(CrimsonNetwork *network, const IrcMessage *message,
 }
 
 
+static void forget_search(NetworkWork *work) {
+	g_clear_pointer(&work->search_room, g_free);
+	g_clear_pointer(&work->search_words, g_free);
+	g_clear_pointer(&work->search_batch, g_free);
+	g_clear_pointer(&work->search_results, g_ptr_array_unref);
+	work->search_ready = NULL;
+	work->search_data = NULL;
+}
+
+
+static void finish_search(NetworkWork *work) {
+	SearchReady ready = work->search_ready;
+	gpointer data = work->search_data;
+	g_autoptr(GPtrArray) results = g_steal_pointer(&work->search_results);
+	forget_search(work);
+	if (ready)
+		ready(results, data);
+}
+
+
+void cancel_message_search(CrimsonNetwork *network, gpointer data) {
+	NetworkWork *work = get_network_work(network);
+	if (work->search_data == data)
+		forget_search(work);
+}
+
+
+/* A network without the bouncer's history searches what is loaded, answering from the main loop as the bouncer
+ * would */
+static void answer_loaded_search(gpointer data) {
+	g_autoptr(CrimsonNetwork) network = data;
+	finish_search(get_network_work(network));
+}
+
+
+void search_room_messages(CrimsonRoom *room, const char *words, SearchReady ready, gpointer data) {
+	NetworkWork *work = get_network_work(room->network);
+	forget_search(work);
+	work->search_room = g_strdup(room->name);
+	work->search_words = g_strdup(words);
+	work->search_results = g_ptr_array_new_with_free_func(g_object_unref);
+	work->search_ready = ready;
+	work->search_data = data;
+	if (room->network->bouncer_id && room->network->client) {
+		send_irc_client_command(room->network->client, "CRIMSON", "SEARCH", room->name, words, NULL);
+		return;
+	}
+	g_autofree char *folded_words = g_utf8_casefold(words, -1);
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+	for (guint index = count; index-- > 0;) {
+		g_autoptr(CrimsonMessage) line = g_list_model_get_item(G_LIST_MODEL(room->messages), index);
+		g_autofree char *plain = line->text && line->kind != MESSAGE_EVENT && line->kind != MESSAGE_STATUS
+			? strip_irc_formatting(line->text) : NULL;
+		g_autofree char *folded = plain ? g_utf8_casefold(plain, -1) : NULL;
+		if (folded && strstr(folded, folded_words))
+			g_ptr_array_add(work->search_results, g_object_ref(line));
+	}
+	g_idle_add_once(answer_loaded_search, g_object_ref(room->network));
+}
+
+
+/* The bouncer's answer names the room and words it searched, so a late answer to an older search is left out */
+static void start_search(NetworkWork *work, const char *reference, const IrcMessage *message) {
+	if (!work->search_ready || work->search_batch)
+		return;
+	if (g_strcmp0(get_irc_parameter(message, 2), work->search_room) == 0
+		&& g_strcmp0(get_irc_parameter(message, 3), work->search_words) == 0)
+		work->search_batch = g_strdup(reference);
+}
+
+
+/* Messages a search found are collected for it rather than shown in their room */
+static gboolean collect_search_line(CrimsonNetwork *network, const IrcMessage *message, const char *batch) {
+	NetworkWork *work = get_network_work(network);
+	IrcBatch *search = find_enclosing_batch(network->client, message, SEARCH_BATCH);
+	if (!search)
+		return FALSE;
+	if (g_strcmp0(batch, work->search_batch) != 0 || !work->search_results)
+		return TRUE;
+	CrimsonMessage *line = is_from_ignored(network, message) ? NULL : read_text_message(network, message, TRUE);
+	if (line)
+		g_ptr_array_add(work->search_results, line);
+	return TRUE;
+}
+
+
 static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 	const char *reference = get_irc_parameter(message, 0);
 	const char *type = get_irc_parameter(message, 1);
 	NetworkWork *work = get_network_work(network);
-	if (g_strcmp0(type, "chathistory") == 0) {
+	if (g_strcmp0(type, SEARCH_BATCH) == 0) {
+		start_search(work, reference + 1, message);
+	} else if (g_strcmp0(type, "chathistory") == 0) {
 		HistoryLoad *load = g_new0(HistoryLoad, 1);
 		const char *target = get_irc_parameter(message, 2);
 		load->room = target ? find_room(network, target) : NULL;
@@ -625,6 +733,10 @@ static gboolean count_split(CrimsonNetwork *network, const IrcMessage *message, 
 static void finish_batch(CrimsonNetwork *network, const IrcMessage *message, HistoryLoad *outer) {
 	const char *reference = get_irc_parameter(message, 0) + 1;
 	NetworkWork *work = get_network_work(network);
+	if (g_strcmp0(reference, work->search_batch) == 0) {
+		finish_search(work);
+		return;
+	}
 	GHashTable *counts = g_hash_table_lookup(work->splits, reference);
 	if (counts) {
 		finish_split(network, message, counts);
@@ -641,7 +753,10 @@ static void finish_batch(CrimsonNetwork *network, const IrcMessage *message, His
 		/* An empty page also ends history on servers that never mark the end, while catching up after a
 		 * reconnect only reaches the newest end */
 		room->has_all_history |= room->history_request != HISTORY_NEWER && (load->is_end || !load->lines);
+		gboolean has_more_newer = room->history_request == HISTORY_NEWER && load->lines && !load->is_end;
 		room->history_request = HISTORY_NONE;
+		if (has_more_newer)
+			request_latest_history(room);
 		room->has_history = TRUE;
 		count_unread(room);
 		announce_room_change(room);
@@ -687,19 +802,75 @@ static void deliver_targets(CrimsonNetwork *network, const IrcMessage *message) 
 }
 
 
-static char *join_parameters(const IrcMessage *message, guint first) {
-	g_autoptr(GPtrArray) parts = g_ptr_array_new();
-	for (guint index = first; index < count_irc_parameters(message); index++)
-		g_ptr_array_add(parts, (gpointer)get_irc_parameter(message, index));
-	g_ptr_array_add(parts, NULL);
-	return g_strjoinv(" ", (char **)parts->pdata);
+/* The message of the day arrives a line at a time and shows as one message in the server's chat, in a fixed width
+ * font since servers draw pictures with its characters */
+static gboolean collect_welcome_message(CrimsonNetwork *network, int number, const IrcMessage *message) {
+	NetworkWork *work = get_network_work(network);
+	if (number == 375) {
+		g_clear_pointer(&work->welcome_message, g_free);
+		work->welcome_message = g_string_new(NULL);
+		return TRUE;
+	}
+	if (number == 372 && work->welcome_message) {
+		const char *line = get_last_irc_parameter(message);
+		if (g_str_has_prefix(line, "- "))
+			line += 2;
+		g_string_append_printf(work->welcome_message, "%s" FIXED_WIDTH_LINE "%s", work->welcome_message->len ? "\n"
+			: "", line);
+		return TRUE;
+	}
+	if (number != 376 || !work->welcome_message)
+		return number == 372 || number == 376;
+	g_autofree char *text = g_string_free(g_steal_pointer(&work->welcome_message), FALSE);
+	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_NOTICE, NULL, text, read_message_time(message));
+	insert_room_message(network->server_room, line);
+	Question *question = find_question(network, message);
+	if (question)
+		show_answer(network, question);
+	else
+		announce_room_change(network->server_room);
+	return TRUE;
+}
+
+
+/* Whether a room's newest line already says this, as when the same refusal comes again */
+static gboolean is_latest_line(CrimsonRoom *room, const char *text) {
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+	g_autoptr(CrimsonMessage) latest = count ? g_list_model_get_item(G_LIST_MODEL(room->messages), count - 1) : NULL;
+	return latest && g_strcmp0(latest->text, text) == 0;
+}
+
+
+/* A problem with something the user just did shows at once, a room that would not let the user back in keeps a
+ * note saying why, problems with what the app asked by itself stay with the server's messages, and other replies go
+ * with the room they concern */
+static void show_reply(CrimsonNetwork *network, const IrcMessage *message, ReplyKind kind, const char *words,
+	const char *subject) {
+	CrimsonRoom *room = subject ? find_room(network, subject) : NULL;
+	gboolean is_problem = kind == REPLY_PROBLEM || kind == REPLY_REFUSED_JOIN;
+	if (is_problem && find_question(network, message))
+		network->session->chat->events.show_message(words, network->session->chat->data);
+	else if (kind == REPLY_PROBLEM)
+		add_status(network->server_room, message, words);
+	else if (room && !is_latest_line(room, words))
+		add_event(room, message, g_strdup(words), FALSE);
+	else if (!room)
+		add_server_line(network, message, words);
 }
 
 
 static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) {
 	const char *command = message->command;
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
-	g_autofree char *text = join_parameters(message, 1);
+	ReplyKind kind = REPLY_NOTE;
+	const char *subject = NULL;
+	g_autofree char *words = describe_reply(message, &kind, &subject);
+	if (kind == REPLY_PROBLEM && subject && (number == 401 || number == 404))
+		{
+		CrimsonRoom *refusing = find_room(network, subject);
+		if (refusing)
+			fail_pending_messages(refusing, words);
+	}
 	if ((g_strv_contains(WHOIS_REPLIES, command) || number == 401 || number == 402)
 		&& collect_profile(network, number, message))
 		return;
@@ -724,18 +895,23 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 		deliver_presence(network, message, number == 730);
 		return;
 	}
-	/* Name lists, topic details and metadata replies only update the state */
-	static const int QUIET[] = {5, 333, 353, 761, 766, 770, 771, 772, 774, 900, 903};
-	for (guint index = 0; index < G_N_ELEMENTS(QUIET); index++) {
-		if (number == QUIET[index])
-			return;
+	if (collect_welcome_message(network, number, message))
+		return;
+	/* A room's settings and the ends of its lists show on its settings page */
+	if (number == 324 || number == 347 || number == 349 || number == 368) {
+		CrimsonRoom *room = find_room(network, get_irc_parameter(message, 1));
+		if (room)
+			announce_room_change(room);
+		return;
 	}
+	if (kind == REPLY_HIDDEN)
+		return;
 	/* A person or room that refuses messages, such as one missing or open only to registered accounts, is left
 	 * alone for a while by what the app sends on its own, such as typing notices */
 	const char *target = get_irc_parameter(message, 1);
 	if ((number == 401 || number == 403 || number == 404 || number == 477) && target)
 		refuse_target(network, target);
-	add_server_line(network, message, text);
+	show_reply(network, message, kind, words, subject);
 }
 
 
@@ -796,9 +972,14 @@ static void deliver_metadata(CrimsonNetwork *network, const IrcMessage *message)
 
 
 static void deliver_invite(CrimsonNetwork *network, const IrcMessage *message) {
+	if (is_from_ignored(network, message))
+		return;
 	g_autofree char *sender = get_source_nick(message->source);
-	g_autofree char *text = g_strdup_printf(TEXT_INVITED, sender, get_irc_parameter(message, 1));
+	const char *room_name = get_irc_parameter(message, 1);
+	g_autofree char *text = g_strdup_printf(TEXT_INVITED, sender, room_name);
 	add_status(network->server_room, message, text);
+	if (room_name && !find_room(network, room_name))
+		network->session->chat->events.room_invited(network, room_name, network->session->chat->data);
 }
 
 
@@ -851,6 +1032,8 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 		return;
 	}
 	follow_answers(network, message);
+	if (batch && collect_search_line(network, message, batch))
+		return;
 	if (batch && gather_multiline(network, message))
 		return;
 	if (load && !load->room)
@@ -865,8 +1048,9 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 }
 
 
-static void ask_for_history(CrimsonRoom *room, HistoryRequest request, const char *subcommand, const char *point) {
-	g_autofree char *limit = g_strdup_printf("%d", HISTORY_PAGE);
+static void ask_for_history(CrimsonRoom *room, HistoryRequest request, const char *subcommand, const char *point,
+	int count) {
+	g_autofree char *limit = g_strdup_printf("%d", count);
 	room->history_request = request;
 	send_irc_client_command(room->network->client, "CHATHISTORY", subcommand, room->name, point, limit, NULL);
 }
@@ -877,17 +1061,22 @@ void request_latest_history(CrimsonRoom *room) {
 		return;
 	CrimsonMessage *last = get_last_message(room);
 	if (!last || !room->has_history) {
-		ask_for_history(room, HISTORY_LATEST, "LATEST", "*");
+		ask_for_history(room, HISTORY_LATEST, "LATEST", "*", HISTORY_PAGE);
 		return;
 	}
 	g_autoptr(GDateTime) time = g_date_time_new_from_unix_utc_usec(last->time);
 	g_autofree char *moment = format_irc_time(time);
-	g_autofree char *after = g_strconcat("timestamp=", moment, NULL);
-	ask_for_history(room, HISTORY_NEWER, "LATEST", after);
+	const char *types = get_irc_support(get_network_state(room->network), "MSGREFTYPES");
+	gboolean takes_ids = types && strstr(types, "msgid");
+	g_autofree char *after = takes_ids ? g_strconcat("msgid=", last->id, NULL) : g_strconcat("timestamp=", moment,
+		NULL);
+	/* What came while the app was away is caught up from the newest message it has, page after page until none
+	 * are left, so a long absence leaves no gap */
+	ask_for_history(room, HISTORY_NEWER, "AFTER", after, HISTORY_JUMP_PAGE);
 }
 
 
-void load_older_history(CrimsonRoom *room) {
+void load_older_history(CrimsonRoom *room, int count) {
 	if (room->kind == ROOM_SERVER || room->history_request || room->has_all_history
 		|| !can_network(room->network, "draft/chathistory"))
 		return;
@@ -898,7 +1087,7 @@ void load_older_history(CrimsonRoom *room) {
 	g_autofree char *moment = format_irc_time(time);
 	g_autofree char *before = first->id ? g_strconcat("msgid=", first->id, NULL)
 		: g_strconcat("timestamp=", moment, NULL);
-	ask_for_history(room, HISTORY_OLDER, "BEFORE", before);
+	ask_for_history(room, HISTORY_OLDER, "BEFORE", before, count);
 }
 
 

@@ -8,6 +8,7 @@
 #define GROUP "chat"
 #define NOTIFICATION_OVERRIDES_GROUP "notification-overrides"
 #define BADGE_OVERRIDES_GROUP "badge-overrides"
+#define IGNORED_PEOPLE_GROUP "ignored-people"
 #define OVERRIDE_ON "on"
 #define OVERRIDE_OFF "off"
 
@@ -155,6 +156,8 @@ void load_settings(void) {
 	settings.notification_overrides = load_overrides(file, NOTIFICATION_OVERRIDES_GROUP);
 	g_clear_pointer(&settings.badge_overrides, g_ptr_array_unref);
 	settings.badge_overrides = load_overrides(file, BADGE_OVERRIDES_GROUP);
+	g_clear_pointer(&settings.ignored_people, g_ptr_array_unref);
+	settings.ignored_people = load_overrides(file, IGNORED_PEOPLE_GROUP);
 }
 
 
@@ -182,6 +185,7 @@ void save_settings(void) {
 	g_key_file_set_string(file, GROUP, "highlight-words", settings.highlight_words ? settings.highlight_words : "");
 	save_overrides(file, NOTIFICATION_OVERRIDES_GROUP, settings.notification_overrides);
 	save_overrides(file, BADGE_OVERRIDES_GROUP, settings.badge_overrides);
+	save_overrides(file, IGNORED_PEOPLE_GROUP, settings.ignored_people);
 	g_autofree char *path = get_config_file_path(SETTINGS_FILE);
 	save_key_file(file, path);
 }
@@ -217,6 +221,7 @@ Settings *copy_settings(const Settings *source) {
 	copy->highlight_words = g_strdup(source->highlight_words);
 	copy->notification_overrides = copy_overrides(source->notification_overrides);
 	copy->badge_overrides = copy_overrides(source->badge_overrides);
+	copy->ignored_people = copy_overrides(source->ignored_people);
 	return copy;
 }
 
@@ -227,6 +232,7 @@ void free_settings(Settings *copy) {
 	g_free(copy->highlight_words);
 	g_ptr_array_unref(copy->notification_overrides);
 	g_ptr_array_unref(copy->badge_overrides);
+	g_ptr_array_unref(copy->ignored_people);
 	g_free(copy);
 }
 
@@ -238,6 +244,7 @@ void use_settings(const Settings *chosen) {
 	g_free(settings.highlight_words);
 	g_ptr_array_unref(settings.notification_overrides);
 	g_ptr_array_unref(settings.badge_overrides);
+	g_ptr_array_unref(settings.ignored_people);
 	settings = *copy;
 	g_free(copy);
 	save_settings();

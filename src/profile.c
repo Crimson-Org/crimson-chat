@@ -6,6 +6,7 @@
 #include "images.h"
 #include "profile.h"
 #include "room-look.h"
+#include "room-settings.h"
 #include "wizards.h"
 #include "pictures.h"
 #include "uploads.h"
@@ -13,6 +14,7 @@
 #define PROFILE_WIDTH 400
 /* A person's profile opens at its full height, so it does not grow when the details arrive */
 #define PROFILE_HEIGHT 620
+#define TOPIC_LINES 6
 #define PROFILE_AVATAR_SIZE 96
 /* How many letters the pronouns and status lines under the user's own name make room for */
 #define PRONOUNS_WIDTH 16
@@ -62,7 +64,7 @@ static char *list_rooms(const char *channels) {
 	for (int index = 0; names[index]; index++) {
 		const char *name = names[index] + strspn(names[index], "~&@%+");
 		if (*name)
-			g_string_append_printf(list, "%s%s", list->len ? " " : "", name);
+			g_string_append_printf(list, "%s%s", list->len ? ", " : "", name);
 	}
 	return g_string_free(g_steal_pointer(&list), FALSE);
 }
@@ -75,6 +77,10 @@ static void add_row(ProfileView *view, const char *title, const char *value) {
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), value);
 	adw_action_row_set_subtitle_selectable(ADW_ACTION_ROW(row), TRUE);
+	/* A value stays on one line however long it grows, such as someone in hundreds of rooms, and shows whole when
+	 * pointed at */
+	adw_action_row_set_subtitle_lines(ADW_ACTION_ROW(row), 1);
+	gtk_widget_set_tooltip_text(row, value);
 	gtk_widget_add_css_class(row, "property");
 	gtk_list_box_append(GTK_LIST_BOX(view->rows), row);
 }
@@ -166,10 +172,6 @@ static void show_details(Profile *profile, gpointer data) {
 	add_row(view, TEXT_PROFILE_IDLE, idle);
 	g_autofree char *rooms = list_rooms(profile->channels);
 	add_row(view, TEXT_PROFILE_ROOMS, rooms);
-	g_autofree char *address = profile->user && profile->host ? g_strdup_printf("%s@%s", profile->user, profile->host)
-		: NULL;
-	add_row(view, TEXT_PROFILE_ADDRESS, address);
-	add_row(view, TEXT_PROFILE_SERVER, profile->server);
 	add_homepage_row(view, find_metadata(view->network->server_room, view->nick, "homepage"));
 	fill_person_metadata(view);
 	gtk_widget_set_visible(view->rows, gtk_widget_get_first_child(view->rows) != NULL);
@@ -234,6 +236,8 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	gtk_widget_set_halign(message, GTK_ALIGN_CENTER);
 	gtk_widget_set_margin_top(message, 8);
 	g_signal_connect(message, "clicked", G_CALLBACK(send_message), view);
+	IrcState *own_state = get_network_state(room->network);
+	gtk_widget_set_visible(message, !own_state || !is_own_nick(own_state, nick));
 	gtk_box_append(GTK_BOX(box), message);
 	view->stack = gtk_stack_new();
 	gtk_stack_set_vhomogeneous(GTK_STACK(view->stack), FALSE);
@@ -972,10 +976,43 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 
 
 typedef struct {
+	CrimsonRoom *room;
+	Window *window;
 	GCallback show_members;
 	gpointer data;
 	AdwDialog *dialog;
+	AdwNavigationView *pages;
 } RoomDetails;
+
+
+static void free_room_details(RoomDetails *details) {
+	g_object_unref(details->room);
+	g_free(details);
+}
+
+
+static void open_room_settings(AdwActionRow *row, RoomDetails *details) {
+	adw_navigation_view_push(details->pages, create_room_settings_page(details->room));
+}
+
+
+static void invite_from_details(AdwActionRow *row, RoomDetails *details) {
+	Window *window = details->window;
+	CrimsonRoom *room = g_object_ref(details->room);
+	adw_dialog_close(details->dialog);
+	show_room_invite_dialog(window, room);
+	g_object_unref(room);
+}
+
+
+static GtkWidget *create_page_row(const char *title, const char *icon, GCallback activated, RoomDetails *details) {
+	GtkWidget *row = adw_action_row_new();
+	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
+	adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name(icon));
+	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
+	g_signal_connect(row, "activated", activated, details);
+	return row;
+}
 
 
 static void show_room_members(GtkButton *button, RoomDetails *details) {
@@ -991,12 +1028,14 @@ static void leave_from_details(GtkButton *button, RoomDetails *details) {
 
 void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members, gpointer data) {
 	RoomDetails *details = g_new0(RoomDetails, 1);
+	details->room = g_object_ref(room);
+	details->window = window;
 	details->show_members = show_members;
 	details->data = data;
 	details->dialog = adw_dialog_new();
 	adw_dialog_set_content_width(details->dialog, PROFILE_WIDTH);
 	adw_dialog_set_content_height(details->dialog, PROFILE_HEIGHT);
-	g_object_set_data_full(G_OBJECT(details->dialog), "details", details, g_free);
+	g_object_set_data_full(G_OBJECT(details->dialog), "details", details, (GDestroyNotify)free_room_details);
 	IrcState *state = get_network_state(room->network);
 	IrcChannel *channel = state ? find_irc_channel(state, room->name) : NULL;
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
@@ -1023,6 +1062,10 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		gtk_label_set_markup(GTK_LABEL(text), markup);
 		ask_before_label_links(text);
 		gtk_label_set_wrap(GTK_LABEL(text), TRUE);
+		/* A topic of any length keeps the room's buttons in view, and shows whole when pointed at */
+		gtk_label_set_lines(GTK_LABEL(text), TOPIC_LINES);
+		gtk_label_set_ellipsize(GTK_LABEL(text), PANGO_ELLIPSIZE_END);
+		gtk_widget_set_tooltip_text(text, room->topic);
 		gtk_label_set_justify(GTK_LABEL(text), GTK_JUSTIFY_CENTER);
 		gtk_widget_set_margin_top(text, 6);
 		gtk_box_append(GTK_BOX(box), text);
@@ -1046,6 +1089,13 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		add_row(&rows_view, TEXT_TOPIC_SET_BY, by);
 	}
 	add_row(&rows_view, TEXT_PROFILE_SERVER, room->network->name);
+	/* Everyone sees how a joined room is set up, and its moderators change it there */
+	if (channel) {
+		gtk_list_box_append(GTK_LIST_BOX(rows), create_page_row(TEXT_INVITE_SOMEONE, "contact-new-symbolic",
+			G_CALLBACK(invite_from_details), details));
+		gtk_list_box_append(GTK_LIST_BOX(rows), create_page_row(TEXT_ROOM_SETTINGS, "go-next-symbolic",
+			G_CALLBACK(open_room_settings), details));
+	}
 	gtk_box_append(GTK_BOX(box), rows);
 	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
 	gtk_widget_add_css_class(leave, "pill");
@@ -1063,6 +1113,8 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
-	adw_dialog_set_child(details->dialog, toolbar);
+	details->pages = ADW_NAVIGATION_VIEW(adw_navigation_view_new());
+	adw_navigation_view_add(details->pages, adw_navigation_page_new(toolbar, title));
+	adw_dialog_set_child(details->dialog, GTK_WIDGET(details->pages));
 	adw_dialog_present(details->dialog, GTK_WIDGET(window->window));
 }

@@ -990,7 +990,7 @@ static char *read_upload_name(WebRequest *request) {
 }
 
 
-/* A file shared in a chat, by the standard upload of soju's file host extension */
+/* A file shared in a chat, sent as the body with its name in Content-Disposition and answered with its address */
 static void upload_file(WebAnswer *answer, WebRequest *request) {
 	if (!request->bouncer->files.is_enabled) {
 		answer_plainly(answer, 404, "This bouncer does not take files");

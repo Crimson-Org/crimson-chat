@@ -176,7 +176,8 @@ static char *describe_override(const RoomOverride *override) {
 
 static void show_overrides_hint(GtkWidget *group, GPtrArray *overrides) {
 	gboolean is_empty = overrides->len == 0;
-	adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), is_empty ? TEXT_OVERRIDES_EMPTY : NULL);
+	adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(group), is_empty
+		? g_object_get_data(G_OBJECT(group), "hint") : NULL);
 }
 
 
@@ -190,8 +191,17 @@ static void remove_override_row(GtkButton *button, GtkWidget *row) {
 
 
 /* Each room or chat set apart from the defaults, which a button returns to them once the form is saved */
-static void add_overrides(GtkWidget *page, GPtrArray *overrides, const char *restore) {
-	GtkWidget *group = add_group(page, TEXT_OVERRIDES_GROUP);
+/* The list of what is set apart from the defaults, where a list of people only names each one's server */
+typedef struct {
+	const char *title, *hint, *restore;
+	gboolean names_state;
+} OverrideList;
+
+
+static void add_overrides(GtkWidget *page, GPtrArray *overrides, const OverrideList *list) {
+	const char *restore = list->restore;
+	GtkWidget *group = add_group(page, list->title);
+	g_object_set_data(G_OBJECT(group), "hint", (gpointer)list->hint);
 	g_object_set_data(G_OBJECT(group), "overrides", overrides);
 	for (guint index = 0; index < overrides->len; index++) {
 		RoomOverride *override = g_ptr_array_index(overrides, index);
@@ -199,7 +209,8 @@ static void add_overrides(GtkWidget *page, GPtrArray *overrides, const char *res
 		keep_row_on_one_line(row);
 		adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
 		adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), override->room_name);
-		g_autofree char *description = describe_override(override);
+		g_autofree char *description = list->names_state ? describe_override(override)
+			: g_strdup(find_network_name(override->network_key));
 		adw_action_row_set_subtitle(ADW_ACTION_ROW(row), description);
 		g_object_set_data(G_OBJECT(row), "override", override);
 		GtkWidget *remove = gtk_button_new_from_icon_name("edit-delete-symbolic");
@@ -234,7 +245,8 @@ static void fill_notifications(GtkWidget *stack, Settings *settings) {
 		{TEXT_PLAY_SOUNDS, NULL, &settings->plays_sounds},
 	};
 	add_switches(sound, SOUND, G_N_ELEMENTS(SOUND));
-	add_overrides(page, settings->notification_overrides, TEXT_RESTORE_NOTIFICATIONS);
+	static const OverrideList ROOMS = {TEXT_OVERRIDES_GROUP, TEXT_OVERRIDES_EMPTY, TEXT_RESTORE_NOTIFICATIONS, TRUE};
+	add_overrides(page, settings->notification_overrides, &ROOMS);
 }
 
 
@@ -257,7 +269,8 @@ static void fill_badges(GtkWidget *stack, Settings *settings) {
 	adw_combo_row_set_selected(ADW_COMBO_ROW(tray), settings->tray_badge);
 	g_signal_connect(tray, "notify::selected", G_CALLBACK(change_tray_badge), &settings->tray_badge);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), tray);
-	add_overrides(page, settings->badge_overrides, TEXT_RESTORE_BADGES);
+	static const OverrideList ROOMS = {TEXT_OVERRIDES_GROUP, TEXT_OVERRIDES_EMPTY, TEXT_RESTORE_BADGES, TRUE};
+	add_overrides(page, settings->badge_overrides, &ROOMS);
 }
 
 
@@ -269,6 +282,8 @@ static void fill_privacy(GtkWidget *stack, Settings *settings) {
 		{TEXT_SEND_READ, TEXT_SEND_READ_DETAIL, &settings->sends_read_markers},
 	};
 	add_switches(group, PRIVACY, G_N_ELEMENTS(PRIVACY));
+	static const OverrideList PEOPLE = {TEXT_IGNORED_GROUP, TEXT_IGNORED_EMPTY, TEXT_STOP_IGNORING, FALSE};
+	add_overrides(page, settings->ignored_people, &PEOPLE);
 }
 
 

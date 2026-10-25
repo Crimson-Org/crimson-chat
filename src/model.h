@@ -60,6 +60,10 @@ struct _CrimsonMessage {
 	GHashTable *reactions;
 	GPtrArray *reaction_order;
 	gboolean is_own, is_pending, is_redacted, is_highlight, is_bot;
+	/* Why an own message never arrived, as the server put it in plain words, or NULL */
+	char *problem;
+	/* Whether the message glows for a moment after a search or a reply took the user to it */
+	gboolean is_spotlit;
 	/* Someone else joining, leaving, quitting, renaming or changing modes, kept always and shown by the setting */
 	gboolean is_membership;
 	/* The monotonic moment a live message arrived, or 0 for one loaded from history */
@@ -184,7 +188,11 @@ void end_room_batch(CrimsonRoom *room);
 CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id);
 /* An upload's card goes at the end of the room without becoming the room's latest line, and goes away once sent */
 void add_upload_message(CrimsonRoom *room, CrimsonMessage *message);
+/* Marks the user's messages still waiting in the room as not sent, for the reason in plain words */
+void fail_pending_messages(CrimsonRoom *room, const char *problem);
+void fail_pending_message(CrimsonMessage *message, const char *problem);
 void remove_room_message(CrimsonRoom *room, CrimsonMessage *message);
+/* The newest message the server has, with its own id and time, leaving out notes and messages still on their way */
 CrimsonMessage *get_last_message(CrimsonRoom *room);
 /* Counts the unread messages again after the read marker or the messages changed */
 void count_unread(CrimsonRoom *room);

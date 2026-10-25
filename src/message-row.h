@@ -9,6 +9,8 @@ typedef struct {
 	void (*reply)(CrimsonMessage *message, gpointer data);
 	void (*react)(CrimsonMessage *message, const char *reaction, gpointer data);
 	void (*remove)(CrimsonMessage *message, gpointer data);
+	/* Sends again a message the server never took */
+	void (*resend)(CrimsonMessage *message, gpointer data);
 	void (*show_message)(const char *message_id, gpointer data);
 	/* A click on a person's name or picture opens their profile, and a right click their menu */
 	void (*show_person)(const char *nick, gpointer data);

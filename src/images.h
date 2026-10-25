@@ -1,6 +1,7 @@
 #pragma once
 
 #include <adwaita.h>
+#include <libsoup/soup.h>
 
 /* An address that names an icon the app ships instead of a picture on the web */
 #define ICON_PICTURE_PREFIX "icon:"
@@ -11,5 +12,7 @@ typedef void (*ImageReady)(GObject *owner);
 GdkTexture *get_loaded_image(const char *url);
 /* Loads a picture and calls back with its owner once it is ready, unless the owner is gone by then */
 void preload_image(const char *url, ImageReady ready, GObject *owner);
+/* The web session pictures and link previews are fetched with, which names the app to the sites it asks */
+SoupSession *get_web_session(void);
 /* Replaces the {size} placeholder some avatar and icon addresses carry with a pixel size */
 char *fill_image_size(const char *url, int size);

@@ -13,6 +13,8 @@
 #define STRIKETHROUGH '\x1e'
 #define UNDERLINE '\x1f'
 #define RESET '\x0f'
+/* A spoiler is black text on black, the way IRC has always hidden text until it is selected */
+#define SPOILER_OPENING "\x03" "01,01"
 #define NAME_COLORS 8
 #define WEEK_DAYS 6
 /* The timer to midnight stops while the computer sleeps, so it also checks the date this often to catch a missed
@@ -245,7 +247,7 @@ static gboolean is_image_link(const char *link) {
 }
 
 
-GPtrArray *find_image_links(const char *text) {
+static GPtrArray *find_links(const char *text, gboolean wants_images) {
 	GPtrArray *links = g_ptr_array_new_with_free_func(g_free);
 	g_autofree char *plain = strip_irc_formatting(text);
 	GMatchInfo *match = NULL;
@@ -254,12 +256,22 @@ GPtrArray *find_image_links(const char *text) {
 		int start = 0, end = 0;
 		g_match_info_fetch_pos(match, 0, &start, &end);
 		g_autofree char *link = g_strndup(plain + start, trim_link(plain + start, (gsize)(end - start)));
-		if (g_str_has_prefix(link, "https://") && is_image_link(link))
+		if (g_str_has_prefix(link, "https://") && is_image_link(link) == wants_images)
 			g_ptr_array_add(links, g_steal_pointer(&link));
 		g_match_info_next(match, NULL);
 	}
 	g_match_info_free(match);
 	return links;
+}
+
+
+GPtrArray *find_image_links(const char *text) {
+	return find_links(text, TRUE);
+}
+
+
+GPtrArray *find_page_links(const char *text) {
+	return find_links(text, FALSE);
 }
 
 
@@ -440,6 +452,35 @@ static const char *find_closing_marker(const char *inner, char marker, gsize wid
 }
 
 
+/* Markers whose text goes out as written, with the codes that open and close it, longest marker first */
+static const struct {
+	const char *marker, *opening, *closing;
+} LITERAL_SPANS[] = {
+	{"```", "\x11", "\x11"},
+	{"`", "\x11", "\x11"},
+	{"||", SPOILER_OPENING, "\x03"},
+};
+
+
+/* Adds a code block, inline code or spoiler starting here, returning where the text after it begins or NULL */
+static const char *convert_literal_span(GString *converted, const char *position) {
+	for (guint index = 0; index < G_N_ELEMENTS(LITERAL_SPANS); index++) {
+		const char *marker = LITERAL_SPANS[index].marker;
+		if (!g_str_has_prefix(position, marker))
+			continue;
+		const char *inner = position + strlen(marker);
+		const char *close = strstr(inner, marker);
+		if (!close || close == inner)
+			return NULL;
+		g_string_append(converted, LITERAL_SPANS[index].opening);
+		g_string_append_len(converted, inner, close - inner);
+		g_string_append(converted, LITERAL_SPANS[index].closing);
+		return close + strlen(marker);
+	}
+	return NULL;
+}
+
+
 char *convert_markdown(const char *text) {
 	if (!text)
 		return NULL;
@@ -455,14 +496,20 @@ char *convert_markdown(const char *text) {
 			position = end;
 			continue;
 		}
+		const char *after_span = convert_literal_span(converted, position);
+		if (after_span) {
+			position = after_span;
+			continue;
+		}
 		char marker = *position;
-		if ((marker == '*' || marker == '_') && !is_word_before(text, position)) {
+		gboolean is_strike = marker == '~' && position[1] == '~';
+		if ((marker == '*' || marker == '_' || is_strike) && !is_word_before(text, position)) {
 			gsize width = position[1] == marker ? 2 : 1;
 			const char *inner = position + width;
 			const char *close = *inner && *inner != ' ' && *inner != marker
 				? find_closing_marker(inner, marker, width) : NULL;
 			if (close) {
-				char code = width == 2 ? BOLD : ITALIC;
+				char code = is_strike ? STRIKETHROUGH : width == 2 ? BOLD : ITALIC;
 				g_autofree char *middle = g_strndup(inner, (gsize)(close - inner));
 				g_autofree char *nested = convert_markdown(middle);
 				g_string_append_c(converted, code);
@@ -476,4 +523,25 @@ char *convert_markdown(const char *text) {
 		position++;
 	}
 	return g_string_free(converted, FALSE);
+}
+
+
+gboolean read_text_quote(const char *text, TextQuote *quote) {
+	if (!text || !g_str_has_prefix(text, ">\""))
+		return FALSE;
+	const char *start = text + 2;
+	const char *colon = strstr(start, ": ");
+	const char *close = colon ? strstr(colon + 2, "\" ") : NULL;
+	if (!colon || !close || colon == start || memchr(start, ' ', (size_t)(colon - start)))
+		return FALSE;
+	quote->sender = g_strndup(start, (gsize)(colon - start));
+	quote->excerpt = g_strndup(colon + 2, (gsize)(close - colon - 2));
+	quote->rest = close + 2;
+	return TRUE;
+}
+
+
+void clear_text_quote(TextQuote *quote) {
+	g_free(quote->sender);
+	g_free(quote->excerpt);
 }

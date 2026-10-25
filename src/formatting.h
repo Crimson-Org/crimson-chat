@@ -4,13 +4,24 @@
 
 /* Pango markup for a message, with bold, italics, underline, strikethrough, monospace, colours and links */
 char *format_irc_markup(const char *text);
-/* Markdown emphasis, **bold** or __bold__ and *italics* or _italics_, as the IRC codes every client shows; a marker
- * only counts at the edge of a word, so names like snake_case and web addresses stay as written */
+/* Markdown, **bold** or __bold__, *italics* or _italics_, ~~struck~~, `code`, ```blocks``` and ||spoilers||, as the
+ * IRC codes every client shows, with emphasis only at the edge of a word, so snake_case and addresses stay */
 char *convert_markdown(const char *text);
+/* Where a server strips reply tags, a reply starts with >"Name: the start of their message" and its own text, which
+ * shows as the same quote a tagged reply gets */
+typedef struct {
+	char *sender, *excerpt;
+	const char *rest;
+} TextQuote;
+
+gboolean read_text_quote(const char *text, TextQuote *quote);
+void clear_text_quote(TextQuote *quote);
 /* The text without formatting codes, for previews and notifications */
 char *strip_irc_formatting(const char *text);
 /* Addresses of pictures the text links to, which show as previews under the message */
 GPtrArray *find_image_links(const char *text);
+/* Addresses of web pages the text links to over HTTPS, which show a card with the page's title */
+GPtrArray *find_page_links(const char *text);
 
 /* A file someone shared, from a line such as "file: notes.txt (2.1 kB) https://example.com/notes.txt" */
 typedef struct {

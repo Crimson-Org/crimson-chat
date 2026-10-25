@@ -266,6 +266,11 @@ void add_upstream(BouncerUser *user, const NetworkRecord *record) {
 	Upstream *upstream = create_upstream(user, record);
 	g_ptr_array_add(user->upstreams, upstream);
 	announce_network(upstream, describe_upstream(upstream));
+	for (GList *item = user->bouncer->downstreams; item; item = item->next) {
+		Downstream *downstream = item->data;
+		if (downstream->user == user && downstream->is_registered)
+			welcome_network(downstream, upstream);
+	}
 	restart_upstream(upstream);
 }
 
@@ -275,12 +280,6 @@ void remove_upstream(Upstream *upstream) {
 	Bouncer *bouncer = user->bouncer;
 	upstream->is_removed = TRUE;
 	announce_network(upstream, NULL);
-	for (GList *item = bouncer->downstreams; item;) {
-		Downstream *downstream = item->data;
-		item = item->next;
-		if (downstream->upstream == upstream)
-			close_downstream(downstream);
-	}
 	delete_network(bouncer->database, upstream->record.id);
 	g_ptr_array_remove(user->upstreams, upstream);
 }
@@ -290,29 +289,42 @@ void announce_network(Upstream *upstream, GHashTable *attributes) {
 	g_autoptr(GHashTable) owned = attributes;
 	g_autofree char *network_id = g_strdup_printf("%" G_GINT64_FORMAT, upstream->record.id);
 	g_autofree char *text = attributes ? format_irc_attributes(attributes) : g_strdup("*");
-	g_autoptr(IrcMessage) message = create_irc_message("BOUNCER", "NETWORK", network_id, text, NULL);
+	g_autoptr(IrcMessage) message = create_irc_message("CRIMSON", "NETWORK", network_id, text, NULL);
 	message->source = g_strdup(BOUNCER_NAME);
 	for (GList *item = upstream->user->bouncer->downstreams; item; item = item->next) {
 		Downstream *downstream = item->data;
-		if (downstream->user == upstream->user && downstream->is_registered
-			&& has_downstream_cap(downstream, "soju.im/bouncer-networks-notify"))
-			send_to_downstream(downstream, message);
+		if (downstream->user == upstream->user && downstream->is_registered)
+			send_to_downstream(downstream, NULL, message);
+	}
+}
+
+
+void follow_user_presence(BouncerUser *user) {
+	gboolean is_present = FALSE;
+	for (GList *item = user->bouncer->downstreams; item && !is_present; item = item->next) {
+		Downstream *downstream = item->data;
+		is_present = downstream->user == user && downstream->is_registered;
+	}
+	for (guint index = 0; index < user->upstreams->len; index++) {
+		Upstream *upstream = g_ptr_array_index(user->upstreams, index);
+		IrcState *state = get_irc_client_state(upstream->client);
+		if (get_irc_client_status(upstream->client) != IRC_CLIENT_REGISTERED)
+			continue;
+		if (!is_present && !state->is_away) {
+			send_irc_client_command(upstream->client, "AWAY", ABSENT_MESSAGE, NULL);
+			upstream->is_away_for_absence = TRUE;
+			upstream->own_away_answers++;
+		} else if (is_present && upstream->is_away_for_absence) {
+			send_irc_client_command(upstream->client, "AWAY", NULL);
+			upstream->is_away_for_absence = FALSE;
+			upstream->own_away_answers++;
+		}
 	}
 }
 
 
 void forget_downstream(Bouncer *bouncer, Downstream *downstream) {
 	bouncer->downstreams = g_list_remove(bouncer->downstreams, downstream);
-	for (guint index = 0; index < bouncer->users->len; index++) {
-		BouncerUser *user = g_ptr_array_index(bouncer->users, index);
-		for (guint network = 0; network < user->upstreams->len; network++) {
-			Upstream *upstream = g_ptr_array_index(user->upstreams, network);
-			for (GList *item = upstream->pending_echoes.head; item; item = item->next) {
-				PendingEcho *echo = item->data;
-				/* An echo awaited for a client that left goes to everyone */
-				if (echo->origin == downstream)
-					echo->origin = NULL;
-			}
-		}
-	}
+	if (downstream->user && downstream->is_registered)
+		follow_user_presence(downstream->user);
 }

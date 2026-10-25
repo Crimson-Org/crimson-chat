@@ -3,27 +3,22 @@
 #include "bouncer.h"
 
 #define JOIN_LINE_BYTES 400
+#define CTCP_MARK '\001'
 
 /* Everything the bouncer can pass on or use, which the server grants where it supports it */
 static const char *const WANTED_CAPS[] = {
-	"message-tags", "server-time", "batch", "echo-message", "sasl", "cap-notify", "account-notify",
+	"message-tags", "server-time", "batch", "echo-message", "labeled-response", "sasl", "cap-notify", "account-notify",
 	"away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname", "invite-notify",
 	"account-tag", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "extended-monitor",
 	"sts", "draft/account-registration", NULL,
 };
 
-/* Replies the bouncer answers itself when a client binds, so the server's own copies stay with the bouncer */
-static const char *const KEPT_COMMANDS[] = {
-	"CAP", "AUTHENTICATE", "001", "002", "003", "004", "005", "250", "251", "252", "253", "254", "255", "265",
+/* The server's welcome, which the bouncer answers itself when an app logs in, so the server's own copies stay with
+ * the bouncer until the welcome ends, while later ones such as an asked for message of the day pass on */
+static const char *const WELCOME_COMMANDS[] = {
+	"001", "002", "003", "004", "005", "250", "251", "252", "253", "254", "255", "265",
 	"266", "372", "375", "376", "422", "902", "903", "904", "905", "906", "907", "908", NULL,
 };
-
-
-static void free_pending_echo(PendingEcho *echo) {
-	g_free(echo->command);
-	g_free(echo->target);
-	g_free(echo);
-}
 
 
 static void fill_client_settings(IrcClientSettings *settings, const NetworkRecord *record, const char *user_name) {
@@ -48,6 +43,16 @@ char *get_upstream_nick(Upstream *upstream) {
 		return g_strdup(state->nick);
 	const char *nick = upstream->record.nickname;
 	return g_strdup(nick && *nick ? nick : upstream->user->name);
+}
+
+
+static const char *describe_failure(IrcClient *client) {
+	switch (get_irc_client_failure(client)) {
+	case IRC_FAILURE_LOGIN: return "login";
+	case IRC_FAILURE_CERTIFICATE: return "certificate";
+	case IRC_FAILURE_NETWORK: return "network";
+	default: return "";
+	}
 }
 
 
@@ -82,16 +87,17 @@ GHashTable *describe_upstream(Upstream *upstream) {
 	if (upstream->client && get_irc_client_status(upstream->client) == IRC_CLIENT_DISCONNECTED) {
 		add_attribute(attributes, "error", upstream->error);
 		add_attribute(attributes, RETRY_ATTRIBUTE, will_irc_client_retry(upstream->client) ? "1" : "0");
+		add_attribute(attributes, FAILURE_ATTRIBUTE, describe_failure(upstream->client));
 	}
 	return attributes;
 }
 
 
-static void for_each_bound_downstream(Upstream *upstream, void (*function)(Downstream *, gpointer), gpointer data) {
+static void for_each_downstream(Upstream *upstream, void (*function)(Downstream *, gpointer), gpointer data) {
 	for (GList *item = upstream->user->bouncer->downstreams; item;) {
 		Downstream *downstream = item->data;
 		item = item->next;
-		if (downstream->upstream == upstream && downstream->is_registered)
+		if (downstream->user == upstream->user && downstream->is_registered)
 			function(downstream, data);
 	}
 }
@@ -127,41 +133,15 @@ static void join_saved_channels(Upstream *upstream) {
 }
 
 
-/* What the bouncer is doing with a network, in words, so a client's server messages say it plainly */
-char *describe_upstream_progress(Upstream *upstream) {
-	const char *host = upstream->record.host;
-	switch (get_irc_client_status(upstream->client)) {
-	case IRC_CLIENT_REGISTERED:
-		return g_strdup_printf("Connected to %s", host);
-	case IRC_CLIENT_CONNECTING:
-		return g_strdup_printf("Connecting to %s…", host);
-	default:
-		return g_strdup_printf("Disconnected from %s: %s. %s", host, upstream->error ? upstream->error
-			: "no reason given", will_irc_client_retry(upstream->client) ? "Trying again soon."
-			: "Not trying again until its login or settings change.");
-	}
-}
-
-
-static void tell_progress(Downstream *downstream, gpointer data) {
-	g_autofree char *text = describe_upstream_progress(downstream->upstream);
-	g_autoptr(IrcMessage) notice = create_irc_message("NOTICE", downstream->nick, text, NULL);
-	notice->source = g_strdup(BOUNCER_NAME);
-	send_to_downstream(downstream, notice);
-}
-
-
-/* Clients keep the nick and network details they were told, so a reconnect brings both up to date */
-static void tell_new_nick(Downstream *downstream, gpointer data) {
-	g_autofree char *nick = get_upstream_nick(downstream->upstream);
-	if (g_strcmp0(nick, downstream->nick) != 0) {
-		g_autoptr(IrcMessage) message = create_irc_message("NICK", nick, NULL);
-		message->source = g_strdup(downstream->nick);
-		send_to_downstream(downstream, message);
-		g_free(downstream->nick);
-		downstream->nick = g_steal_pointer(&nick);
-	}
-	send_support_tokens(downstream);
+/* Servers forget the user's display name, picture and the like when the connection ends, so the bouncer sets what
+ * the user last chose again on each connection */
+static void restore_own_profile(Upstream *upstream) {
+	g_autoptr(GHashTable) values = load_own_profile(upstream->user->bouncer->database, upstream->record.id);
+	GHashTableIter iterator;
+	gpointer key, value;
+	g_hash_table_iter_init(&iterator, values);
+	while (g_hash_table_iter_next(&iterator, &key, &value))
+		send_irc_client_command(upstream->client, "METADATA", "*", "SET", key, value, NULL);
 }
 
 
@@ -169,6 +149,7 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	Upstream *upstream = data;
 	if (upstream->is_removed)
 		return;
+	upstream->is_welcomed = FALSE;
 	g_free(upstream->error);
 	g_free(upstream->registering_account);
 	g_free(upstream->registering_password);
@@ -180,22 +161,26 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 	/* Whether the bouncer will try again by itself, so clients only say they reconnect when that is true */
 	g_hash_table_insert(attributes, g_strdup(RETRY_ATTRIBUTE), g_strdup(status != IRC_CLIENT_DISCONNECTED ? ""
 		: will_irc_client_retry(client) ? "1" : "0"));
+	g_hash_table_insert(attributes, g_strdup(FAILURE_ATTRIBUTE), g_strdup(status != IRC_CLIENT_DISCONNECTED ? ""
+		: describe_failure(client)));
 	announce_network(upstream, attributes);
 	gboolean is_final = status == IRC_CLIENT_DISCONNECTED && !will_irc_client_retry(client);
 	g_message("%s on %s is %s%s%s%s", upstream->user->name, upstream->record.host,
 		describe_upstream_state(upstream), reason ? ": " : "", reason ? reason : "",
 		is_final ? ", not retrying" : status == IRC_CLIENT_DISCONNECTED ? ", retrying" : "");
-	for_each_bound_downstream(upstream, tell_progress, NULL);
 	if (status == IRC_CLIENT_REGISTERED) {
 		/* The server sends a room's picture and its people's profiles on join only to a connection that follows
 		 * them, so the bouncer follows them itself before any client is there to ask */
-		if (has_irc_cap(get_irc_client_state(client), "draft/metadata-2"))
+		if (has_irc_cap(get_irc_client_state(client), "draft/metadata-2")) {
 			send_irc_client_command(client, "METADATA", "*", "SUB", FOLLOWED_PROFILE_KEYS, NULL);
+			restore_own_profile(upstream);
+		}
 		join_saved_channels(upstream);
-		for_each_bound_downstream(upstream, tell_new_nick, NULL);
-		for_each_bound_downstream(upstream, drop_missing_caps, NULL);
+		upstream->is_away_for_absence = FALSE;
+		upstream->own_away_answers = 0;
+		follow_user_presence(upstream->user);
 	} else if (status == IRC_CLIENT_DISCONNECTED) {
-		g_queue_clear_full(&upstream->pending_echoes, (GDestroyNotify)free_pending_echo);
+		g_hash_table_remove_all(upstream->answer_batches);
 	}
 }
 
@@ -209,6 +194,9 @@ static void remember_channel(Upstream *upstream, const IrcMessage *message) {
 		return;
 	g_autofree char *folded = fold_state_name(state, channel);
 	Database *database = upstream->user->bouncer->database;
+	/* A channel just joined is asked who its people are, which learns their accounts and who is away */
+	if (g_str_equal(message->command, "JOIN") && get_irc_support(state, "WHOX"))
+		send_irc_client_command(upstream->client, "WHO", channel, WHO_FIELDS, NULL);
 	if (g_str_equal(message->command, "JOIN"))
 		save_channel(database, upstream->record.id, channel, folded, g_hash_table_lookup(upstream->channel_keys,
 			folded));
@@ -223,44 +211,73 @@ static gboolean is_echoable(const char *command) {
 }
 
 
-/* The first awaited echo matching the message, which the server returns in the order it was sent */
-static Downstream *take_echo_origin(Upstream *upstream, const IrcMessage *message, gboolean *is_found) {
-	IrcState *state = get_irc_client_state(upstream->client);
-	for (GList *item = upstream->pending_echoes.head; item; item = item->next) {
-		PendingEcho *echo = item->data;
-		if (g_str_equal(echo->command, message->command)
-			&& are_irc_names_equal(state->casemap, echo->target, get_irc_parameter(message, 0))) {
-			Downstream *origin = echo->origin;
-			g_queue_delete_link(&upstream->pending_echoes, item);
-			free_pending_echo(echo);
-			*is_found = TRUE;
-			return origin;
-		}
+/* Where a labeled line goes, the device that asked with its own label, or none for a line for everyone */
+typedef struct {
+	Downstream *origin;
+	char *label;
+} Answer;
+
+
+static Downstream *find_downstream(Upstream *upstream, guint id) {
+	for (GList *item = upstream->user->bouncer->downstreams; item; item = item->next) {
+		Downstream *downstream = item->data;
+		if (downstream->id == id && downstream->user == upstream->user && downstream->is_registered)
+			return downstream;
 	}
-	*is_found = FALSE;
 	return NULL;
 }
 
 
-typedef struct {
-	IrcMessage *message;
-	Downstream *origin;
-	gboolean skips_origin;
-} Delivery;
-
-
-static void deliver(Downstream *downstream, gpointer data) {
-	Delivery *delivery = data;
-	/* A client without echo-message already shows what it sent */
-	if (delivery->skips_origin && downstream == delivery->origin && !has_downstream_cap(downstream, "echo-message"))
-		return;
-	send_to_downstream(downstream, delivery->message);
+/* A label the bouncer passed on starts with the asking device's number, as in 12.abc, which leads the answer back */
+static Answer read_answer(Upstream *upstream, const IrcMessage *message) {
+	const char *label = get_irc_tag(message, "label");
+	const char *batch = get_irc_tag(message, "batch");
+	if (!label && batch)
+		label = g_hash_table_lookup(upstream->answer_batches, batch);
+	const char *dot = label ? strchr(label, '.') : NULL;
+	if (!dot)
+		return (Answer){0};
+	Downstream *origin = find_downstream(upstream, (guint)g_ascii_strtoull(label, NULL, 10));
+	return (Answer){origin, origin && get_irc_tag(message, "label") ? g_strdup(dot + 1) : NULL};
 }
 
 
-static void relay_to_clients(Upstream *upstream, IrcMessage *message, Downstream *origin, gboolean skips_origin) {
-	Delivery delivery = {message, origin, skips_origin};
-	for_each_bound_downstream(upstream, deliver, &delivery);
+/* A batch the server opens in answer to a labeled line carries the label for every line inside it */
+static void follow_answer_batch(Upstream *upstream, const IrcMessage *message) {
+	const char *reference = get_irc_parameter(message, 0);
+	const char *label = get_irc_tag(message, "label");
+	if (!g_str_equal(message->command, "BATCH") || !reference)
+		return;
+	if (*reference == '+' && label)
+		g_hash_table_insert(upstream->answer_batches, g_strdup(reference + 1), g_strdup(label));
+}
+
+
+static void forget_answer_batch(Upstream *upstream, const IrcMessage *message) {
+	const char *reference = get_irc_parameter(message, 0);
+	if (g_str_equal(message->command, "BATCH") && reference && *reference == '-')
+		g_hash_table_remove(upstream->answer_batches, reference + 1);
+}
+
+
+/* An answer goes only to the device that asked, with its own label back, while an echo of what that device sent
+ * reaches the user's other devices too, without the label */
+static void relay_to_clients(Upstream *upstream, IrcMessage *message, const Answer *answer) {
+	g_autofree char *nick = get_source_nick(message->source);
+	gboolean is_echo = is_echoable(message->command) && is_own_nick(get_irc_client_state(upstream->client), nick);
+	if (answer->origin) {
+		g_autoptr(IrcMessage) labeled = copy_irc_message(message);
+		if (answer->label)
+			set_irc_tag(labeled, "label", answer->label);
+		send_to_downstream(answer->origin, upstream, labeled);
+	}
+	if (answer->origin && !is_echo)
+		return;
+	for (GList *item = upstream->user->bouncer->downstreams; item; item = item->next) {
+		Downstream *downstream = item->data;
+		if (downstream->user == upstream->user && downstream->is_registered && downstream != answer->origin)
+			send_to_downstream(downstream, upstream, message);
+	}
 }
 
 
@@ -285,10 +302,67 @@ static void keep_new_login(Upstream *upstream, const IrcMessage *message) {
 }
 
 
+/* Whether the message is a client query or its answer, such as VERSION, rather than a /me action */
+static gboolean is_ctcp_query(const IrcMessage *message) {
+	const char *text = get_last_irc_parameter(message);
+	gboolean is_text = g_str_equal(message->command, "PRIVMSG") || g_str_equal(message->command, "NOTICE");
+	return is_text && text && *text == CTCP_MARK && g_ascii_strncasecmp(text + 1, "ACTION ", 7) != 0;
+}
+
+
+/* The bouncer answers client queries itself, once for all of the user's devices and while none is connected */
+static void answer_ctcp(Upstream *upstream, const IrcMessage *message) {
+	g_autofree char *sender = get_source_nick(message->source);
+	g_autofree char *request = g_strdup(get_last_irc_parameter(message) + 1);
+	char *end = strchr(request, CTCP_MARK);
+	if (end)
+		*end = '\0';
+	g_autofree char *answer = NULL;
+	if (g_ascii_strncasecmp(request, "VERSION", 7) == 0)
+		answer = g_strdup_printf("VERSION Crimson Chat %s", APPLICATION_VERSION);
+	else if (g_ascii_strncasecmp(request, "PING", 4) == 0)
+		answer = g_strdup(request);
+	else if (g_ascii_strncasecmp(request, "TIME", 4) == 0) {
+		g_autoptr(GDateTime) now = g_date_time_new_now_local();
+		g_autofree char *moment = g_date_time_format(now, "%a %b %d %H:%M:%S %Y");
+		answer = g_strdup_printf("TIME %s", moment);
+	}
+	else if (g_ascii_strncasecmp(request, "CLIENTINFO", 10) == 0)
+		answer = g_strdup("CLIENTINFO ACTION CLIENTINFO PING TIME VERSION");
+	if (!answer || !g_str_equal(message->command, "PRIVMSG"))
+		return;
+	g_autofree char *line = g_strdup_printf("%c%s%c", CTCP_MARK, answer, CTCP_MARK);
+	send_irc_client_command(upstream->client, "NOTICE", sender, line, NULL);
+}
+
+
 static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArray *affected, gpointer data) {
 	Upstream *upstream = data;
-	if (g_strv_contains(KEPT_COMMANDS, message->command))
+	if (is_ctcp_query(message)) {
+		answer_ctcp(upstream, message);
 		return;
+	}
+	/* Capability and login lines belong to the bouncer's own connection, though the apps hear when the network's
+	 * capabilities change later */
+	const char *change = g_str_equal(message->command, "CAP") ? get_irc_parameter(message, 1) : NULL;
+	if (upstream->is_welcomed && (g_strcmp0(change, "ACK") == 0 || g_strcmp0(change, "DEL") == 0))
+		for_each_downstream(upstream, send_network_caps, upstream);
+	if (g_str_equal(message->command, "CAP") || g_str_equal(message->command, "AUTHENTICATE"))
+		return;
+	/* The end of the message of the day closes the server's welcome, after its details have all arrived */
+	gboolean is_welcome_end = g_str_equal(message->command, "376") || g_str_equal(message->command, "422");
+	if (!upstream->is_welcomed && is_welcome_end) {
+		upstream->is_welcomed = TRUE;
+		for_each_downstream(upstream, welcome_network, upstream);
+		return;
+	}
+	if (!upstream->is_welcomed && g_strv_contains(WELCOME_COMMANDS, message->command))
+		return;
+	gboolean is_away_answer = g_str_equal(message->command, "305") || g_str_equal(message->command, "306");
+	if (is_away_answer && upstream->own_away_answers) {
+		upstream->own_away_answers--;
+		return;
+	}
 	const char *command = message->command;
 	keep_new_login(upstream, message);
 	if (g_str_equal(command, "JOIN") || g_str_equal(command, "PART") || g_str_equal(command, "KICK"))
@@ -298,13 +372,13 @@ static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArr
 		g_autofree char *now = format_irc_time_now();
 		set_irc_tag(copy, "time", now);
 	}
-	Downstream *origin = NULL;
-	gboolean is_echo = FALSE;
-	g_autofree char *nick = get_source_nick(copy->source);
-	if (is_echoable(command) && is_own_nick(get_irc_client_state(client), nick))
-		origin = take_echo_origin(upstream, copy, &is_echo);
+	follow_answer_batch(upstream, copy);
+	Answer answer = read_answer(upstream, copy);
+	g_hash_table_remove(copy->tags, "label");
 	store_upstream_message(upstream, copy, affected);
-	relay_to_clients(upstream, copy, origin, is_echo);
+	relay_to_clients(upstream, copy, &answer);
+	forget_answer_batch(upstream, copy);
+	g_free(answer.label);
 }
 
 
@@ -312,7 +386,7 @@ Upstream *create_upstream(BouncerUser *user, const NetworkRecord *record) {
 	Upstream *upstream = g_new0(Upstream, 1);
 	upstream->user = user;
 	copy_network_record(&upstream->record, record);
-	g_queue_init(&upstream->pending_echoes);
+	upstream->answer_batches = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	upstream->channel_keys = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	IrcClientSettings settings;
 	fill_client_settings(&settings, record, user->name);
@@ -326,7 +400,7 @@ void free_upstream(Upstream *upstream) {
 	disconnect_irc_client(upstream->client, NULL);
 	free_irc_client(upstream->client);
 	clear_network_record(&upstream->record);
-	g_queue_clear_full(&upstream->pending_echoes, (GDestroyNotify)free_pending_echo);
+	g_hash_table_unref(upstream->answer_batches);
 	g_hash_table_unref(upstream->channel_keys);
 	g_free(upstream->error);
 	g_free(upstream);
@@ -386,8 +460,9 @@ static void save_requested_nick(Upstream *upstream, const char *nick) {
 }
 
 
-/* A server without echo-message never repeats what was sent, so the bouncer makes the copy other clients see */
-static void echo_locally(Upstream *upstream, Downstream *origin, const IrcMessage *sent) {
+/* A server without echo-message never repeats what was sent, so the bouncer makes the copy every device sees, with
+ * the label of the device that sent it */
+static void echo_locally(Upstream *upstream, Downstream *origin, const IrcMessage *sent, const char *label) {
 	IrcState *state = get_irc_client_state(upstream->client);
 	g_autoptr(IrcMessage) echo = copy_irc_message(sent);
 	g_autofree char *nick = get_upstream_nick(upstream);
@@ -399,7 +474,9 @@ static void echo_locally(Upstream *upstream, Downstream *origin, const IrcMessag
 	set_irc_tag(echo, "time", now);
 	set_irc_tag(echo, "msgid", message_id);
 	store_upstream_message(upstream, echo, NULL);
-	relay_to_clients(upstream, echo, origin, TRUE);
+	Answer answer = {origin, g_strdup(label)};
+	relay_to_clients(upstream, echo, &answer);
+	g_free(answer.label);
 }
 
 
@@ -411,6 +488,12 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 	g_autoptr(IrcMessage) copy = copy_irc_message(message);
 	g_clear_pointer(&copy->source, g_free);
 	keep_client_tags(state, copy);
+	/* The label goes up with the device's number before it, so the answer finds its way back to that device */
+	const char *label = get_irc_tag(message, "label");
+	if (label && has_irc_cap(state, "labeled-response")) {
+		g_autofree char *routed = g_strdup_printf("%u.%s", origin->id, label);
+		set_irc_tag(copy, "label", routed);
+	}
 	if (g_str_equal(command, "REGISTER") && get_irc_parameter(copy, 2)) {
 		const char *account = get_irc_parameter(copy, 0);
 		g_free(upstream->registering_account);
@@ -418,6 +501,10 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 		upstream->registering_account = g_str_equal(account, "*") ? get_upstream_nick(upstream) : g_strdup(account);
 		upstream->registering_password = g_strdup(get_irc_parameter(copy, 2));
 	}
+	if (g_str_equal(command, "METADATA") && g_strcmp0(get_irc_parameter(copy, 0), "*") == 0
+		&& g_strcmp0(get_irc_parameter(copy, 1), "SET") == 0 && get_irc_parameter(copy, 2))
+		save_own_profile_value(upstream->user->bouncer->database, upstream->record.id, get_irc_parameter(copy, 2),
+			get_irc_parameter(copy, 3));
 	if (g_str_equal(command, "JOIN"))
 		note_requested_join(upstream, copy);
 	else if (g_str_equal(command, "NICK"))
@@ -427,12 +514,7 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 		!= IRC_CLIENT_REGISTERED)
 		return;
 	if (!has_irc_cap(state, "echo-message")) {
-		echo_locally(upstream, origin, copy);
-		return;
+		g_hash_table_remove(copy->tags, "label");
+		echo_locally(upstream, origin, copy, label);
 	}
-	PendingEcho *echo = g_new0(PendingEcho, 1);
-	echo->origin = origin;
-	echo->command = g_strdup(command);
-	echo->target = g_strdup(get_irc_parameter(copy, 0));
-	g_queue_push_tail(&upstream->pending_echoes, echo);
 }

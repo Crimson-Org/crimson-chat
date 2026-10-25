@@ -95,6 +95,15 @@ gboolean find_history_message(Database *database, gint64 network_id, const char 
 GPtrArray *query_history_targets(Database *database, gint64 network_id, const char *from, const char *to,
 	int limit);
 void free_history_target(HistoryTarget *target);
+/* Lines of messages people wrote that hold the words anywhere, newest first, from one conversation or from all of
+ * the network's when folded is NULL, looking through at most the scanned count of candidates */
+GPtrArray *search_history(Database *database, gint64 network_id, const char *folded, const char *words, int scanned);
 
 char *load_read_marker(Database *database, gint64 network_id, const char *folded);
 void save_read_marker(Database *database, gint64 network_id, const char *folded, const char *time);
+/* The user's own profile keys on a network, such as their display name, which servers forget on disconnect, and
+ * NULL as the value takes a key away */
+void save_own_profile_value(Database *database, gint64 network_id, const char *key, const char *value);
+GHashTable *load_own_profile(Database *database, gint64 network_id);
+/* Every read marker of a network, as folded names to times */
+GHashTable *load_read_markers(Database *database, gint64 network_id);

@@ -328,6 +328,12 @@ static void open_row_menu(GtkGestureClick *gesture, int presses, double x, doubl
 		add_notifications_item(items, pages, popover, room);
 		add_badges_item(items, popover, room);
 	}
+	if (room->kind == ROOM_PRIVATE) {
+		gboolean is_ignored = find_room_override(get_settings()->ignored_people, room->network->key, room->name)
+			!= NULL;
+		set_room_action(add_menu_item(items, popover, is_ignored ? TEXT_STOP_IGNORING : TEXT_IGNORE, "plain-item"),
+			"win.ignore-person", room);
+	}
 	if (room->unread_count && shows_room_badge(room))
 		set_room_action(add_menu_item(items, popover, TEXT_MARK_READ, "plain-item"), "win.mark-read", room);
 	/* Leaving cannot be undone from here, so the item is red */

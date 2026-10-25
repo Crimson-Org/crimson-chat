@@ -30,6 +30,9 @@ static void free_channel(IrcChannel *channel) {
 	g_free(channel->topic_setter);
 	g_hash_table_unref(channel->members);
 	g_hash_table_unref(channel->metadata);
+	g_hash_table_unref(channel->modes);
+	g_hash_table_unref(channel->lists);
+	g_string_free(channel->listing, TRUE);
 	g_free(channel);
 }
 
@@ -284,6 +287,9 @@ static void join_channel(IrcState *state, const IrcMessage *message, IrcUser *us
 		channel->name = g_strdup(name);
 		channel->members = create_value_table();
 		channel->metadata = create_value_table();
+		channel->modes = create_value_table();
+		channel->lists = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_ptr_array_unref);
+		channel->listing = g_string_new(NULL);
 		channel->has_complete_names = TRUE;
 		g_hash_table_insert(state->channels, g_strdup(folded), channel);
 	}
@@ -446,23 +452,136 @@ static gboolean takes_mode_parameter(IrcState *state, char mode, gboolean is_add
 }
 
 
-static void apply_channel_mode(IrcState *state, const IrcMessage *message) {
-	IrcChannel *channel = find_irc_channel(state, get_irc_parameter(message, 0));
-	const char *modes = get_irc_parameter(message, 1);
-	if (!channel || !modes)
+gboolean is_irc_channel_moderator(IrcState *state, IrcChannel *channel) {
+	g_autofree char *own = fold_state_name(state, state->nick);
+	const char *symbols = g_hash_table_lookup(channel->members, own);
+	return symbols && strpbrk(symbols, "~&@%");
+}
+
+
+static void free_list_entry(IrcListEntry *entry) {
+	g_free(entry->mask);
+	g_free(entry->setter);
+	g_free(entry);
+}
+
+
+static GPtrArray *find_list(IrcChannel *channel, char letter, gboolean is_created) {
+	char key[2] = {letter, '\0'};
+	GPtrArray *entries = g_hash_table_lookup(channel->lists, key);
+	if (!entries && is_created) {
+		entries = g_ptr_array_new_with_free_func((GDestroyNotify)free_list_entry);
+		g_hash_table_insert(channel->lists, g_strdup(key), entries);
+	}
+	return entries;
+}
+
+
+static void add_list_entry(GPtrArray *entries, const char *mask, const char *setter, gint64 time) {
+	IrcListEntry *entry = g_new0(IrcListEntry, 1);
+	entry->mask = g_strdup(mask);
+	entry->setter = g_strdup(setter);
+	entry->time = time;
+	g_ptr_array_add(entries, entry);
+}
+
+
+/* A mask set or lifted live changes a list the app already has, which the server answered before */
+static void change_list(IrcChannel *channel, const IrcModeChange *change, const char *setter) {
+	GPtrArray *entries = find_list(channel, change->letter, FALSE);
+	if (!entries || !change->parameter)
 		return;
-	guint next_parameter = 2;
+	for (guint index = 0; index < entries->len; index++) {
+		if (g_strcmp0(((IrcListEntry *)g_ptr_array_index(entries, index))->mask, change->parameter) == 0) {
+			g_ptr_array_remove_index(entries, index);
+			break;
+		}
+	}
+	if (change->is_adding)
+		add_list_entry(entries, change->parameter, setter, g_get_real_time() / G_USEC_PER_SEC);
+}
+
+
+/* Ban, invite and exception lists arrive an entry at a time, and the first one replaces the list the app had */
+static void read_list_reply(IrcState *state, const IrcMessage *message, char letter, gboolean is_end) {
+	IrcChannel *channel = find_irc_channel(state, get_irc_parameter(message, 1));
+	if (!channel)
+		return;
+	gboolean is_arriving = strchr(channel->listing->str, letter) != NULL;
+	if (is_end) {
+		find_list(channel, letter, TRUE);
+		if (is_arriving)
+			g_string_erase(channel->listing, strchr(channel->listing->str, letter) - channel->listing->str, 1);
+		return;
+	}
+	GPtrArray *entries = find_list(channel, letter, TRUE);
+	if (!is_arriving) {
+		g_ptr_array_set_size(entries, 0);
+		g_string_append_c(channel->listing, letter);
+	}
+	const char *time = get_irc_parameter(message, 4);
+	add_list_entry(entries, get_irc_parameter(message, 2), get_irc_parameter(message, 3),
+		time ? g_ascii_strtoll(time, NULL, 10) : 0);
+}
+
+
+static void free_mode_change(IrcModeChange *change) {
+	g_free(change->parameter);
+	g_free(change);
+}
+
+
+GPtrArray *read_irc_mode_changes(IrcState *state, const IrcMessage *message, guint first) {
+	GPtrArray *changes = g_ptr_array_new_with_free_func((GDestroyNotify)free_mode_change);
+	const char *modes = get_irc_parameter(message, first);
+	guint next_parameter = first + 1;
 	gboolean is_adding = TRUE;
-	for (const char *mode = modes; *mode; mode++) {
+	for (const char *mode = modes ? modes : ""; *mode; mode++) {
 		if (*mode == '+' || *mode == '-') {
 			is_adding = *mode == '+';
 			continue;
 		}
-		if (!takes_mode_parameter(state, *mode, is_adding))
+		IrcModeChange *change = g_new0(IrcModeChange, 1);
+		change->letter = *mode;
+		change->is_adding = is_adding;
+		if (takes_mode_parameter(state, *mode, is_adding))
+			change->parameter = g_strdup(get_irc_parameter(message, next_parameter++));
+		g_ptr_array_add(changes, change);
+	}
+	return changes;
+}
+
+
+gboolean is_irc_list_mode(IrcState *state, char letter) {
+	return strchr(state->list_modes, letter) || strchr(state->prefix_modes, letter);
+}
+
+
+/* MODE changes settings and member status, and RPL_CHANNELMODEIS lists every setting the channel has */
+static void apply_channel_mode(IrcState *state, const IrcMessage *message) {
+	gboolean is_listing = g_str_equal(message->command, "324");
+	guint first = is_listing ? 2 : 1;
+	IrcChannel *channel = find_irc_channel(state, get_irc_parameter(message, first - 1));
+	if (!channel)
+		return;
+	if (is_listing)
+		g_hash_table_remove_all(channel->modes);
+	g_autoptr(GPtrArray) changes = read_irc_mode_changes(state, message, first);
+	for (guint index = 0; index < changes->len; index++) {
+		IrcModeChange *change = g_ptr_array_index(changes, index);
+		if (strchr(state->prefix_modes, change->letter) && change->parameter)
+			change_member_status(state, channel, change->parameter, change->letter, change->is_adding);
+		if (strchr(state->list_modes, change->letter) && !is_listing) {
+			g_autofree char *setter = get_source_nick(message->source);
+			change_list(channel, change, setter);
+		}
+		if (is_irc_list_mode(state, change->letter))
 			continue;
-		const char *parameter = get_irc_parameter(message, next_parameter++);
-		if (parameter && strchr(state->prefix_modes, *mode))
-			change_member_status(state, channel, parameter, *mode, is_adding);
+		char key[2] = {change->letter, '\0'};
+		if (change->is_adding)
+			g_hash_table_insert(channel->modes, g_strdup(key), g_strdup(change->parameter ? change->parameter : ""));
+		else
+			g_hash_table_remove(channel->modes, key);
 	}
 }
 
@@ -554,6 +673,32 @@ static void update_registration(IrcState *state, const IrcMessage *message) {
 }
 
 
+/* WHO answers what a channel's people are, the extended form with their account, and the flags say who is away */
+static void read_who_reply(IrcState *state, const IrcMessage *message) {
+	gboolean is_extended = g_str_equal(message->command, "354");
+	if (is_extended && g_strcmp0(get_irc_parameter(message, 1), WHO_TOKEN) != 0)
+		return;
+	/* Both forms put the nick and flags at the same place, and the extended one has the token before the user */
+	const char *user_name = get_irc_parameter(message, is_extended ? 3 : 2);
+	const char *host = get_irc_parameter(message, is_extended ? 4 : 3);
+	const char *nick = get_irc_parameter(message, 5);
+	const char *flags = get_irc_parameter(message, 6);
+	if (!nick || !flags)
+		return;
+	IrcUser *user = ensure_user(state, nick);
+	g_free(user->user);
+	user->user = g_strdup(user_name);
+	g_free(user->host);
+	user->host = g_strdup(host);
+	user->is_away = strchr(flags, 'G') != NULL;
+	const char *account = is_extended ? get_irc_parameter(message, 7) : NULL;
+	if (account) {
+		g_free(user->account);
+		user->account = g_str_equal(account, "0") ? NULL : g_strdup(account);
+	}
+}
+
+
 static void update_user_details(IrcState *state, const IrcMessage *message, IrcUser *sender) {
 	const char *command = message->command;
 	const char *first = get_irc_parameter(message, 0);
@@ -604,8 +749,14 @@ static void update_membership(IrcState *state, const IrcMessage *message, IrcUse
 		IrcChannel *channel = find_irc_channel(state, get_irc_parameter(message, 1));
 		if (channel)
 			channel->has_complete_names = TRUE;
-	} else if (g_str_equal(command, "MODE"))
+	} else if (g_str_equal(command, "MODE") || g_str_equal(command, "324"))
 		apply_channel_mode(state, message);
+	else if (g_str_equal(command, "367") || g_str_equal(command, "368"))
+		read_list_reply(state, message, 'b', g_str_equal(command, "368"));
+	else if (g_str_equal(command, "348") || g_str_equal(command, "349"))
+		read_list_reply(state, message, 'e', g_str_equal(command, "349"));
+	else if (g_str_equal(command, "346") || g_str_equal(command, "347"))
+		read_list_reply(state, message, 'I', g_str_equal(command, "347"));
 	else if (g_str_equal(command, "RENAME"))
 		rename_channel(state, get_irc_parameter(message, 0), get_irc_parameter(message, 1));
 }
@@ -621,4 +772,6 @@ void update_irc_state(IrcState *state, const IrcMessage *message, GPtrArray *aff
 	update_user_details(state, message, sender);
 	update_metadata(state, message);
 	update_membership(state, message, sender, affected);
+	if (g_str_equal(command, "352") || g_str_equal(command, "354"))
+		read_who_reply(state, message);
 }

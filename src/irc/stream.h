@@ -22,5 +22,8 @@ void send_irc_message(IrcStream *stream, const IrcMessage *message);
 void send_irc_command(IrcStream *stream, const char *command, ...) G_GNUC_NULL_TERMINATED;
 /* Writes what is still queued, then closes the connection and releases the stream */
 void close_irc_stream(IrcStream *stream);
+/* Asks the peer for an answer at once and gives the connection up if none comes soon, as after the computer woke
+ * or changed networks */
+void probe_irc_stream(IrcStream *stream);
 
 GIOStream *get_irc_stream_connection(IrcStream *stream);

@@ -59,6 +59,12 @@ static void ensure_tables(void) {
 }
 
 
+SoupSession *get_web_session(void) {
+	ensure_tables();
+	return web;
+}
+
+
 /* Kept pictures are named by a checksum of their address, which changes whenever a bouncer stores a new one */
 static char *build_cache_path(const char *url, const char *suffix) {
 	g_autofree char *name = g_compute_checksum_for_string(G_CHECKSUM_SHA256, url, -1);

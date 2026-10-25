@@ -4,6 +4,7 @@
 #include "dialogs.h"
 #include "formatting.h"
 #include "images.h"
+#include "link-previews.h"
 #include "message-row.h"
 #include "room-look.h"
 #include "session.h"
@@ -14,6 +15,9 @@
 #define TEXT_WIDTH_CHARS 62
 #define PREVIEW_WIDTH 320
 #define PREVIEW_HEIGHT 220
+#define LINK_PICTURE_HEIGHT 140
+#define LINK_TITLE_LINES 2
+#define LINK_DESCRIPTION_LINES 3
 #define REPLY_SNIPPET_CHARS 80
 #define PERSON_KEY "person"
 #define AVATAR_SLOT_KEY "avatar-slot"
@@ -122,6 +126,8 @@ static void run_menu_action(GtkButton *button, RowContext *context) {
 		gdk_clipboard_set_text(gtk_widget_get_clipboard(context->bubble), plain);
 	} else if (g_str_equal(name, "delete")) {
 		context->actions->remove(context->message, context->actions->data);
+	} else if (g_str_equal(name, "resend")) {
+		context->actions->resend(context->message, context->actions->data);
 	}
 }
 
@@ -186,10 +192,15 @@ static void open_message_menu(RowContext *context, double x, double y) {
 		gtk_box_append(GTK_BOX(box), create_reaction_strip(context));
 		gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
 	}
-	if (room && room->kind != ROOM_SERVER)
+	/* A message the server never took can only go again or go away, and only from this device */
+	if (message->problem)
+		gtk_box_append(GTK_BOX(box), create_menu_button(TEXT_SEND_AGAIN, "view-refresh-symbolic", "resend", context));
+	if (room && room->kind != ROOM_SERVER && !message->problem)
 		gtk_box_append(GTK_BOX(box), create_menu_button(TEXT_REPLY, "mail-reply-sender-symbolic", "reply", context));
 	gtk_box_append(GTK_BOX(box), create_menu_button(TEXT_COPY_TEXT, "edit-copy-symbolic", "copy", context));
-	if (message->id && room && can_network(room->network, "draft/message-redaction") && !message->is_redacted)
+	gboolean can_delete = message->problem || (message->id && room && can_network(room->network,
+		"draft/message-redaction") && !message->is_redacted);
+	if (can_delete)
 		gtk_box_append(GTK_BOX(box), create_menu_button(TEXT_DELETE, "user-trash-symbolic", "delete", context));
 	gtk_popover_set_child(GTK_POPOVER(popover), box);
 	gtk_widget_set_parent(popover, context->bubble);
@@ -234,42 +245,41 @@ static void add_menu_gestures(GtkWidget *bubble, RowContext *context) {
 
 
 static void show_replied_message(GtkGestureClick *gesture, int presses, double x, double y, RowContext *context) {
-	context->actions->show_message(context->message->reply_to, context->actions->data);
+	const char *id = g_object_get_data(G_OBJECT(gesture), "message-id");
+	context->actions->show_message(id, context->actions->data);
 }
 
 
-/* Where a server strips reply tags, a reply starts with >"Name: the start of their message" and its own text, which
- * shows as the same quote a tagged reply gets */
-typedef struct {
-	char *sender, *excerpt;
-	const char *rest;
-} TextQuote;
-
-
-static gboolean read_text_quote(const char *text, TextQuote *quote) {
-	if (!text || !g_str_has_prefix(text, ">\""))
-		return FALSE;
-	const char *start = text + 2;
-	const char *colon = strstr(start, ": ");
-	const char *close = colon ? strstr(colon + 2, "\" ") : NULL;
-	if (!colon || !close || colon == start || memchr(start, ' ', (size_t)(colon - start)))
-		return FALSE;
-	quote->sender = g_strndup(start, (gsize)(colon - start));
-	quote->excerpt = g_strndup(colon + 2, (gsize)(close - colon - 2));
-	quote->rest = close + 2;
-	return TRUE;
-}
-
-
-static void clear_text_quote(TextQuote *quote) {
-	g_free(quote->sender);
-	g_free(quote->excerpt);
+/* The message a text quote names, the latest one before the reply from that person that starts the same way */
+static CrimsonMessage *find_quoted_message(CrimsonRoom *room, CrimsonMessage *reply, const TextQuote *quote) {
+	g_autofree char *excerpt = g_strdup(quote->excerpt);
+	if (g_str_has_suffix(excerpt, "…"))
+		excerpt[strlen(excerpt) - strlen("…")] = '\0';
+	else if (g_str_has_suffix(excerpt, "..."))
+		excerpt[strlen(excerpt) - 3] = '\0';
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
+	gboolean is_before = FALSE;
+	for (guint index = count; index-- > 0;) {
+		g_autoptr(CrimsonMessage) candidate = g_list_model_get_item(G_LIST_MODEL(room->messages), index);
+		if (candidate == reply) {
+			is_before = TRUE;
+			continue;
+		}
+		if (!is_before || !candidate->sender || !candidate->id || g_ascii_strcasecmp(candidate->sender, quote->sender))
+			continue;
+		g_autofree char *plain = strip_irc_formatting(candidate->text);
+		if (g_str_has_prefix(plain, excerpt))
+			return candidate;
+	}
+	return NULL;
 }
 
 
 static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room, RowContext *context,
 	TextQuote *text_quote) {
-	CrimsonMessage *original = message->reply_to ? find_room_message(room, message->reply_to) : NULL;
+	CrimsonMessage *original = message->reply_to ? find_room_message(room, message->reply_to) : text_quote
+		? find_quoted_message(room, message, text_quote) : NULL;
+	const char *target = message->reply_to ? message->reply_to : original ? original->id : NULL;
 	const char *sender = text_quote ? text_quote->sender : original ? original->sender : NULL;
 	GtkWidget *quote = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(quote, "reply-quote");
@@ -290,9 +300,10 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 	gtk_widget_add_css_class(snippet, "reply-snippet");
 	gtk_box_append(GTK_BOX(quote), name);
 	gtk_box_append(GTK_BOX(quote), snippet);
-	if (!message->reply_to)
+	if (!target)
 		return quote;
 	GtkGesture *click = gtk_gesture_click_new();
+	g_object_set_data_full(G_OBJECT(click), "message-id", g_strdup(target), g_free);
 	g_signal_connect(click, "released", G_CALLBACK(show_replied_message), context);
 	gtk_widget_add_controller(quote, GTK_EVENT_CONTROLLER(click));
 	gtk_widget_set_cursor_from_name(quote, "pointer");
@@ -371,6 +382,51 @@ static GtkWidget *create_preview(const char *url, GdkTexture *texture) {
 }
 
 
+static GtkWidget *create_card_label(const char *text, const char *css_class, int lines) {
+	GtkWidget *label = gtk_label_new(text);
+	gtk_label_set_xalign(GTK_LABEL(label), 0);
+	gtk_label_set_wrap(GTK_LABEL(label), TRUE);
+	gtk_label_set_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+	gtk_label_set_lines(GTK_LABEL(label), lines);
+	gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+	gtk_widget_add_css_class(label, css_class);
+	return label;
+}
+
+
+/* A linked page shows its site, title, description and picture, and opens like the link itself */
+static GtkWidget *create_link_card(CrimsonMessage *message, const LinkPreview *preview) {
+	GtkWidget *card = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
+	gtk_widget_add_css_class(card, "link-card");
+	GdkTexture *texture = preview->image_url ? get_loaded_image(preview->image_url) : NULL;
+	if (texture) {
+		GtkWidget *picture = gtk_picture_new_for_paintable(GDK_PAINTABLE(texture));
+		gtk_picture_set_content_fit(GTK_PICTURE(picture), GTK_CONTENT_FIT_COVER);
+		gtk_widget_set_size_request(picture, -1, LINK_PICTURE_HEIGHT);
+		gtk_widget_set_overflow(picture, GTK_OVERFLOW_HIDDEN);
+		gtk_widget_add_css_class(picture, "link-picture");
+		gtk_box_append(GTK_BOX(card), picture);
+	} else if (preview->image_url) {
+		preload_image(preview->image_url, refresh_message, G_OBJECT(message));
+	}
+	if (preview->site)
+		gtk_box_append(GTK_BOX(card), create_card_label(preview->site, "link-site", 1));
+	gtk_box_append(GTK_BOX(card), create_card_label(preview->title, "link-title", LINK_TITLE_LINES));
+	if (preview->description)
+		gtk_box_append(GTK_BOX(card), create_card_label(preview->description, "link-description",
+			LINK_DESCRIPTION_LINES));
+	gtk_widget_set_tooltip_text(card, preview->url);
+	gtk_widget_set_cursor_from_name(card, "pointer");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect_data(click, "released", G_CALLBACK(open_preview), g_strdup(preview->url), free_link, 0);
+	gtk_widget_add_controller(card, GTK_EVENT_CONTROLLER(click));
+	GtkWidget *frame = wrap_in_clamp(card, GTK_ORIENTATION_HORIZONTAL, PREVIEW_WIDTH);
+	gtk_widget_set_halign(frame, GTK_ALIGN_START);
+	return frame;
+}
+
+
+/* Pictures show themselves, and the first page linked shows a card about it */
 static void add_previews(GtkWidget *box, CrimsonMessage *message) {
 	if (!get_settings()->shows_images || message->is_redacted)
 		return;
@@ -383,6 +439,15 @@ static void add_previews(GtkWidget *box, CrimsonMessage *message) {
 		else
 			preload_image(url, refresh_message, G_OBJECT(message));
 	}
+	g_autoptr(GPtrArray) pages = find_page_links(message->text);
+	if (!pages->len)
+		return;
+	const char *page = g_ptr_array_index(pages, 0);
+	const LinkPreview *preview = get_link_preview(page);
+	if (preview)
+		gtk_box_append(GTK_BOX(box), create_link_card(message, preview));
+	else
+		preload_link_preview(page, refresh_message, G_OBJECT(message));
 }
 
 
@@ -556,7 +621,7 @@ static gboolean is_marked_mention(CrimsonMessage *message, CrimsonRoom *room) {
 /* The widgets a row keeps for any message it shows, hidden where that message has no use for them, so the list
  * gives a row another message by changing its text and look instead of building it again */
 typedef struct {
-	GtkWidget *day_pill, *read_line, *event_pill, *status_line;
+	GtkWidget *day_pill, *read_line, *event_pill;
 	GtkWidget *line, *avatar, *spacer, *tailed, *bubble, *tail, *sender, *quote_slot;
 	GtkWidget *text_line, *body, *reveal, *previews, *footer, *bot, *time, *state, *reactions_slot;
 	/* The colour class of the sender's name, which the next message's replaces */
@@ -804,9 +869,7 @@ GtkWidget *create_message_row(void) {
 	parts->day_pill = create_pill(NULL, "day-pill");
 	parts->read_line = create_read_line();
 	parts->event_pill = create_pill(NULL, "event-pill");
-	parts->status_line = create_wrapping_label("status-line");
-	GtkWidget *pieces[] = {parts->day_pill, parts->read_line, parts->event_pill, parts->status_line,
-		create_message_line(parts)};
+	GtkWidget *pieces[] = {parts->day_pill, parts->read_line, parts->event_pill, create_message_line(parts)};
 	for (guint index = 0; index < G_N_ELEMENTS(pieces); index++) {
 		gtk_widget_set_visible(pieces[index], FALSE);
 		gtk_box_append(GTK_BOX(row), pieces[index]);
@@ -835,20 +898,16 @@ static void show_day(GtkWidget *row, RowParts *parts, CrimsonMessage *message) {
 }
 
 
+/* Events and the server's own short lines both show as a pill in the middle of the chat */
 static void show_notes(RowParts *parts, CrimsonMessage *message, const char *notes) {
-	gtk_widget_set_visible(parts->event_pill, notes != NULL);
-	if (notes) {
-		gtk_label_set_text(GTK_LABEL(parts->event_pill), notes);
-		set_class(parts->event_pill, "merged", strchr(notes, '\n') != NULL);
-	}
-	gboolean is_status = message && message->kind == MESSAGE_STATUS;
-	gtk_widget_set_visible(parts->status_line, is_status);
-	if (!is_status)
+	g_autofree char *status = message && message->kind == MESSAGE_STATUS ? strip_irc_formatting(message->text)
+		: NULL;
+	const char *text = notes ? notes : status;
+	gtk_widget_set_visible(parts->event_pill, text != NULL);
+	if (!text)
 		return;
-	g_autofree char *plain = strip_irc_formatting(message->text);
-	g_autofree char *time = format_clock_time(message->time);
-	g_autofree char *line = g_strdup_printf("%s  %s", time, plain);
-	gtk_label_set_text(GTK_LABEL(parts->status_line), line);
+	gtk_label_set_text(GTK_LABEL(parts->event_pill), text);
+	set_class(parts->event_pill, "merged", strchr(text, '\n') != NULL);
 }
 
 
@@ -890,9 +949,12 @@ static void show_footer(RowParts *parts, CrimsonMessage *message) {
 	gtk_label_set_text(GTK_LABEL(parts->time), moment);
 	gtk_widget_set_visible(parts->state, message->is_own);
 	gboolean is_waiting = message->is_pending || message->is_uploading;
-	gtk_image_set_from_icon_name(GTK_IMAGE(parts->state), is_waiting ? "crimson-clock-symbolic"
-		: "crimson-sent-symbolic");
-	gtk_widget_set_tooltip_text(parts->state, is_waiting ? TEXT_SENDING : TEXT_SENT);
+	const char *icon = message->problem ? "dialog-error-symbolic" : is_waiting ? "crimson-clock-symbolic"
+		: "crimson-sent-symbolic";
+	gtk_image_set_from_icon_name(GTK_IMAGE(parts->state), icon);
+	gtk_widget_set_tooltip_text(parts->state, message->problem ? message->problem : is_waiting ? TEXT_SENDING
+		: TEXT_SENT);
+	set_class(parts->state, "error", message->problem != NULL);
 }
 
 
@@ -933,6 +995,7 @@ static void show_bubble(RowParts *parts, CrimsonMessage *message, CrimsonRoom *r
 	set_class(parts->bubble, "own", message->is_own);
 	set_class(parts->bubble, "mention", is_mention);
 	set_class(parts->bubble, "notice", message->kind == MESSAGE_NOTICE);
+	set_class(parts->bubble, "spotlit", message->is_spotlit);
 	set_class(parts->bubble, "action", message->kind == MESSAGE_ACTION);
 	set_class(parts->bubble, "first", is_first);
 	/* Only a group's last bubble rounds its lower corner on the avatar's side */

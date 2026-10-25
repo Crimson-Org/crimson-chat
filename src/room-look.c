@@ -134,6 +134,21 @@ void show_room_line(GtkWidget *label, const char *text, gboolean is_typing) {
 }
 
 
+/* The latest message as plain words, where a shared file shows by its name and an old style quote by the reply */
+static char *describe_preview(const char *text) {
+	TextQuote quote = {0};
+	gboolean is_quote = read_text_quote(text, &quote);
+	const char *shown = is_quote ? quote.rest : text;
+	SharedFile file = {0};
+	char *plain = read_shared_file(shown, &file) ? g_strdup_printf(TEXT_PREVIEW_FILE, file.name)
+		: strip_irc_formatting(shown);
+	clear_shared_file(&file);
+	if (is_quote)
+		clear_text_quote(&quote);
+	return plain;
+}
+
+
 char *describe_room_preview(CrimsonRoom *room) {
 	if (room->kind == ROOM_SERVER)
 		return describe_room_subtitle(room);
@@ -142,7 +157,7 @@ char *describe_room_preview(CrimsonRoom *room) {
 	if (room->new_reaction_text && room->new_reaction_time >= room->last_time)
 		return g_strdup(room->new_reaction_text);
 	if (room->preview && *room->preview) {
-		g_autofree char *plain = strip_irc_formatting(room->preview);
+		g_autofree char *plain = describe_preview(room->preview);
 		if (room->is_preview_own)
 			return g_strdup_printf(TEXT_PREVIEW_OWN, plain);
 		if (room->kind == ROOM_CHANNEL && room->preview_sender)
