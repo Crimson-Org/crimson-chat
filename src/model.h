@@ -192,8 +192,10 @@ void add_upload_message(CrimsonRoom *room, CrimsonMessage *message);
 void fail_pending_messages(CrimsonRoom *room, const char *problem);
 void fail_pending_message(CrimsonMessage *message, const char *problem);
 void remove_room_message(CrimsonRoom *room, CrimsonMessage *message);
-/* The newest message the server has, with its own id and time, leaving out notes and messages still on their way */
+/* The newest message that arrived, leaving out the user's messages still on their way or never sent */
 CrimsonMessage *get_last_message(CrimsonRoom *room);
+/* The newest message the server keeps, with its own id, where catching up on history starts */
+CrimsonMessage *get_last_stored_message(CrimsonRoom *room);
 /* Counts the unread messages again after the read marker or the messages changed */
 void count_unread(CrimsonRoom *room);
 gboolean is_room_typing(CrimsonRoom *room);

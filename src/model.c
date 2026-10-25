@@ -358,15 +358,25 @@ CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id) {
 }
 
 
-CrimsonMessage *get_last_message(CrimsonRoom *room) {
+static CrimsonMessage *find_last_message(CrimsonRoom *room, gboolean needs_id) {
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
 	for (guint index = count; index-- > 0;) {
 		CrimsonMessage *message = g_list_model_get_item(G_LIST_MODEL(room->messages), index);
 		g_object_unref(message);
-		if (message->id && !message->is_pending && !message->problem)
+		if ((message->id || !needs_id) && !message->is_pending && !message->problem)
 			return message;
 	}
 	return NULL;
+}
+
+
+CrimsonMessage *get_last_message(CrimsonRoom *room) {
+	return find_last_message(room, FALSE);
+}
+
+
+CrimsonMessage *get_last_stored_message(CrimsonRoom *room) {
+	return find_last_message(room, TRUE);
 }
 
 

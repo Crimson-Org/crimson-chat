@@ -1059,7 +1059,7 @@ static void ask_for_history(CrimsonRoom *room, HistoryRequest request, const cha
 void request_latest_history(CrimsonRoom *room) {
 	if (room->kind == ROOM_SERVER || room->history_request || !can_network(room->network, "draft/chathistory"))
 		return;
-	CrimsonMessage *last = get_last_message(room);
+	CrimsonMessage *last = get_last_stored_message(room);
 	if (!last || !room->has_history) {
 		ask_for_history(room, HISTORY_LATEST, "LATEST", "*", HISTORY_PAGE);
 		return;
