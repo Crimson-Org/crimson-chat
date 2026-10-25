@@ -395,8 +395,8 @@ static void bind_position(sqlite3_stmt *statement, int index, const HistoryPosit
 
 
 GPtrArray *query_history(Database *database, gint64 network_id, const char *folded, const HistoryPosition *after,
-	const HistoryPosition *before, gboolean takes_newest, int limit, int kinds) {
-	g_autoptr(GString) sql = g_string_new("SELECT line FROM history WHERE network_id = ? AND folded = ?"
+	const HistoryPosition *before, gboolean takes_newest, int limit, int kinds, gboolean *is_end) {
+	g_autoptr(GString) sql = g_string_new("SELECT line, kind FROM history WHERE network_id = ? AND folded = ?"
 		" AND (kind & ?) != 0");
 	if (after)
 		g_string_append(sql, " AND (time > ? OR (time = ? AND id > ?))");
@@ -416,10 +416,15 @@ GPtrArray *query_history(Database *database, gint64 network_id, const char *fold
 		bind_position(statement, index, before);
 		index += 3;
 	}
-	sqlite3_bind_int(statement, index, limit);
+	sqlite3_bind_int(statement, index, HISTORY_PAGE_LINES);
 	GPtrArray *lines = g_ptr_array_new_with_free_func(g_free);
-	while (statement && sqlite3_step(statement) == SQLITE_ROW)
+	int messages = 0;
+	while (messages < limit && statement && sqlite3_step(statement) == SQLITE_ROW) {
 		g_ptr_array_add(lines, read_text(statement, 0));
+		messages += (sqlite3_column_int(statement, 1) & HISTORY_MESSAGE) != 0;
+	}
+	if (is_end)
+		*is_end = messages < limit && lines->len < HISTORY_PAGE_LINES;
 	sqlite3_finalize(statement);
 	/* Rows taken from the newest end come out newest first, and clients want them in time order */
 	for (guint low = 0, high = lines->len; takes_newest && high > 0 && low < high - 1; low++, high--) {

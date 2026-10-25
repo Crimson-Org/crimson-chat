@@ -13,19 +13,12 @@
 #define REACTION_EXCERPT_CHARS 30
 #define TARGETS_LIMIT 100
 #define CTCP_MARK '\001'
-/* A page of history should show this many lines, so pages of hidden joins and parts lead to the next page */
-#define SHOWN_PER_PAGE 20
 
 /* A history batch being received for one room */
 typedef struct {
 	CrimsonRoom *room;
 	gboolean is_end, is_batching;
-	/* Where the page starts among the room's held messages, and how many lines it added that show whatever the
-	 * setting for joins and leaves */
-	guint batch_start, shown;
-	/* The oldest line of the page, shown or not, where the next page starts */
-	gint64 oldest_time;
-	char *oldest_id;
+	guint lines;
 } HistoryLoad;
 
 /* Replies to WHOIS, shown in the room the question was asked from */
@@ -561,7 +554,7 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 		load->is_end = has_irc_tag(message, "draft/chathistory-end");
 		load->is_batching = load->room != NULL;
 		if (load->room)
-			load->batch_start = begin_room_batch(load->room);
+			begin_room_batch(load->room);
 		g_hash_table_insert(work->history, g_strdup(reference + 1), load);
 	} else if (g_strcmp0(type, "netsplit") == 0 || g_strcmp0(type, "netjoin") == 0) {
 		/* Room names to how many people the split took or brought back, with the batch's kind under an empty
@@ -585,34 +578,8 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 void free_history_load(gpointer data) {
 	HistoryLoad *load = data;
 	if (load->is_batching)
-		end_room_batch(load->room, load->batch_start);
-	g_free(load->oldest_id);
+		end_room_batch(load->room);
 	g_free(load);
-}
-
-
-static void note_oldest_line(HistoryLoad *load, const IrcMessage *message) {
-	gint64 time = read_message_time(message);
-	if (load->oldest_time && time >= load->oldest_time)
-		return;
-	load->oldest_time = time;
-	g_free(load->oldest_id);
-	load->oldest_id = g_strdup(get_irc_tag(message, "msgid"));
-}
-
-
-/* Asks for the page before this one when this page showed too little, returning whether it did */
-static gboolean continue_history(HistoryLoad *load) {
-	CrimsonRoom *room = load->room;
-	if (load->is_end || load->shown >= SHOWN_PER_PAGE || !load->oldest_time)
-		return FALSE;
-	g_autoptr(GDateTime) time = g_date_time_new_from_unix_utc_usec(load->oldest_time);
-	g_autofree char *moment = format_irc_time(time);
-	g_autofree char *before = load->oldest_id ? g_strconcat("msgid=", load->oldest_id, NULL)
-		: g_strconcat("timestamp=", moment, NULL);
-	g_autofree char *limit = g_strdup_printf("%d", HISTORY_PAGE);
-	send_irc_client_command(room->network->client, "CHATHISTORY", "BEFORE", room->name, before, limit, NULL);
-	return TRUE;
 }
 
 
@@ -667,17 +634,15 @@ static void finish_batch(CrimsonNetwork *network, const IrcMessage *message, His
 	HistoryLoad *load = g_hash_table_lookup(work->history, reference);
 	if (load && load->is_batching) {
 		load->is_batching = FALSE;
-		load->shown = end_room_batch(load->room, load->batch_start);
-	}
-	if (load && load->room && continue_history(load)) {
-		g_hash_table_remove(work->history, reference);
-		return;
+		end_room_batch(load->room);
 	}
 	if (load && load->room) {
 		CrimsonRoom *room = load->room;
-		room->is_loading_history = FALSE;
+		/* An empty page also ends history on servers that never mark the end, while catching up after a
+		 * reconnect only reaches the newest end */
+		room->has_all_history |= room->history_request != HISTORY_NEWER && (load->is_end || !load->lines);
+		room->history_request = HISTORY_NONE;
 		room->has_history = TRUE;
-		room->has_all_history |= load->is_end;
 		count_unread(room);
 		announce_room_change(room);
 		save_chat_cache_later(network->session->chat);
@@ -891,7 +856,7 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 	if (load && !load->room)
 		return;
 	if (load)
-		note_oldest_line(load, message);
+		load->lines++;
 	if (!load && collect_registration(network, message))
 		return;
 	if (!load && count_split(network, message, affected))
@@ -900,27 +865,31 @@ void handle_network_message(CrimsonNetwork *network, const IrcMessage *message, 
 }
 
 
+static void ask_for_history(CrimsonRoom *room, HistoryRequest request, const char *subcommand, const char *point) {
+	g_autofree char *limit = g_strdup_printf("%d", HISTORY_PAGE);
+	room->history_request = request;
+	send_irc_client_command(room->network->client, "CHATHISTORY", subcommand, room->name, point, limit, NULL);
+}
+
+
 void request_latest_history(CrimsonRoom *room) {
-	CrimsonNetwork *network = room->network;
-	if (room->kind == ROOM_SERVER || room->is_loading_history || !can_network(network, "draft/chathistory"))
+	if (room->kind == ROOM_SERVER || room->history_request || !can_network(room->network, "draft/chathistory"))
 		return;
 	CrimsonMessage *last = get_last_message(room);
-	g_autofree char *after = NULL;
-	if (last && room->has_history) {
-		g_autoptr(GDateTime) time = g_date_time_new_from_unix_utc_usec(last->time);
-		g_autofree char *moment = format_irc_time(time);
-		after = g_strconcat("timestamp=", moment, NULL);
+	if (!last || !room->has_history) {
+		ask_for_history(room, HISTORY_LATEST, "LATEST", "*");
+		return;
 	}
-	g_autofree char *limit = g_strdup_printf("%d", HISTORY_PAGE);
-	room->is_loading_history = TRUE;
-	send_irc_client_command(network->client, "CHATHISTORY", "LATEST", room->name, after ? after : "*", limit, NULL);
+	g_autoptr(GDateTime) time = g_date_time_new_from_unix_utc_usec(last->time);
+	g_autofree char *moment = format_irc_time(time);
+	g_autofree char *after = g_strconcat("timestamp=", moment, NULL);
+	ask_for_history(room, HISTORY_NEWER, "LATEST", after);
 }
 
 
 void load_older_history(CrimsonRoom *room) {
-	CrimsonNetwork *network = room->network;
-	if (room->kind == ROOM_SERVER || room->is_loading_history || room->has_all_history
-		|| !can_network(network, "draft/chathistory"))
+	if (room->kind == ROOM_SERVER || room->history_request || room->has_all_history
+		|| !can_network(room->network, "draft/chathistory"))
 		return;
 	g_autoptr(CrimsonMessage) first = g_list_model_get_item(G_LIST_MODEL(room->messages), 0);
 	if (!first)
@@ -929,9 +898,7 @@ void load_older_history(CrimsonRoom *room) {
 	g_autofree char *moment = format_irc_time(time);
 	g_autofree char *before = first->id ? g_strconcat("msgid=", first->id, NULL)
 		: g_strconcat("timestamp=", moment, NULL);
-	g_autofree char *limit = g_strdup_printf("%d", HISTORY_PAGE);
-	room->is_loading_history = TRUE;
-	send_irc_client_command(network->client, "CHATHISTORY", "BEFORE", room->name, before, limit, NULL);
+	ask_for_history(room, HISTORY_OLDER, "BEFORE", before);
 }
 
 

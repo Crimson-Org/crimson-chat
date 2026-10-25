@@ -3,7 +3,8 @@
 #include "model.h"
 #include "storage.h"
 
-#define HISTORY_PAGE 60
+/* How many messages people wrote one page of history holds, about a tall chat full */
+#define HISTORY_PAGE 30
 
 typedef struct Chat Chat;
 

@@ -11,7 +11,6 @@
 #include "sounds.h"
 #include "window.h"
 #include "pictures.h"
-#include "shown-messages.h"
 
 #define FADE_DURATION_MS 160
 #define PAGE_SLIDE_MS 260
@@ -20,19 +19,10 @@
 #define HEADER_AVATAR_SIZE 38
 #define MEMBER_AVATAR_SIZE 32
 #define BOTTOM_SLACK 48.0
-/* The list builds a row for each message it holds, so a room shows enough of its latest messages to fill the chat,
- * counting on rows at least this tall */
-#define SHORTEST_ROW_HEIGHT 32
-#define FILL_SPARE_ROWS 4
-/* Each row added above the others makes the list go over all of them again, so older messages come in a screenful
- * at a time once scrolling has paused this long within this many screens of the top */
-#define REVEAL_PAUSE_MS 150
-#define REVEAL_MARGIN_PAGES 2
-/* The server is asked for older messages once fewer than this wait hidden above */
-#define PREFETCH_HIDDEN 40
+/* The server is asked for the page before the earliest message once the top of the chat is this many screens away */
+#define LOAD_MARGIN_PAGES 1
 /* How many rooms keep their built chat, the ones opened last and those built ahead of time */
 #define KEPT_VIEWS 16
-#define CONTEXT_BEFORE_TARGET 10
 #define LOADING_SPINNER_SIZE 32
 #define MEMBERS_WIDTH 260
 /* The member list lies over the chat instead of beside it when the chat would keep less than this, and the chat
@@ -64,14 +54,12 @@ typedef struct {
 	Conversation *conversation;
 	CrimsonRoom *room;
 	GtkWidget *scroller, *list_view;
-	/* The room's latest messages, and those without the joins and leaves the setting hides, which are kept */
-	CrimsonShownMessages *recent_messages;
+	/* The room's messages without the joins and leaves the setting hides */
 	GtkFilterListModel *shown_messages;
 	GtkNoSelection *messages;
 	/* The view follows the newest message until the user scrolls away from it */
 	gboolean is_pinned, has_user_scrolled;
 	gulong layout_handler;
-	guint reveal_source;
 	/* The last moment read when new messages started coming in unseen, which a line in the chat marks until the
 	 * user leaves the room */
 	gint64 read_line;
@@ -180,8 +168,7 @@ static void pin_to_bottom(RoomView *view) {
 }
 
 
-/* More of the room may still come while it waits for its server, while its history has not been asked for or is
- * on the way, while messages wait above the shown ones, and while older pages may hold more than hidden joins */
+/* More of the room may still come while it waits for its server and while its history has not arrived */
 static gboolean is_room_loading(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	if (!room || room->kind == ROOM_SERVER || !conversation->view)
@@ -190,10 +177,7 @@ static gboolean is_room_loading(Conversation *conversation) {
 		return TRUE;
 	if (!can_network(room->network, "draft/chathistory"))
 		return FALSE;
-	CrimsonShownMessages *shown = conversation->view->recent_messages;
-	gboolean has_held = g_list_model_get_n_items(G_LIST_MODEL(shown)) > 0;
-	return room->is_loading_history || !room->has_history || count_hidden_messages(shown)
-		|| (has_held && !room->has_all_history);
+	return room->history_request || !room->has_history;
 }
 
 
@@ -207,61 +191,16 @@ static void show_empty_note(Conversation *conversation) {
 }
 
 
-/* The earliest shown row may lose its day line or start of a group to the messages coming in above it */
-static void reveal_before_shown(RoomView *view, guint position) {
-	g_autoptr(CrimsonMessage) first = g_list_model_get_item(G_LIST_MODEL(view->messages), 0);
-	reveal_messages_from(view->recent_messages, position);
-	if (first)
-		announce_message_change(first);
-	if (is_shown_view(view))
-		show_empty_note(view->conversation);
-}
-
-
 static gboolean is_near_top(RoomView *view) {
 	GtkAdjustment *scroll = get_scroll(view);
-	return gtk_adjustment_get_value(scroll) < gtk_adjustment_get_page_size(scroll) * REVEAL_MARGIN_PAGES;
+	return gtk_adjustment_get_value(scroll) < gtk_adjustment_get_page_size(scroll) * LOAD_MARGIN_PAGES;
 }
 
 
-/* Enough of the latest messages to fill the chat */
-static guint count_filling_messages(Conversation *conversation) {
-	int height = gtk_widget_get_height(conversation->views_stack);
-	if (height <= 0)
-		height = gtk_widget_get_height(GTK_WIDGET(conversation->window->window));
-	return (guint)MAX(height, 0) / SHORTEST_ROW_HEIGHT + FILL_SPARE_ROWS;
-}
-
-
-static void reveal_when_near_top(RoomView *view);
-
-
-/* The server is asked for more before the messages in memory run out, and the next screenful follows another pause
- * while the top is still near, since hidden joins and leaves may have filled this one */
-static gboolean reveal_after_pause(gpointer data) {
-	RoomView *view = data;
-	view->reveal_source = 0;
-	if (!is_shown_view(view) || !is_near_top(view))
-		return G_SOURCE_REMOVE;
-	guint hidden = count_hidden_messages(view->recent_messages);
-	if (hidden < PREFETCH_HIDDEN)
+/* Asking again as each page lands also fills a chat whose pages held mostly hidden joins and leaves */
+static void load_when_near_top(RoomView *view) {
+	if (view && is_shown_view(view) && is_near_top(view))
 		load_older_history(view->room);
-	guint page = count_filling_messages(view->conversation);
-	if (hidden)
-		reveal_before_shown(view, hidden > page ? hidden - page : 0);
-	if (count_hidden_messages(view->recent_messages))
-		reveal_when_near_top(view);
-	return G_SOURCE_REMOVE;
-}
-
-
-/* Each movement starts the pause again, and the list growing above starts it for the next screenful */
-static void reveal_when_near_top(RoomView *view) {
-	if (!view)
-		return;
-	g_clear_handle_id(&view->reveal_source, g_source_remove);
-	if (is_shown_view(view) && is_near_top(view))
-		view->reveal_source = g_timeout_add(REVEAL_PAUSE_MS, reveal_after_pause, view);
 }
 
 
@@ -278,7 +217,7 @@ static void follow_scroll(GtkAdjustment *scroll, RoomView *view) {
 		gtk_widget_set_visible(view->conversation->jump_button, !view->is_pinned);
 	}
 	mark_read_when_seen(view->conversation);
-	reveal_when_near_top(view);
+	load_when_near_top(view);
 	replace_sticky_avatar(view->conversation);
 }
 
@@ -292,7 +231,7 @@ static gboolean note_user_scroll(GtkEventControllerScroll *controller, double x,
 
 static void reach_edge(GtkScrolledWindow *scroller, GtkPositionType position, RoomView *view) {
 	if (position == GTK_POS_TOP)
-		reveal_when_near_top(view);
+		load_when_near_top(view);
 	else if (position == GTK_POS_BOTTOM && view->has_user_scrolled)
 		pin_to_bottom(view);
 }
@@ -430,10 +369,6 @@ static void show_message(const char *message_id, gpointer data) {
 	RoomView *view = conversation->view;
 	CrimsonMessage *target = view ? find_room_message(view->room, message_id) : NULL;
 	guint position = 0;
-	/* A message older than the ones held comes into the list first, with a few before it for context */
-	guint index = 0;
-	if (target && g_list_store_find(view->room->messages, target, &index))
-		reveal_before_shown(view, index > CONTEXT_BEFORE_TARGET ? index - CONTEXT_BEFORE_TARGET : 0);
 	if (target && find_shown_position(view, target, &position)) {
 		view->is_pinned = FALSE;
 		view->has_user_scrolled = TRUE;
@@ -715,21 +650,18 @@ static void follow_view_upper(RoomView *view) {
 	if (!is_shown_view(view))
 		return;
 	replace_sticky_avatar(view->conversation);
-	reveal_when_near_top(view);
+	load_when_near_top(view);
 }
 
 
-/* A room's own list of rows, with the room's latest messages filling the chat */
+/* A room's own list of rows over the messages the room holds */
 static RoomView *create_room_view(Conversation *conversation, CrimsonRoom *room) {
 	RoomView *view = g_new0(RoomView, 1);
 	view->conversation = conversation;
 	view->room = g_object_ref(room);
 	view->is_pinned = TRUE;
-	guint filling = count_filling_messages(conversation);
-	view->recent_messages = create_shown_messages(G_LIST_MODEL(room->messages), filling, filling);
 	GtkCustomFilter *filter = gtk_custom_filter_new(is_message_shown, conversation, NULL);
-	view->shown_messages = gtk_filter_list_model_new(G_LIST_MODEL(g_object_ref(view->recent_messages)),
-		GTK_FILTER(filter));
+	view->shown_messages = gtk_filter_list_model_new(G_LIST_MODEL(g_object_ref(room->messages)), GTK_FILTER(filter));
 	view->messages = gtk_no_selection_new(G_LIST_MODEL(g_object_ref(view->shown_messages)));
 	GtkListItemFactory *factory = gtk_signal_list_item_factory_new();
 	g_signal_connect(factory, "setup", G_CALLBACK(set_up_message), view);
@@ -763,13 +695,11 @@ static RoomView *create_room_view(Conversation *conversation, CrimsonRoom *room)
 static void free_room_view(RoomView *view) {
 	Conversation *conversation = view->conversation;
 	g_hash_table_remove(conversation->views, view->room);
-	g_clear_handle_id(&view->reveal_source, g_source_remove);
 	g_signal_handlers_disconnect_by_data(get_scroll(view), view);
 	g_signal_handlers_disconnect_by_data(view->messages, view);
 	gtk_stack_remove(GTK_STACK(conversation->views_stack), view->scroller);
 	g_object_unref(view->messages);
 	g_object_unref(view->shown_messages);
-	g_object_unref(view->recent_messages);
 	g_object_unref(view->room);
 	g_free(view);
 }
@@ -1506,7 +1436,7 @@ static void follow_event_setting(Conversation *conversation) {
 	while (g_hash_table_iter_next(&iterator, &room, &value)) {
 		RoomView *view = value;
 		gtk_filter_list_model_set_model(view->shown_messages, NULL);
-		gtk_filter_list_model_set_model(view->shown_messages, G_LIST_MODEL(view->recent_messages));
+		gtk_filter_list_model_set_model(view->shown_messages, G_LIST_MODEL(view->room->messages));
 	}
 }
 
@@ -1522,7 +1452,7 @@ void refresh_conversation(Conversation *conversation) {
 	show_empty_note(conversation);
 	refresh_members_later(conversation);
 	mark_read_when_seen(conversation);
-	reveal_when_near_top(conversation->view);
+	load_when_near_top(conversation->view);
 }
 
 
@@ -1604,8 +1534,6 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
 	if (conversation->room)
 		g_clear_signal_handler(&conversation->room_handler, conversation->room);
-	if (conversation->view)
-		g_clear_handle_id(&conversation->view->reveal_source, g_source_remove);
 	switch_composer_room(conversation->composer, room);
 	g_set_object(&conversation->room, room);
 	/* The same nick in another room can have another picture, so the floating avatar is filled again */

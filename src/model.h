@@ -32,6 +32,14 @@ typedef enum {
 	ACTIVITY_GONE,
 } Activity;
 
+/* Which page of history a room waits for, if any, since catching up after a reconnect never reaches the start */
+typedef enum {
+	HISTORY_NONE,
+	HISTORY_LATEST,
+	HISTORY_NEWER,
+	HISTORY_OLDER,
+} HistoryRequest;
+
 typedef enum {
 	ROOM_SERVER,
 	ROOM_CHANNEL,
@@ -82,7 +90,8 @@ struct _CrimsonRoom {
 	gboolean is_preview_own;
 	gint64 last_time, read_time;
 	guint unread_count;
-	gboolean has_mention, is_joined, is_loading_history, has_all_history, has_history;
+	gboolean has_mention, is_joined, has_all_history, has_history;
+	HistoryRequest history_request;
 	Presence presence;
 	/* For a private chat, when the person was last active and when the server was last asked, in real time */
 	Activity activity;
@@ -169,10 +178,9 @@ void announce_room_change(CrimsonRoom *room);
 /* Puts a message in time order, or returns FALSE when the room already holds its id */
 gboolean insert_room_message(CrimsonRoom *room, CrimsonMessage *message);
 /* Holds the messages of a history page and the room's changes until the page ends, so a chat takes the page in one
- * change. Beginning returns where the page starts among the held messages, and ending returns how many messages
- * the page added that show whatever the setting for joins and leaves */
-guint begin_room_batch(CrimsonRoom *room);
-guint end_room_batch(CrimsonRoom *room, guint start);
+ * change */
+void begin_room_batch(CrimsonRoom *room);
+void end_room_batch(CrimsonRoom *room);
 CrimsonMessage *find_room_message(CrimsonRoom *room, const char *id);
 /* An upload's card goes at the end of the room without becoming the room's latest line, and goes away once sent */
 void add_upload_message(CrimsonRoom *room, CrimsonMessage *message);

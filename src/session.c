@@ -344,7 +344,7 @@ static void handle_network_status(IrcClient *client, IrcClientStatus status, con
 		for (guint index = 0; index < count; index++) {
 			g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
 			room->is_joined = FALSE;
-			room->is_loading_history = FALSE;
+			room->history_request = HISTORY_NONE;
 			g_hash_table_remove_all(room->typing);
 		}
 		if (get_irc_client_failure(client) == IRC_FAILURE_CERTIFICATE)

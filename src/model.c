@@ -274,19 +274,15 @@ static void add_batch(CrimsonRoom *room, GPtrArray *batch) {
 }
 
 
-guint begin_room_batch(CrimsonRoom *room) {
+void begin_room_batch(CrimsonRoom *room) {
 	if (!room->batch_depth++)
 		room->batch = g_ptr_array_new_with_free_func(g_object_unref);
-	return room->batch->len;
 }
 
 
-guint end_room_batch(CrimsonRoom *room, guint start) {
-	guint shown = 0;
-	for (guint index = start; room->batch && index < room->batch->len; index++)
-		shown += !((CrimsonMessage *)g_ptr_array_index(room->batch, index))->is_membership;
+void end_room_batch(CrimsonRoom *room) {
 	if (!room->batch_depth || --room->batch_depth)
-		return shown;
+		return;
 	g_autoptr(GPtrArray) batch = g_steal_pointer(&room->batch);
 	if (batch->len)
 		add_batch(room, batch);
@@ -294,7 +290,6 @@ guint end_room_batch(CrimsonRoom *room, guint start) {
 		room->has_batch_change = FALSE;
 		announce_room_change(room);
 	}
-	return shown;
 }
 
 

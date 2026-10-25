@@ -112,7 +112,7 @@ static void send_bouncer_line(Downstream *downstream, IrcMessage *message, const
 }
 
 
-/* Sends history lines in a batch, marked as the end of history when fewer came than asked for */
+/* Sends history lines in a batch, marked when none are left beyond them */
 static void send_history(Downstream *downstream, const char *type, const char *target, GPtrArray *lines,
 	gboolean is_end) {
 	gboolean uses_batch = has_downstream_cap(downstream, "batch");
@@ -182,10 +182,10 @@ static GPtrArray *query_around(Downstream *downstream, const char *folded, const
 	int kinds) {
 	Database *database = downstream->bouncer->database;
 	gint64 network_id = downstream->upstream->record.id;
-	GPtrArray *lines = query_history(database, network_id, folded, NULL, point, TRUE, limit / 2, kinds);
+	GPtrArray *lines = query_history(database, network_id, folded, NULL, point, TRUE, limit / 2, kinds, NULL);
 	HistoryPosition from = {point->time, point->id == G_MAXINT64 || point->id == 0 ? -1 : point->id - 1};
 	g_autoptr(GPtrArray) later = query_history(database, network_id, folded, &from, NULL, FALSE,
-		limit - (int)lines->len, kinds);
+		limit - limit / 2, kinds, NULL);
 	for (guint index = 0; index < later->len; index++)
 		g_ptr_array_add(lines, g_strdup(g_ptr_array_index(later, index)));
 	return lines;
@@ -193,7 +193,7 @@ static GPtrArray *query_around(Downstream *downstream, const char *folded, const
 
 
 static GPtrArray *run_history_query(Downstream *downstream, const char *subcommand, const char *folded,
-	const IrcMessage *message, int limit, gboolean *is_valid) {
+	const IrcMessage *message, int limit, gboolean *is_valid, gboolean *is_end) {
 	Database *database = downstream->bouncer->database;
 	gint64 network_id = downstream->upstream->record.id;
 	int kinds = list_wanted_kinds(downstream);
@@ -205,13 +205,15 @@ static GPtrArray *run_history_query(Downstream *downstream, const char *subcomma
 		gboolean is_bounded = g_strcmp0(first, "*") != 0;
 		*is_valid = !is_bounded || read_position(downstream, first, TRUE, &late);
 		lines = *is_valid ? query_history(database, network_id, folded, is_bounded ? &late : NULL, NULL, TRUE, limit,
-			kinds) : NULL;
+			kinds, is_end) : NULL;
 	} else if (g_ascii_strcasecmp(subcommand, "BEFORE") == 0) {
 		*is_valid = read_position(downstream, first, FALSE, &early);
-		lines = *is_valid ? query_history(database, network_id, folded, NULL, &early, TRUE, limit, kinds) : NULL;
+		lines = *is_valid ? query_history(database, network_id, folded, NULL, &early, TRUE, limit, kinds, is_end)
+			: NULL;
 	} else if (g_ascii_strcasecmp(subcommand, "AFTER") == 0) {
 		*is_valid = read_position(downstream, first, TRUE, &late);
-		lines = *is_valid ? query_history(database, network_id, folded, &late, NULL, FALSE, limit, kinds) : NULL;
+		lines = *is_valid ? query_history(database, network_id, folded, &late, NULL, FALSE, limit, kinds, is_end)
+			: NULL;
 	} else if (g_ascii_strcasecmp(subcommand, "AROUND") == 0) {
 		*is_valid = read_position(downstream, first, FALSE, &early);
 		lines = *is_valid ? query_around(downstream, folded, &early, limit, kinds) : NULL;
@@ -224,8 +226,8 @@ static GPtrArray *run_history_query(Downstream *downstream, const char *subcomma
 			read_position(downstream, first, FALSE, &early);
 			read_position(downstream, second, TRUE, &late);
 		}
-		lines = *is_valid ? query_history(database, network_id, folded, &late, &early, is_backwards, limit, kinds)
-			: NULL;
+		lines = *is_valid ? query_history(database, network_id, folded, &late, &early, is_backwards, limit, kinds,
+			is_end) : NULL;
 	} else {
 		*is_valid = FALSE;
 	}
@@ -252,13 +254,14 @@ void answer_history_request(Downstream *downstream, const IrcMessage *message) {
 	const char *target = get_irc_parameter(message, 1);
 	IrcState *state = get_irc_client_state(downstream->upstream->client);
 	g_autofree char *folded = fold_state_name(state, target);
-	gboolean is_valid = FALSE;
-	g_autoptr(GPtrArray) lines = run_history_query(downstream, subcommand, folded, message, limit, &is_valid);
+	gboolean is_valid = FALSE, is_end = FALSE;
+	g_autoptr(GPtrArray) lines = run_history_query(downstream, subcommand, folded, message, limit, &is_valid,
+		&is_end);
 	if (!is_valid || !lines) {
 		fail_history(downstream, "INVALID_PARAMS", subcommand, "Invalid message reference");
 		return;
 	}
-	send_history(downstream, "chathistory", target, lines, (int)lines->len < limit);
+	send_history(downstream, "chathistory", target, lines, is_end);
 }
 
 

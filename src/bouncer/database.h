@@ -39,6 +39,9 @@ typedef enum {
 	HISTORY_EVENT = 1 << 3,
 } HistoryKind;
 
+/* The most lines one page holds, so a room of nothing but joins and leaves never sends its whole history at once */
+#define HISTORY_PAGE_LINES 2000
+
 /* A place in a conversation's history, ordered by time and then by storage order */
 typedef struct {
 	char *time;
@@ -82,10 +85,11 @@ void free_channel_record(ChannelRecord *record);
 
 void store_history(Database *database, gint64 network_id, const char *target, const char *folded,
 	const char *time, const char *message_id, HistoryKind kind, const char *line);
-/* Lines strictly between the bounds, either of which may be NULL, oldest first, taken from the newest end
- * when asked */
+/* Lines strictly between the bounds, either of which may be NULL, oldest first, taken from the newest end when
+ * asked. The limit counts only messages people wrote, so a page holds the same amount of talk however many joins,
+ * reactions and deletions come between, and is_end says when nothing older or newer is left */
 GPtrArray *query_history(Database *database, gint64 network_id, const char *folded, const HistoryPosition *after,
-	const HistoryPosition *before, gboolean takes_newest, int limit, int kinds);
+	const HistoryPosition *before, gboolean takes_newest, int limit, int kinds, gboolean *is_end);
 gboolean find_history_message(Database *database, gint64 network_id, const char *message_id,
 	HistoryPosition *position);
 GPtrArray *query_history_targets(Database *database, gint64 network_id, const char *from, const char *to,
