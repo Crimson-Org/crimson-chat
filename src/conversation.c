@@ -1602,7 +1602,10 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 	/* A narrow window already showing a chat has no page slide to move the next one in, so it slides here */
 	gboolean slides_page = conversation->is_narrow && conversation->room && room
 		&& gtk_widget_get_mapped(conversation->stack);
-	if (slides_page)
+	/* A chat closing in a narrow window slides away as it looked, and the empty page waits for the window to widen */
+	gboolean leaves_page = conversation->is_narrow && conversation->room && !room
+		&& gtk_widget_get_mapped(conversation->stack);
+	if (slides_page || leaves_page)
 		freeze_shown_page(conversation);
 	g_autoptr(CrimsonRoom) previous = conversation->room ? g_object_ref(conversation->room) : NULL;
 	if (conversation->room)
@@ -1619,7 +1622,8 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 	GtkStackTransitionType slide = is_going_back ? GTK_STACK_TRANSITION_TYPE_SLIDE_RIGHT
 		: GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT;
 	gtk_stack_set_transition_type(GTK_STACK(conversation->stack), slides_page ? slide : GTK_STACK_TRANSITION_TYPE_NONE);
-	gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
+	if (!leaves_page)
+		gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), room ? "room" : "empty");
 	follow_activity(conversation, previous);
 	conversation->view = NULL;
 	if (!room)
@@ -1675,6 +1679,8 @@ void set_conversation_narrow(Conversation *conversation, gboolean is_narrow) {
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(conversation->room_header), is_narrow);
 	adw_header_bar_set_show_start_title_buttons(ADW_HEADER_BAR(conversation->empty_header), is_narrow);
 	gtk_widget_set_visible(conversation->back_button, is_narrow);
+	if (!is_narrow && !conversation->room)
+		gtk_stack_set_visible_child_name(GTK_STACK(conversation->stack), "empty");
 }
 
 

@@ -618,8 +618,11 @@ static int measure_last_line_end(GtkWidget *content, int width, gboolean *is_wra
 		*is_wrapped = width >= 0 && natural > width;
 		return width < 0 ? natural : MIN(natural, width);
 	}
+	/* The box never gives the text more than its natural width, so a wider bubble still wraps it there */
+	int natural;
+	gtk_widget_measure(body, GTK_ORIENTATION_HORIZONTAL, -1, NULL, &natural, NULL, NULL);
 	g_autoptr(PangoLayout) layout = pango_layout_copy(gtk_label_get_layout(GTK_LABEL(body)));
-	pango_layout_set_width(layout, width < 0 ? -1 : width * PANGO_SCALE);
+	pango_layout_set_width(layout, width < 0 ? -1 : MIN(width, natural) * PANGO_SCALE);
 	*is_wrapped = pango_layout_is_wrapped(layout);
 	PangoLayoutLine *line = pango_layout_get_line_readonly(layout, pango_layout_get_line_count(layout) - 1);
 	PangoRectangle extents;
