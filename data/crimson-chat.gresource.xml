@@ -25,6 +25,7 @@
 		<file>icons/scalable/actions/crimson-channel-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-chats-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-clock-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-attach-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-send-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-sent-symbolic.svg</file>
 	</gresource>

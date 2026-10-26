@@ -777,7 +777,7 @@ headerbar.title-bar {
 }
 
 .share-button image {
-	-gtk-icon-size: 32px;
+	-gtk-icon-size: 20px;
 }
 
 /* The emoji button inside the field reaches into its end padding, so the text keeps its room */

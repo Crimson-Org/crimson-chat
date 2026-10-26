@@ -671,7 +671,7 @@ Composer *create_composer(void) {
 	gtk_box_append(GTK_BOX(composer->box), composer->reply_bar);
 	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_add_css_class(row, "composer-row");
-	composer->share_button = gtk_button_new_from_icon_name("mail-attachment-symbolic");
+	composer->share_button = gtk_button_new_from_icon_name("crimson-attach-symbolic");
 	gtk_widget_set_tooltip_text(composer->share_button, TEXT_SHARE_FILE);
 	gtk_widget_add_css_class(composer->share_button, "flat");
 	gtk_widget_add_css_class(composer->share_button, "circular");
