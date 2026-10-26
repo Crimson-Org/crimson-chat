@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
 	<rect width="128" height="128" fill="#e8590c"/>
-	<text x="64" y="64" dominant-baseline="central" text-anchor="middle" fill="#ffffff" font-family="Cantarell, sans-serif" font-weight="800" font-size="60">S</text>
+	<path d="M62.89 85.00C73.94 85.00 80.05 79.73 80.05 71.53C80.05 56.77 59.47 61.22 59.47 55.25C59.47 53.22 61.81 52.12 65.89 52.12C69.25 52.12 72.97 52.70 75.91 53.69L78.80 45.47C75.31 43.91 70.69 43.00 66.44 43.00C55.88 43.00 48.67 48.53 48.67 56.77C48.67 70.44 69.12 66.55 69.12 72.75C69.12 74.61 67.33 75.64 63.31 75.64C59.53 75.64 54.97 74.95 50.83 73.27L47.95 81.70C52.20 83.62 57.73 85.00 62.89 85.00Z" fill="#ffffff"/>
 </svg>
