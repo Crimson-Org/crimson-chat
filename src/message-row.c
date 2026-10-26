@@ -797,7 +797,6 @@ static GtkWidget *create_text_line(RowParts *parts) {
 	parts->body = create_wrapping_label("body");
 	ask_before_label_links(parts->body);
 	gtk_label_set_max_width_chars(GTK_LABEL(parts->body), TEXT_WIDTH_CHARS);
-	gtk_widget_set_focusable(parts->body, FALSE);
 	gtk_box_append(GTK_BOX(content), parts->body);
 	parts->reveal = gtk_toggle_button_new();
 	gtk_widget_add_css_class(parts->reveal, "flat");
