@@ -115,6 +115,15 @@ headerbar.title-bar {
 	background-color: var(--rail-bg);
 }
 
+/* The main menu button's mark while the user is away, in the colour GNOME uses for warnings */
+.away-dot {
+	min-width: 8px;
+	min-height: 8px;
+	margin: -2px -3px 0 0;
+	border-radius: 9999px;
+	background-color: var(--warning-bg-color);
+}
+
 /* Unread counters, crimson when they hold a mention */
 /* A circle that fits two digits, with more shown as 99+; GTK adds padding outside the minimum size, so any would stretch it */
 .unread-badge {

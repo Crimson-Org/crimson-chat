@@ -543,6 +543,34 @@ void show_message_dialog(Window *window, CrimsonNetwork *network) {
 }
 
 
+static void finish_away(AdwAlertDialog *alert, const char *response, Window *window) {
+	if (g_strcmp0(response, "away") != 0)
+		return;
+	const char *text = gtk_editable_get_text(GTK_EDITABLE(g_object_get_data(G_OBJECT(alert), "entry")));
+	set_chat_away(window->chat, *text ? text : TEXT_AWAY_DEFAULT);
+}
+
+
+void show_away_dialog(Window *window) {
+	AdwDialog *alert = adw_alert_dialog_new(TEXT_AWAY_MESSAGE_TITLE, TEXT_AWAY_MESSAGE_BODY);
+	GtkWidget *entry = gtk_entry_new();
+	gtk_entry_set_placeholder_text(GTK_ENTRY(entry), TEXT_AWAY_DEFAULT);
+	gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+	if (window->chat->away_message)
+		gtk_editable_set_text(GTK_EDITABLE(entry), window->chat->away_message);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), entry);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "away", TEXT_SET_AWAY, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "away", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "away");
+	g_object_set_data(G_OBJECT(alert), "entry", entry);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_away), window);
+	adw_dialog_present(alert, GTK_WIDGET(window->window));
+	/* The old message is selected, so typing replaces it */
+	adw_dialog_set_focus(alert, entry);
+	gtk_editable_select_region(GTK_EDITABLE(entry), 0, -1);
+}
+
+
 void show_room_invite_dialog(Window *window, CrimsonRoom *room) {
 	show_person_dialog(window, room->network, room);
 }

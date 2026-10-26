@@ -105,6 +105,22 @@ int load_sidebar_width(int fallback) {
 }
 
 
+void save_away_message(const char *message) {
+	g_autoptr(GKeyFile) file = load_state();
+	if (message)
+		g_key_file_set_string(file, GROUP, "away", message);
+	else
+		g_key_file_remove_key(file, GROUP, "away", NULL);
+	save_state(file);
+}
+
+
+char *load_away_message(void) {
+	g_autoptr(GKeyFile) file = load_state();
+	return g_key_file_get_string(file, GROUP, "away", NULL);
+}
+
+
 #define DISMISSED_GROUP "registration-dismissed"
 
 

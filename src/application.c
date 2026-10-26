@@ -204,6 +204,15 @@ static void mark_room_read_action(GSimpleAction *action, GVariant *parameter, gp
 
 
 /* The window is never destroyed, since connections closing queue work for it that would then find it gone */
+/* Being away outlasts a restart, and the window's menu shows it */
+static void follow_away(gpointer data) {
+	save_away_message(chat->away_message);
+	Window *window = get_main_window();
+	if (window)
+		show_away_in_window(window);
+}
+
+
 static void finish_quitting(gpointer application) {
 	stop_chat(chat);
 	finish_saving_state();
@@ -225,8 +234,10 @@ static void start_up(GApplication *application) {
 	apply_style();
 	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, open_requested_room,
 		share_invite, forget_network, withdraw_notification, show_server_rooms, offer_invited_room,
-		show_requested_profile};
+		show_requested_profile, follow_away};
 	chat = create_chat(&EVENTS, NULL);
+	g_autofree char *away = load_away_message();
+	set_chat_away(chat, away);
 	static const GActionEntry ENTRIES[] = {
 		{"about", show_about, NULL, NULL, NULL, {0}},
 		{"settings", open_settings, NULL, NULL, NULL, {0}},

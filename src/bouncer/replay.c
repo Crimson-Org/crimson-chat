@@ -117,7 +117,7 @@ static void send_member_details(Downstream *downstream, Upstream *upstream, IrcS
 			send_to_downstream(downstream, upstream, account);
 		}
 		if (user->is_away) {
-			g_autoptr(IrcMessage) away = create_irc_message("AWAY", "", NULL);
+			g_autoptr(IrcMessage) away = create_irc_message("AWAY", user->away ? user->away : "", NULL);
 			away->source = g_strdup(source);
 			send_to_downstream(downstream, upstream, away);
 		}

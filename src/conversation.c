@@ -1007,6 +1007,8 @@ static void bind_member(GtkSignalListItemFactory *factory, GtkListItem *item, Co
 	gtk_label_set_text(g_object_get_data(G_OBJECT(row), "role"), role);
 	gtk_widget_set_visible(g_object_get_data(G_OBJECT(row), "role"), *role != '\0');
 	gtk_widget_set_opacity(row, user && user->is_away ? 0.5 : 1.0);
+	g_autofree char *away = user && user->is_away ? describe_person_away(user) : NULL;
+	gtk_widget_set_tooltip_text(row, away);
 }
 
 

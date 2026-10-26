@@ -16,4 +16,6 @@ void show_room_line(GtkWidget *label, const char *text, gboolean is_typing);
 char *describe_room_subtitle(CrimsonRoom *room);
 /* When the person in a private chat was last active, counted from what the server last said, or NULL */
 char *describe_room_activity(CrimsonRoom *room);
+/* Away, with the person's away message once the server has sent it */
+char *describe_person_away(IrcUser *user);
 const char *find_metadata(CrimsonRoom *room, const char *nick, const char *key);

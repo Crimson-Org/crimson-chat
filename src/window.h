@@ -66,6 +66,8 @@ GMenuModel *create_server_menu(Window *window, CrimsonNetwork *network);
 /* The menu button for the whole app, which also names the bouncer and holds its settings */
 GtkWidget *create_main_menu_button(Window *window);
 void show_toast(Window *window, const char *text);
+/* Shows in the main menu whether the user is away, after it changed */
+void show_away_in_window(Window *window);
 /* Marks a room read here and on the user's other devices, and takes its line where reading stopped away */
 void mark_read_in_window(Window *window, CrimsonRoom *room);
 /* A toast saying the user was invited to a room, with a button that joins it */

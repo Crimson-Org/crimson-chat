@@ -193,10 +193,15 @@ char *describe_room_subtitle(CrimsonRoom *room) {
 	IrcState *state = get_network_state(room->network);
 	IrcUser *user = state ? find_irc_user(state, room->name) : NULL;
 	if (user && user->is_away)
-		return g_strdup(TEXT_AWAY);
+		return describe_person_away(user);
 	if (room->presence == PRESENCE_ONLINE)
 		return g_strdup(TEXT_ONLINE);
 	return g_strdup(room->presence == PRESENCE_OFFLINE ? TEXT_OFFLINE : "");
+}
+
+
+char *describe_person_away(IrcUser *user) {
+	return user->away ? g_strdup_printf(TEXT_AWAY_WITH_MESSAGE, user->away) : g_strdup(TEXT_AWAY);
 }
 
 
@@ -204,8 +209,11 @@ char *describe_room_activity(CrimsonRoom *room) {
 	switch (room->activity) {
 	case ACTIVITY_GONE:
 		return g_strdup(TEXT_OFFLINE);
-	case ACTIVITY_AWAY:
-		return g_strdup(TEXT_AWAY);
+	case ACTIVITY_AWAY: {
+		IrcState *state = get_network_state(room->network);
+		IrcUser *user = state ? find_irc_user(state, room->name) : NULL;
+		return user && user->is_away ? describe_person_away(user) : g_strdup(TEXT_AWAY);
+	}
 	case ACTIVITY_SEEN: {
 		gint64 seconds = (g_get_real_time() - room->last_active) / G_USEC_PER_SEC;
 		if (seconds < SECONDS_PER_MINUTE)

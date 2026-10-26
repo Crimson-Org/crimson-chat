@@ -19,6 +19,7 @@ static void free_user(IrcUser *user) {
 	g_free(user->host);
 	g_free(user->account);
 	g_free(user->realname);
+	g_free(user->away);
 	g_hash_table_unref(user->metadata);
 	g_free(user);
 }
@@ -673,6 +674,18 @@ static void update_registration(IrcState *state, const IrcMessage *message) {
 }
 
 
+/* A WHOIS or a private message to someone away brings their away message, kept for people already known */
+static void read_away_reply(IrcState *state, const IrcMessage *message) {
+	const char *nick = get_irc_parameter(message, 1);
+	const char *away = get_irc_parameter(message, 2);
+	IrcUser *user = nick ? find_irc_user(state, nick) : NULL;
+	if (!user)
+		return;
+	user->is_away = TRUE;
+	set_text(&user->away, away && *away ? away : NULL);
+}
+
+
 /* WHO answers what a channel's people are, the extended form with their account, and the flags say who is away */
 static void read_who_reply(IrcState *state, const IrcMessage *message) {
 	gboolean is_extended = g_str_equal(message->command, "354");
@@ -691,6 +704,8 @@ static void read_who_reply(IrcState *state, const IrcMessage *message) {
 	g_free(user->host);
 	user->host = g_strdup(host);
 	user->is_away = strchr(flags, 'G') != NULL;
+	if (!user->is_away)
+		g_clear_pointer(&user->away, g_free);
 	const char *account = is_extended ? get_irc_parameter(message, 7) : NULL;
 	if (account) {
 		g_free(user->account);
@@ -704,9 +719,10 @@ static void update_user_details(IrcState *state, const IrcMessage *message, IrcU
 	const char *first = get_irc_parameter(message, 0);
 	if (!sender)
 		return;
-	if (g_str_equal(command, "AWAY"))
+	if (g_str_equal(command, "AWAY")) {
 		sender->is_away = first != NULL;
-	else if (g_str_equal(command, "ACCOUNT"))
+		set_text(&sender->away, first && *first ? first : NULL);
+	} else if (g_str_equal(command, "ACCOUNT"))
 		set_text(&sender->account, first && !g_str_equal(first, "*") ? first : NULL);
 	else if (g_str_equal(command, "CHGHOST")) {
 		set_text(&sender->user, first);
@@ -774,4 +790,6 @@ void update_irc_state(IrcState *state, const IrcMessage *message, GPtrArray *aff
 	update_membership(state, message, sender, affected);
 	if (g_str_equal(command, "352") || g_str_equal(command, "354"))
 		read_who_reply(state, message);
+	else if (g_str_equal(command, "301"))
+		read_away_reply(state, message);
 }

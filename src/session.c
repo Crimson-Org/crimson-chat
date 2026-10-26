@@ -344,6 +344,8 @@ static void start_registered_network(CrimsonNetwork *network) {
 	} else if (network->bouncer_id) {
 		g_timeout_add_seconds(PROFILE_RESTORE_SECONDS, restore_profile_later, g_object_ref(network));
 	}
+	if (network->session->chat->away_message)
+		send_irc_client_command(network->client, "AWAY", network->session->chat->away_message, NULL);
 	if (!network->bouncer_id)
 		join_saved_channels(network);
 	watch_private_rooms(network);
@@ -700,6 +702,21 @@ void start_chat(Chat *chat) {
 	g_autoptr(GPtrArray) records = load_accounts();
 	for (guint index = 0; index < records->len; index++)
 		add_account(chat, copy_account_record(g_ptr_array_index(records, index)));
+}
+
+
+void set_chat_away(Chat *chat, const char *message) {
+	if (g_strcmp0(chat->away_message, message) == 0)
+		return;
+	g_free(chat->away_message);
+	chat->away_message = g_strdup(message);
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(chat->networks));
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonNetwork) network = g_list_model_get_item(G_LIST_MODEL(chat->networks), index);
+		if (network->client && network->state == NETWORK_CONNECTED)
+			send_irc_client_command(network->client, "AWAY", message, NULL);
+	}
+	chat->events.away_changed(chat->data);
 }
 
 

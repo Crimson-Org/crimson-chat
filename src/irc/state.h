@@ -14,6 +14,8 @@
 typedef struct {
 	char *nick, *user, *host, *account, *realname;
 	gboolean is_away, is_bot;
+	/* The away message once the server sends it, which WHO does not include */
+	char *away;
 	/* Keys such as avatar and display-name from the metadata extension */
 	GHashTable *metadata;
 } IrcUser;

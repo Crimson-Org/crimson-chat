@@ -720,9 +720,17 @@ void open_room(Window *window, CrimsonRoom *room) {
 }
 
 
-/* The app's own items, with the bouncer under its name and its admin items for an admin */
+/* The app's own items, with the user's status first, the bouncer under its name and its admin items for an admin */
 static GMenuModel *create_main_menu(Window *window) {
 	GMenu *menu = g_menu_new();
+	g_autoptr(GMenu) status = g_menu_new();
+	g_menu_append(status, TEXT_AVAILABLE, "win.away::available");
+	g_menu_append(status, TEXT_AWAY, "win.away::away");
+	g_menu_append(status, TEXT_AWAY_MESSAGE_ITEM, "win.away-message");
+	g_autoptr(GMenu) status_section = g_menu_new();
+	g_menu_append_submenu(status_section, window->chat->away_message ? TEXT_AWAY : TEXT_AVAILABLE,
+		G_MENU_MODEL(status));
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(status_section));
 	Session *bouncer = find_bouncer(window->chat);
 	if (bouncer) {
 		GMenu *items = g_menu_new();
@@ -771,9 +779,27 @@ static void fill_main_menu(GtkMenuButton *button, gpointer data) {
 }
 
 
+static void show_away_dot(GAction *action, GParamSpec *spec, GtkWidget *dot) {
+	g_autoptr(GVariant) state = g_action_get_state(action);
+	gtk_widget_set_visible(dot, g_str_equal(g_variant_get_string(state, NULL), "away"));
+}
+
+
+/* A dot on the button shows the user is away, since the status itself is inside the menu */
 GtkWidget *create_main_menu_button(Window *window) {
 	GtkWidget *button = gtk_menu_button_new();
-	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), "open-menu-symbolic");
+	GtkWidget *overlay = gtk_overlay_new();
+	gtk_overlay_set_child(GTK_OVERLAY(overlay), gtk_image_new_from_icon_name("open-menu-symbolic"));
+	GtkWidget *dot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+	gtk_widget_add_css_class(dot, "away-dot");
+	gtk_widget_set_halign(dot, GTK_ALIGN_END);
+	gtk_widget_set_valign(dot, GTK_ALIGN_START);
+	gtk_widget_set_can_target(dot, FALSE);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), dot);
+	gtk_menu_button_set_child(GTK_MENU_BUTTON(button), overlay);
+	GAction *action = g_action_map_lookup_action(G_ACTION_MAP(window->window), "away");
+	g_signal_connect_object(action, "notify::state", G_CALLBACK(show_away_dot), dot, 0);
+	show_away_dot(action, NULL, dot);
 	gtk_menu_button_set_create_popup_func(GTK_MENU_BUTTON(button), fill_main_menu, window, NULL);
 	gtk_widget_set_tooltip_text(button, TEXT_MENU);
 	return button;
@@ -1257,6 +1283,28 @@ static void follow_shown_content(CrimsonPanes *panes, GParamSpec *spec, Window *
 }
 
 
+/* Away from the menu keeps a message the user already gave, and Available brings them back */
+static void change_away(GSimpleAction *action, GVariant *value, gpointer data) {
+	Window *window = data;
+	if (!g_str_equal(g_variant_get_string(value, NULL), "away"))
+		set_chat_away(window->chat, NULL);
+	else if (!window->chat->away_message)
+		set_chat_away(window->chat, TEXT_AWAY_DEFAULT);
+}
+
+
+static void away_message_action(GSimpleAction *action, GVariant *parameter, gpointer window) {
+	show_away_dialog(window);
+}
+
+
+void show_away_in_window(Window *window) {
+	GAction *action = g_action_map_lookup_action(G_ACTION_MAP(window->window), "away");
+	g_simple_action_set_state(G_SIMPLE_ACTION(action),
+		g_variant_new_string(window->chat->away_message ? "away" : "available"));
+}
+
+
 static void add_window_actions(Window *window) {
 	static const GActionEntry ENTRIES[] = {
 		{"join-room", join_room_action, NULL, NULL, NULL, {0}},
@@ -1289,8 +1337,11 @@ static void add_window_actions(Window *window) {
 		{"hide", hide_action, NULL, NULL, NULL, {0}},
 		{"invite-people", invite_action, NULL, NULL, NULL, {0}},
 		{"go-back", go_back_action, NULL, NULL, NULL, {0}},
+		{"away", NULL, "s", "'available'", change_away, {0}},
+		{"away-message", away_message_action, NULL, NULL, NULL, {0}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(window->window), ENTRIES, G_N_ELEMENTS(ENTRIES), window);
+	show_away_in_window(window);
 }
 
 
@@ -1410,6 +1461,8 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	load_window_geometry_state(&window->geometry);
 	apply_window_geometry(GTK_WINDOW(window->window), &window->geometry);
 	gtk_widget_set_size_request(GTK_WIDGET(window->window), MINIMUM_WIDTH, MINIMUM_HEIGHT);
+	/* The menu buttons follow the away action, so the actions come before the widgets */
+	add_window_actions(window);
 	window->room_list = create_room_list(window);
 	window->conversation = create_conversation(window);
 	window->panes = CRIMSON_PANES(crimson_panes_new(create_sidebar(window),
@@ -1432,7 +1485,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(back), GTK_PHASE_CAPTURE);
 	g_signal_connect(back, "pressed", G_CALLBACK(press_back_button), window);
 	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
-	add_window_actions(window);
 	g_signal_connect(window->panes, "notify::show-content", G_CALLBACK(follow_shown_content), window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
 	static const TrayEntry TRAY_ENTRIES[] = {

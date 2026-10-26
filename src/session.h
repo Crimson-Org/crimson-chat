@@ -30,6 +30,8 @@ typedef struct {
 	void (*room_invited)(CrimsonNetwork *network, const char *room_name, gpointer data);
 	/* The user asked about someone, as with /whois, which shows their profile */
 	void (*profile_requested)(CrimsonRoom *room, const char *nick, gpointer data);
+	/* The user's away status changed, on all networks at once */
+	void (*away_changed)(gpointer data);
 } ChatEvents;
 
 /* Every account and the networks they reach, in the order the rail shows them */
@@ -43,6 +45,8 @@ struct Chat {
 	guint cache_source;
 	/* Whether the saved accounts are loaded, before which an empty list only means they are on the way */
 	gboolean has_started;
+	/* What the user is away with on every network, or NULL while they are here */
+	char *away_message;
 };
 
 /* One saved account, with a connection per network and a managing connection for a bouncer */
@@ -173,6 +177,8 @@ void free_history_load(gpointer load);
 Chat *create_chat(const ChatEvents *events, gpointer data);
 void start_chat(Chat *chat);
 void stop_chat(Chat *chat);
+/* Marks the user away with the message on every network, or back with NULL, now and on each later connection */
+void set_chat_away(Chat *chat, const char *message);
 Session *add_account(Chat *chat, AccountRecord *record);
 void change_account(Session *session, const AccountRecord *record);
 void remove_account(Session *session);

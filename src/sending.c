@@ -244,9 +244,9 @@ static void run_network_command(CrimsonRoom *room, const char *name, const char 
 	} else if (g_str_equal(name, "nick")) {
 		send_irc_client_command(network->client, "NICK", rest, NULL);
 	} else if (g_str_equal(name, "away")) {
-		send_irc_client_command(network->client, "AWAY", *rest ? rest : TEXT_AWAY_DEFAULT, NULL);
+		set_chat_away(network->session->chat, *rest ? rest : TEXT_AWAY_DEFAULT);
 	} else if (g_str_equal(name, "back")) {
-		send_irc_client_command(network->client, "AWAY", NULL);
+		set_chat_away(network->session->chat, NULL);
 	} else if (g_str_equal(name, "quote") || g_str_equal(name, "raw")) {
 		send_raw(network, rest);
 	} else {

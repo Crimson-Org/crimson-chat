@@ -14,5 +14,8 @@ void save_sidebar_width(int width);
 void save_registration_dismissed(const char *network_key);
 gboolean is_registration_dismissed(const char *network_key);
 int load_sidebar_width(int fallback);
+/* The user's away message, kept so they are still away after a restart, or NULL while they are here */
+void save_away_message(const char *message);
+char *load_away_message(void);
 /* Writes what is still waiting to be saved before the program ends */
 void finish_saving_state(void);
