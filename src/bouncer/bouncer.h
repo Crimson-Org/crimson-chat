@@ -12,6 +12,10 @@
 /* The network attribute that says what kind of problem stopped it, login, certificate or network */
 #define FAILURE_ATTRIBUTE "crimson-chat/failure"
 #define HISTORY_PAGE_LIMIT 1000
+/* The conversation the server's own chat is kept and asked for under, which no nick or channel can be */
+#define SERVER_TARGET "*"
+/* The tag a kept message of the day carries its lines in, joined by line breaks */
+#define WELCOME_MESSAGE_TAG "crimson-chat/motd"
 /* What others see as the user's away message while none of their devices is connected */
 #define ABSENT_MESSAGE "Away right now"
 /* The capability that tells Crimson Chat it reached its own bouncer, and the batch the network list comes in */
@@ -77,6 +81,8 @@ struct Upstream {
 	BouncerUser *user;
 	NetworkRecord record;
 	IrcClient *client;
+	/* The message of the day while its lines arrive */
+	char *welcome_message;
 	/* The server's batches that answer a labeled line, by reference to the label they answer */
 	GHashTable *answer_batches;
 	/* Keys given with JOIN, kept with the channel once the server confirms it */
@@ -193,6 +199,10 @@ void send_read_marker(Downstream *downstream, Upstream *upstream, const char *ta
 
 /* History */
 void store_upstream_message(Upstream *upstream, IrcMessage *message, GPtrArray *affected);
+/* Whether a line belongs with the server's own chat, its notices and its replies to what a device asked */
+gboolean is_server_line(const IrcMessage *message, gboolean is_answer);
+/* Keeps a line of the server's own chat, which apps ask for under SERVER_TARGET */
+void store_server_line(Upstream *upstream, IrcMessage *message);
 void answer_history_request(Downstream *downstream, Upstream *upstream, const IrcMessage *message);
 void answer_read_marker(Downstream *downstream, Upstream *upstream, const IrcMessage *message);
 void answer_search(Downstream *downstream, Upstream *upstream, const IrcMessage *message);

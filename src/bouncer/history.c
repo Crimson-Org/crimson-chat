@@ -72,6 +72,37 @@ void store_upstream_message(Upstream *upstream, IrcMessage *message, GPtrArray *
 }
 
 
+/* Replies that only fill in what an app keeps itself, such as name lists, profiles and room settings, which the
+ * server's chat never shows */
+static const char *const QUIET_REPLIES[] = {
+	"311", "312", "313", "314", "315", "317", "318", "319", "321", "322", "323", "324", "329", "330", "333", "338",
+	"346", "347", "348", "349", "352", "353", "354", "366", "367", "368", "369", "378", "379", "671", "761", "766",
+	"770", "771", "772", "774", NULL,
+};
+
+
+gboolean is_server_line(const IrcMessage *message, gboolean is_answer) {
+	const char *command = message->command;
+	/* The message of the day is kept whole once it ends, rather than line by line */
+	gboolean is_motd = g_str_equal(command, "375") || g_str_equal(command, "372") || g_str_equal(command, "376");
+	if (g_ascii_isdigit(*command))
+		return is_answer && !is_motd && !g_strv_contains(QUIET_REPLIES, command);
+	gboolean is_text = g_str_equal(command, "NOTICE") || g_str_equal(command, "PRIVMSG");
+	return is_text && message->source && !strchr(message->source, '!');
+}
+
+
+void store_server_line(Upstream *upstream, IrcMessage *message) {
+	if (!get_irc_tag(message, "msgid")) {
+		g_autofree char *message_id = create_irc_identifier();
+		set_irc_tag(message, "msgid", message_id);
+	}
+	g_autofree char *line = format_irc_line(message);
+	store_history(upstream->user->bouncer->database, upstream->record.id, SERVER_TARGET, SERVER_TARGET,
+		get_irc_tag(message, "time"), get_irc_tag(message, "msgid"), HISTORY_MESSAGE, line);
+}
+
+
 /* The time in the exact form history is stored in, so text order matches time order */
 static char *normalize_time(const char *text) {
 	g_autoptr(GDateTime) time = parse_irc_time(text);
@@ -170,6 +201,9 @@ static void answer_targets(Downstream *downstream, Upstream *upstream, const Irc
 	g_autoptr(GPtrArray) lines = g_ptr_array_new_with_free_func(g_free);
 	for (guint index = 0; index < targets->len; index++) {
 		HistoryTarget *target = g_ptr_array_index(targets, index);
+		/* The server's own chat is always there, so it is no conversation to list */
+		if (g_str_equal(target->target, SERVER_TARGET))
+			continue;
 		g_autoptr(IrcMessage) line = create_irc_message("CHATHISTORY", "TARGETS", target->target, target->time,
 			NULL);
 		line->source = g_strdup(BOUNCER_NAME);

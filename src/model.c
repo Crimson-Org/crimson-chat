@@ -180,7 +180,8 @@ void count_unread(CrimsonRoom *room) {
 		g_autoptr(CrimsonMessage) message = g_list_model_get_item(G_LIST_MODEL(room->messages), index - 1);
 		if (message->time <= room->read_time)
 			break;
-		if (!counts_as_unread(message))
+		/* The server's chat keeps no read place between devices, so only what arrived while the app was open is new */
+		if (!counts_as_unread(message) || (room->kind == ROOM_SERVER && !message->arrival_time))
 			continue;
 		room->unread_count++;
 		room->has_mention |= message->is_highlight || room->kind == ROOM_PRIVATE;

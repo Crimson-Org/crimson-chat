@@ -354,6 +354,9 @@ static void start_registered_network(CrimsonNetwork *network) {
 		if (room->kind == ROOM_PRIVATE)
 			request_latest_history(room);
 	}
+	/* The server's chat a bouncer keeps catches up too, once it has been opened */
+	if (network->bouncer_id && network->server_room->has_history)
+		request_latest_history(network->server_room);
 }
 
 

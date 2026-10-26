@@ -69,6 +69,7 @@ Typing @ suggests people in the room, and / suggests commands with what each doe
 The first launch prompts for an admin username and password, creates a TLS certificate and prints its fingerprint.\
 Add the bouncer in Crimson Chat with that login, trust the fingerprint once, and add networks through it from then on.\
 The bouncer joins your channels, keeps their history in [SQLite](https://sqlite.org) and replays it to each client you connect.\
+It keeps each server's own chat as well, its notices, messages of the day and replies to your commands.\
 Admins invite people with links made in Crimson Chat or on the bouncer's website, where the invited pick their own login.\
 On the website admins also see every account with its servers, make other admins, set passwords, delete accounts and delete uploaded pictures.\
 Crimson Chat uses one connection to it for all of your networks.\

@@ -336,6 +336,32 @@ static void answer_ctcp(Upstream *upstream, const IrcMessage *message) {
 }
 
 
+/* Each message of the day, the one of a new connection and one asked for alike, goes into the server's chat as a
+ * single line holding all of it, so a page of history never cuts it apart */
+static IrcMessage *keep_welcome_message(Upstream *upstream, const IrcMessage *message) {
+	const char *command = message->command;
+	if (g_str_equal(command, "375")) {
+		g_clear_pointer(&upstream->welcome_message, g_free);
+		upstream->welcome_message = g_strdup("");
+	} else if (g_str_equal(command, "372") && upstream->welcome_message) {
+		char *longer = g_strconcat(upstream->welcome_message, *upstream->welcome_message ? "\n" : "",
+			get_last_irc_parameter(message), NULL);
+		g_free(upstream->welcome_message);
+		upstream->welcome_message = longer;
+	} else if (g_str_equal(command, "376") && upstream->welcome_message) {
+		g_autoptr(IrcMessage) kept = create_irc_message("CRIMSON", "MOTD", NULL);
+		kept->source = g_strdup(message->source);
+		g_autofree char *now = format_irc_time_now();
+		set_irc_tag(kept, "time", get_irc_tag(message, "time") ? get_irc_tag(message, "time") : now);
+		set_irc_tag(kept, WELCOME_MESSAGE_TAG, upstream->welcome_message);
+		g_clear_pointer(&upstream->welcome_message, g_free);
+		store_server_line(upstream, kept);
+		return g_steal_pointer(&kept);
+	}
+	return NULL;
+}
+
+
 static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArray *affected, gpointer data) {
 	Upstream *upstream = data;
 	if (is_ctcp_query(message)) {
@@ -349,6 +375,20 @@ static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArr
 		for_each_downstream(upstream, send_network_caps, upstream);
 	if (g_str_equal(message->command, "CAP") || g_str_equal(message->command, "AUTHENTICATE"))
 		return;
+	/* An asked for message of the day reaches the device that asked as the same single line, in place of its parts */
+	g_autoptr(IrcMessage) welcome_message = keep_welcome_message(upstream, message);
+	gboolean is_motd = g_str_equal(message->command, "375") || g_str_equal(message->command, "372")
+		|| g_str_equal(message->command, "376");
+	if (upstream->is_welcomed && is_motd) {
+		if (welcome_message) {
+			if (get_irc_tag(message, "batch"))
+				set_irc_tag(welcome_message, "batch", get_irc_tag(message, "batch"));
+			Answer answer = read_answer(upstream, message);
+			relay_to_clients(upstream, welcome_message, &answer);
+			g_free(answer.label);
+		}
+		return;
+	}
 	/* The end of the message of the day closes the server's welcome, after its details have all arrived */
 	gboolean is_welcome_end = g_str_equal(message->command, "376") || g_str_equal(message->command, "422");
 	if (!upstream->is_welcomed && is_welcome_end) {
@@ -375,7 +415,10 @@ static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArr
 	follow_answer_batch(upstream, copy);
 	Answer answer = read_answer(upstream, copy);
 	g_hash_table_remove(copy->tags, "label");
-	store_upstream_message(upstream, copy, affected);
+	if (upstream->is_welcomed && is_server_line(copy, answer.origin != NULL))
+		store_server_line(upstream, copy);
+	else
+		store_upstream_message(upstream, copy, affected);
 	relay_to_clients(upstream, copy, &answer);
 	forget_answer_batch(upstream, copy);
 	g_free(answer.label);
@@ -402,6 +445,7 @@ void free_upstream(Upstream *upstream) {
 	clear_network_record(&upstream->record);
 	g_hash_table_unref(upstream->answer_batches);
 	g_hash_table_unref(upstream->channel_keys);
+	g_free(upstream->welcome_message);
 	g_free(upstream->error);
 	g_free(upstream);
 }

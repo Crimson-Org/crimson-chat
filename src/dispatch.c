@@ -12,6 +12,9 @@
 #define TYPING_PAUSED_SECONDS 30
 #define TARGETS_DAYS 30
 #define SEARCH_BATCH "crimson-chat/search"
+/* The conversation a bouncer keeps the server's own chat under, and the tag its kept message of the day is in */
+#define SERVER_TARGET "*"
+#define WELCOME_MESSAGE_TAG "crimson-chat/motd"
 /* Starts each line of the message of the day plain and in a fixed width font */
 #define FIXED_WIDTH_LINE "\x0f\x11"
 /* How much of the user's message the list quotes when someone reacts to it */
@@ -41,8 +44,10 @@ gint64 read_message_time(const IrcMessage *message) {
 }
 
 
+/* A line the bouncer keeps carries its id, so the same line loaded again from history shows once */
 static void add_status(CrimsonRoom *room, const IrcMessage *message, const char *text) {
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_STATUS, NULL, text, read_message_time(message));
+	line->id = g_strdup(get_irc_tag(message, "msgid"));
 	insert_room_message(room, line);
 	announce_room_change(room);
 }
@@ -72,6 +77,7 @@ static void add_server_line(CrimsonNetwork *network, const IrcMessage *message, 
 		return;
 	}
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_NOTICE, NULL, text, read_message_time(message));
+	line->id = g_strdup(get_irc_tag(message, "msgid"));
 	line->arrival_time = g_get_monotonic_time();
 	insert_room_message(network->server_room, line);
 	show_answer(network, question);
@@ -652,7 +658,8 @@ static void start_batch(CrimsonNetwork *network, const IrcMessage *message) {
 	} else if (g_strcmp0(type, "chathistory") == 0) {
 		HistoryLoad *load = g_new0(HistoryLoad, 1);
 		const char *target = get_irc_parameter(message, 2);
-		load->room = target ? find_room(network, target) : NULL;
+		load->room = g_strcmp0(target, SERVER_TARGET) == 0 ? network->server_room : target ? find_room(network,
+			target) : NULL;
 		/* A service's history belongs with the server's messages, like what it says live */
 		if (!load->room && is_service_nick(target))
 			load->room = network->server_room;
@@ -859,6 +866,41 @@ static void show_reply(CrimsonNetwork *network, const IrcMessage *message, Reply
 }
 
 
+/* A message of the day the bouncer kept whole, from history or as the answer to /motd */
+static void deliver_welcome_message(CrimsonNetwork *network, const IrcMessage *message, gboolean is_live) {
+	const char *text = get_irc_tag(message, WELCOME_MESSAGE_TAG);
+	if (!text)
+		return;
+	g_auto(GStrv) lines = g_strsplit(text, "\n", -1);
+	GString *shown = g_string_new(NULL);
+	for (int index = 0; lines[index]; index++) {
+		const char *line = g_str_has_prefix(lines[index], "- ") ? lines[index] + 2 : lines[index];
+		g_string_append_printf(shown, "%s" FIXED_WIDTH_LINE "%s", shown->len ? "\n" : "", line);
+	}
+	g_autofree char *joined = g_string_free(shown, FALSE);
+	g_autoptr(CrimsonMessage) kept = create_message(MESSAGE_NOTICE, NULL, joined, read_message_time(message));
+	kept->id = g_strdup(get_irc_tag(message, "msgid"));
+	kept->arrival_time = is_live ? g_get_monotonic_time() : 0;
+	if (!insert_room_message(network->server_room, kept))
+		return;
+	Question *question = find_question(network, message);
+	if (question)
+		show_answer(network, question);
+	else
+		announce_room_change(network->server_room);
+}
+
+
+/* A reply kept in the server's chat shows in plain words, without anything a live one would also do */
+static void deliver_kept_reply(CrimsonNetwork *network, const IrcMessage *message) {
+	ReplyKind kind = REPLY_NOTE;
+	const char *subject = NULL;
+	g_autofree char *words = describe_reply(message, &kind, &subject);
+	if (kind != REPLY_HIDDEN && words && *words)
+		add_status(network->server_room, message, words);
+}
+
+
 static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) {
 	const char *command = message->command;
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
@@ -997,6 +1039,10 @@ static void handle_message_in(CrimsonNetwork *network, const IrcMessage *message
 		deliver_membership(network, message, load);
 	else if (g_str_equal(command, "QUIT") || g_str_equal(command, "NICK"))
 		deliver_departure(network, message, affected, load);
+	else if (g_str_equal(command, "CRIMSON") && g_strcmp0(get_irc_parameter(message, 0), "MOTD") == 0)
+		deliver_welcome_message(network, message, load == NULL);
+	else if (load && load->room == network->server_room && g_ascii_isdigit(*command))
+		deliver_kept_reply(network, message);
 	else if (load)
 		return;
 	else if (g_str_equal(command, "MARKREAD"))
@@ -1052,12 +1098,19 @@ static void ask_for_history(CrimsonRoom *room, HistoryRequest request, const cha
 	int count) {
 	g_autofree char *limit = g_strdup_printf("%d", count);
 	room->history_request = request;
-	send_irc_client_command(room->network->client, "CHATHISTORY", subcommand, room->name, point, limit, NULL);
+	const char *target = room->kind == ROOM_SERVER ? SERVER_TARGET : room->name;
+	send_irc_client_command(room->network->client, "CHATHISTORY", subcommand, target, point, limit, NULL);
+}
+
+
+/* A bouncer keeps the server's own chat too, while a server reached directly keeps no history of it */
+static gboolean has_room_history(CrimsonRoom *room) {
+	return (room->kind != ROOM_SERVER || room->network->bouncer_id) && can_network(room->network, "draft/chathistory");
 }
 
 
 void request_latest_history(CrimsonRoom *room) {
-	if (room->kind == ROOM_SERVER || room->history_request || !can_network(room->network, "draft/chathistory"))
+	if (room->history_request || !has_room_history(room))
 		return;
 	CrimsonMessage *last = get_last_stored_message(room);
 	if (!last || !room->has_history) {
@@ -1077,8 +1130,7 @@ void request_latest_history(CrimsonRoom *room) {
 
 
 void load_older_history(CrimsonRoom *room, int count) {
-	if (room->kind == ROOM_SERVER || room->history_request || room->has_all_history
-		|| !can_network(room->network, "draft/chathistory"))
+	if (room->history_request || room->has_all_history || !has_room_history(room))
 		return;
 	g_autoptr(CrimsonMessage) first = g_list_model_get_item(G_LIST_MODEL(room->messages), 0);
 	if (!first)
