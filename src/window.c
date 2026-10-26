@@ -1192,6 +1192,26 @@ static void ignore_person_action(GSimpleAction *action, GVariant *parameter, gpo
 }
 
 
+static void log_in_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	const char *key = NULL, *name = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &name);
+	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
+	CrimsonNetwork *network = find_keyed_network(data, network_key);
+	if (network)
+		show_own_profile(data, network);
+}
+
+
+static void enter_room_password_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
+	const char *key = NULL, *name = NULL;
+	g_variant_get(parameter, "(&s&s)", &key, &name);
+	g_autoptr(GVariant) network_key = g_variant_ref_sink(g_variant_new_string(key));
+	CrimsonNetwork *network = find_keyed_network(data, network_key);
+	if (network)
+		ask_room_password(data, network, name);
+}
+
+
 static void join_invited_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
 	const char *key = NULL, *name = NULL;
@@ -1330,6 +1350,8 @@ static void add_window_actions(Window *window) {
 		{"mark-read", mark_read_action, "(ss)", NULL, NULL, {0}},
 		{"ignore-person", ignore_person_action, "(ss)", NULL, NULL, {0}},
 		{"join-invited", join_invited_action, "(ss)", NULL, NULL, {0}},
+		{"log-in", log_in_action, "(ss)", NULL, NULL, {0}},
+		{"enter-room-password", enter_room_password_action, "(ss)", NULL, NULL, {0}},
 		{"mark-server-read", mark_server_read_action, "s", NULL, NULL, {0}},
 		{"search", search_action, NULL, NULL, NULL, {0}},
 		{"search-messages", search_messages_action, NULL, NULL, NULL, {0}},

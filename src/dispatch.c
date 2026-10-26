@@ -851,15 +851,19 @@ static gboolean is_latest_line(CrimsonRoom *room, const char *text) {
 }
 
 
-/* A problem with something the user just did shows at once, a room that would not let the user back in keeps a
- * note saying why, problems with what the app asked by itself stay with the server's messages, and other replies go
- * with the room they concern */
+/* A problem with something the user just did shows at once, or what helps with it opens, a room that would not let
+ * the user back in keeps a note saying why, problems with what the app asked by itself stay with the server's
+ * messages, and other replies go with the room they concern */
 static void show_reply(CrimsonNetwork *network, const IrcMessage *message, ReplyKind kind, const char *words,
 	const char *subject, const char *action) {
 	CrimsonRoom *room = subject ? find_room(network, subject) : NULL;
 	gboolean is_problem = kind == REPLY_PROBLEM || kind == REPLY_REFUSED_JOIN;
-	if (is_problem && find_question(network, message))
-		network->session->chat->events.show_message(words, network->session->chat->data);
+	ChatEvents *events = &network->session->chat->events;
+	gboolean is_asked = is_problem && find_question(network, message);
+	if (is_asked && action && subject)
+		events->help_offered(network, action, subject, network->session->chat->data);
+	else if (is_asked)
+		events->show_message(words, network->session->chat->data);
 	else if (kind == REPLY_PROBLEM)
 		add_status(network->server_room, message, words);
 	else if (room && !is_latest_line(room, words))

@@ -1470,7 +1470,7 @@ static void run_note_action(const char *action, gpointer data) {
 	Conversation *conversation = data;
 	if (conversation->room)
 		g_action_group_activate_action(G_ACTION_GROUP(conversation->window->window), action,
-			g_variant_new_string(conversation->room->network->key));
+			g_variant_new("(ss)", conversation->room->network->key, conversation->room->name));
 }
 
 

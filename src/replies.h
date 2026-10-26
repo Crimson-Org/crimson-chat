@@ -12,7 +12,8 @@ typedef enum {
 } ReplyKind;
 
 /* A numeric reply in plain words, with how it shows, the room or person it concerns, which stays valid while the
- * message does, and the window action that helps with it, each NULL for none */
+ * message does, and the window action that helps with it, taking the server's key and that room or person, each
+ * NULL for none */
 char *describe_reply(const IrcMessage *message, ReplyKind *kind, const char **subject, const char **action);
 /* Someone leaving a room or the network, with the reason they gave in plain words, where the stock reasons servers
  * and clients add say nothing more than that they left or lost their connection */

@@ -4,8 +4,8 @@
 #include "replies.h"
 
 /* Replies the app words itself, with the positions of the parameters its text names and of the one naming the room
- * or person it concerns, where the user's own nick comes first at zero and zero means none, and what clicking the
- * line does for its server where something can help */
+ * or person it concerns, where the user's own nick comes first at zero and zero means none, and the window action
+ * that helps, which takes the server's key and that room or person */
 static const struct {
 	int number;
 	ReplyKind kind;
@@ -38,9 +38,9 @@ static const struct {
 	{472, REPLY_PROBLEM, TEXT_REPLY_UNKNOWN_SETTING, 0, 0, 0, NULL},
 	{473, REPLY_REFUSED_JOIN, TEXT_REPLY_INVITE_ONLY, 1, 0, 1, NULL},
 	{474, REPLY_REFUSED_JOIN, TEXT_REPLY_BANNED, 1, 0, 1, NULL},
-	{475, REPLY_REFUSED_JOIN, TEXT_REPLY_NEEDS_PASSWORD, 1, 0, 1, NULL},
+	{475, REPLY_REFUSED_JOIN, TEXT_REPLY_NEEDS_PASSWORD, 1, 0, 1, "enter-room-password"},
 	{476, REPLY_PROBLEM, TEXT_REPLY_BAD_ROOM_NAME, 1, 0, 0, NULL},
-	{477, REPLY_REFUSED_JOIN, TEXT_REPLY_ACCOUNTS_ONLY, 1, 0, 1, "own-profile"},
+	{477, REPLY_REFUSED_JOIN, TEXT_REPLY_ACCOUNTS_ONLY, 1, 0, 1, "log-in"},
 	{478, REPLY_PROBLEM, TEXT_REPLY_LIST_FULL, 1, 0, 1, NULL},
 	{481, REPLY_PROBLEM, TEXT_REPLY_SERVER_OPERATORS_ONLY, 0, 0, 0, NULL},
 	{482, REPLY_PROBLEM, TEXT_REPLY_MODERATORS_ONLY, 1, 0, 1, NULL},

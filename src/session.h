@@ -16,6 +16,9 @@ typedef struct {
 	void (*certificate_refused)(Session *session, const char *hash, gpointer data);
 	/* A short line for the user, such as a problem the server reports */
 	void (*show_message)(const char *text, gpointer data);
+	/* Something the user just did was refused for a reason they can fix, so the window action that helps runs with
+	 * the server and the room or person concerned, such as asking for a room's password */
+	void (*help_offered)(CrimsonNetwork *network, const char *action, const char *subject, gpointer data);
 	/* A room the user asked for, such as a channel just joined or a private chat just opened */
 	void (*room_opened)(CrimsonRoom *room, gpointer data);
 	/* A bouncer created an invite, with its token, its uses or * for unlimited, and its website's port */

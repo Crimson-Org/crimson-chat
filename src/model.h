@@ -66,7 +66,8 @@ struct _CrimsonMessage {
 	gboolean is_spotlit;
 	/* Someone else joining, leaving, quitting, renaming or changing modes, kept always and shown by the setting */
 	gboolean is_membership;
-	/* The window action clicking the line runs for its server, such as opening the login, or NULL */
+	/* The window action clicking the line runs with its server's key and room name, such as opening the login, or
+	 * NULL */
 	const char *action;
 	/* The monotonic moment a live message arrived, or 0 for one loaded from history */
 	gint64 arrival_time;

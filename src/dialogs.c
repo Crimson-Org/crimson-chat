@@ -571,6 +571,31 @@ void show_away_dialog(Window *window) {
 }
 
 
+static void finish_room_password(AdwAlertDialog *alert, const char *response, CrimsonNetwork *network) {
+	const char *password = gtk_editable_get_text(GTK_EDITABLE(g_object_get_data(G_OBJECT(alert), "entry")));
+	if (g_strcmp0(response, "join") == 0 && *password)
+		join_channel(network, g_object_get_data(G_OBJECT(alert), "room"), password);
+}
+
+
+void ask_room_password(Window *window, CrimsonNetwork *network, const char *room_name) {
+	g_autofree char *heading = g_strdup_printf(TEXT_REPLY_NEEDS_PASSWORD, room_name);
+	AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
+	GtkWidget *entry = gtk_password_entry_new();
+	gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(entry), TRUE);
+	g_object_set(entry, "activates-default", TRUE, "placeholder-text", TEXT_PASSWORD, NULL);
+	adw_alert_dialog_set_extra_child(ADW_ALERT_DIALOG(alert), entry);
+	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "join", TEXT_JOIN, NULL);
+	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "join", ADW_RESPONSE_SUGGESTED);
+	adw_alert_dialog_set_default_response(ADW_ALERT_DIALOG(alert), "join");
+	g_object_set_data(G_OBJECT(alert), "entry", entry);
+	g_object_set_data_full(G_OBJECT(alert), "room", g_strdup(room_name), g_free);
+	g_signal_connect(alert, "response", G_CALLBACK(finish_room_password), network);
+	adw_dialog_present(alert, GTK_WIDGET(window->window));
+	adw_dialog_set_focus(alert, entry);
+}
+
+
 void show_room_invite_dialog(Window *window, CrimsonRoom *room) {
 	show_person_dialog(window, room->network, room);
 }

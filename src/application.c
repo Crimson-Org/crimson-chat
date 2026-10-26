@@ -78,6 +78,14 @@ static void show_message(const char *text, gpointer data) {
 }
 
 
+static void offer_help(CrimsonNetwork *network, const char *action, const char *subject, gpointer data) {
+	Window *window = get_main_window();
+	if (window)
+		g_action_group_activate_action(G_ACTION_GROUP(window->window), action, g_variant_new("(ss)", network->key,
+			subject));
+}
+
+
 static void open_requested_room(CrimsonRoom *room, gpointer data) {
 	Window *window = get_main_window();
 	if (window)
@@ -232,7 +240,7 @@ static void quit(GSimpleAction *action, GVariant *parameter, gpointer applicatio
 static void start_up(GApplication *application) {
 	load_settings();
 	apply_style();
-	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, open_requested_room,
+	static const ChatEvents EVENTS = {notify_message, refuse_certificate, show_message, offer_help, open_requested_room,
 		share_invite, forget_network, withdraw_notification, show_server_rooms, offer_invited_room,
 		show_requested_profile, follow_away};
 	chat = create_chat(&EVENTS, NULL);
