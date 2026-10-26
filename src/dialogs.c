@@ -579,8 +579,7 @@ static void finish_room_password(AdwAlertDialog *alert, const char *response, Cr
 
 
 void ask_room_password(Window *window, CrimsonNetwork *network, const char *room_name) {
-	g_autofree char *heading = g_strdup_printf(TEXT_REPLY_NEEDS_PASSWORD, room_name);
-	AdwDialog *alert = adw_alert_dialog_new(heading, NULL);
+	AdwDialog *alert = adw_alert_dialog_new(room_name, TEXT_ROOM_PASSWORD_BODY);
 	GtkWidget *entry = gtk_password_entry_new();
 	gtk_password_entry_set_show_peek_icon(GTK_PASSWORD_ENTRY(entry), TRUE);
 	g_object_set(entry, "activates-default", TRUE, "placeholder-text", TEXT_PASSWORD, NULL);

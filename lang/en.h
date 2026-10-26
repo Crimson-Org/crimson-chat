@@ -151,6 +151,7 @@
 #define TEXT_REPLY_INVITE_ONLY "%s is invite only"
 #define TEXT_REPLY_BANNED "You are banned from %s"
 #define TEXT_REPLY_NEEDS_PASSWORD "%s needs its password to join"
+#define TEXT_ROOM_PASSWORD_BODY "This room needs its password to join"
 #define TEXT_REPLY_BAD_ROOM_NAME "%s is not a valid room name"
 #define TEXT_REPLY_ACCOUNTS_ONLY "This room needs you to log in"
 #define TEXT_REPLY_LIST_FULL "The list of %s is full"
