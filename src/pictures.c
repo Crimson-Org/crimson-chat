@@ -5,6 +5,7 @@
 #include "../lang/en.h"
 #include "common/key-store.h"
 #include "images.h"
+#include "known-networks.h"
 #include "pictures.h"
 #include "room-look.h"
 #include "session.h"
@@ -70,11 +71,12 @@ static const char *read_network_host(CrimsonNetwork *network) {
 }
 
 
-/* The picture the server itself offers, or Crimson's own for the Crimson server */
+/* The picture the server itself offers, or the logo built into the app for a well known network */
 static const char *find_offered_network_picture(CrimsonNetwork *network) {
 	if (network->icon_url)
 		return network->icon_url;
-	return g_strcmp0(read_network_host(network), CRIMSON_SERVER_HOST) == 0 ? CRIMSON_SERVER_PICTURE : NULL;
+	const KnownNetwork *known = find_known_network(read_network_host(network));
+	return known ? known->picture : NULL;
 }
 
 

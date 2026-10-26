@@ -8,6 +8,19 @@
 		<file alias="common.css">../subprojects/crimson-core/data/common.css</file>
 		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonChat.svg</file>
 		<file>icons/scalable/apps/crimson-server.svg</file>
+		<file>icons/scalable/apps/server-libera.svg</file>
+		<file>icons/scalable/apps/server-hybridirc.svg</file>
+		<file>icons/scalable/apps/server-hackint.svg</file>
+		<file>icons/scalable/apps/server-snoonet.svg</file>
+		<file>icons/scalable/apps/server-tilde.svg</file>
+		<file>icons/scalable/apps/server-ergo.svg</file>
+		<file>icons/scalable/apps/server-oftc.svg</file>
+		<file>icons/scalable/apps/server-undernet.svg</file>
+		<file>icons/scalable/apps/server-rizon.svg</file>
+		<file>icons/scalable/apps/server-efnet.svg</file>
+		<file>icons/scalable/apps/server-dalnet.svg</file>
+		<file>icons/scalable/apps/server-quakenet.svg</file>
+		<file>icons/scalable/apps/server-ircnet.svg</file>
 		<file>icons/symbolic/apps/io.github.CrimsonOrg.CrimsonChat-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-channel-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-chats-symbolic.svg</file>

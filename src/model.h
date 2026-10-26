@@ -119,11 +119,6 @@ struct _CrimsonRoom {
  * again on each connection */
 #define OWN_PROFILE_KEYS "display-name", "avatar", "status", "pronouns", "homepage"
 
-/* The Crimson project's own server, suggested first and shown with the Crimson logo */
-#define CRIMSON_SERVER_NAME "Crimson"
-#define CRIMSON_SERVER_HOST "chat.skenliv.se"
-#define CRIMSON_SERVER_PICTURE "icon:crimson-server"
-
 #define CRIMSON_TYPE_NETWORK (crimson_network_get_type())
 G_DECLARE_FINAL_TYPE(CrimsonNetwork, crimson_network, CRIMSON, NETWORK, GObject)
 

@@ -3,6 +3,7 @@
 #include "../lang/en.h"
 #include "dialogs.h"
 #include "images.h"
+#include "known-networks.h"
 #include "room-picker.h"
 #include "wizards.h"
 
@@ -12,21 +13,8 @@
 #define ICON_SIZE 72
 #define HELP_WIDTH_CHARS 34
 #define NETWORK_AVATAR_SIZE 40
-#define TLS_PORT 6697
 #define HTTPS_PORT 443
 #define LINK_SCHEME "crimson-chat"
-
-/* Well known networks with broad IRCv3 support, from the ircv3.net network table, all reached over TLS */
-static const struct {
-	const char *name, *host, *about, *picture;
-} KNOWN_NETWORKS[] = {
-	{CRIMSON_SERVER_NAME, CRIMSON_SERVER_HOST, TEXT_CRIMSON_ABOUT, CRIMSON_SERVER_PICTURE},
-	{"Libera.Chat", "irc.libera.chat", TEXT_LIBERA_ABOUT, NULL},
-	{"Ergo", "irc.ergo.chat", TEXT_ERGO_ABOUT, NULL},
-	{"hackint", "irc.hackint.org", TEXT_HACKINT_ABOUT, NULL},
-	{"tilde.chat", "irc.tilde.chat", TEXT_TILDE_ABOUT, NULL},
-	{"Snoonet", "irc.snoonet.org", TEXT_SNOONET_ABOUT, NULL},
-};
 
 /* The answers a guide has collected so far */
 typedef struct {
@@ -443,42 +431,98 @@ static void push_address_step(Guide *guide) {
 }
 
 
-static void pick_network(GtkListBox *list, GtkListBoxRow *row, Guide *guide) {
-	int index = gtk_list_box_row_get_index(row);
-	if (index < 0 || index >= (int)G_N_ELEMENTS(KNOWN_NETWORKS)) {
-		push_address_step(guide);
-		return;
-	}
-	choose_server(guide, KNOWN_NETWORKS[index].name, KNOWN_NETWORKS[index].host, TLS_PORT, TRUE);
-}
+/* The rows on the first page that open a list of their own, each with the networks of one group */
+static const struct {
+	KnownNetworkGroup group;
+	const char *title, *about, *icon, *help;
+} NETWORK_SHELVES[] = {
+	{KNOWN_MODERN, TEXT_MODERN_SERVERS, TEXT_MODERN_SERVERS_ABOUT, "starred-symbolic", TEXT_HELP_PICK_MODERN},
+	{KNOWN_LEGACY, TEXT_LEGACY_SERVERS, TEXT_LEGACY_SERVERS_ABOUT, "document-open-recent-symbolic", TEXT_HELP_PICK_LEGACY},
+};
 
 
-static GtkWidget *create_network_row(const char *name, const char *about, const char *picture, gboolean is_custom) {
+/* A row shows a network's picture, or an icon when it leads somewhere other than a network, and any mark before its
+ * arrow */
+static GtkWidget *create_network_row(const char *name, const char *about, const char *picture, const char *icon,
+	GtkWidget *mark) {
 	GtkWidget *row = adw_action_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), name);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), about);
 	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
-	GtkWidget *avatar = is_custom ? gtk_image_new_from_icon_name("list-add-symbolic")
-		: adw_avatar_new(NETWORK_AVATAR_SIZE, name, TRUE);
-	if (is_custom)
+	GtkWidget *avatar = icon ? gtk_image_new_from_icon_name(icon) : adw_avatar_new(NETWORK_AVATAR_SIZE, name, TRUE);
+	if (icon)
 		gtk_widget_set_size_request(avatar, NETWORK_AVATAR_SIZE, NETWORK_AVATAR_SIZE);
 	else if (picture)
 		show_avatar_image(ADW_AVATAR(avatar), picture);
 	adw_action_row_add_prefix(ADW_ACTION_ROW(row), avatar);
+	if (mark)
+		adw_action_row_add_suffix(ADW_ACTION_ROW(row), mark);
 	adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name("go-next-symbolic"));
 	return row;
+}
+
+
+/* A network that only takes unencrypted connections shows an open padlock before the arrow */
+static GtkWidget *create_known_network_row(const KnownNetwork *network) {
+	GtkWidget *padlock = NULL;
+	if (!network->uses_tls) {
+		padlock = gtk_image_new_from_icon_name("channel-insecure-symbolic");
+		gtk_widget_set_tooltip_text(padlock, TEXT_NOT_ENCRYPTED);
+		gtk_widget_add_css_class(padlock, "dim-label");
+	}
+	GtkWidget *row = create_network_row(network->name, network->about, network->picture, NULL, padlock);
+	g_object_set_data(G_OBJECT(row), "network", (gpointer)network);
+	return row;
+}
+
+
+static void push_shelf_step(Guide *guide, guint shelf);
+
+/* A network row starts with that network, a shelf row opens its list, and any other row goes to the address step */
+static void pick_network(GtkListBox *list, GtkListBoxRow *row, Guide *guide) {
+	const KnownNetwork *network = g_object_get_data(G_OBJECT(row), "network");
+	if (network) {
+		choose_server(guide, network->name, network->host, network->port, network->uses_tls);
+		return;
+	}
+	gpointer shelf = g_object_get_data(G_OBJECT(row), "shelf");
+	if (shelf) {
+		push_shelf_step(guide, GPOINTER_TO_UINT(shelf) - 1);
+		return;
+	}
+	push_address_step(guide);
+}
+
+
+static GtkWidget *create_network_list(Guide *guide, KnownNetworkGroup group) {
+	GtkWidget *list = create_boxed_list();
+	for (guint index = 0; index < KNOWN_NETWORK_COUNT; index++)
+		if (KNOWN_NETWORKS[index].group == group)
+			gtk_list_box_append(GTK_LIST_BOX(list), create_known_network_row(&KNOWN_NETWORKS[index]));
+	g_signal_connect(list, "row-activated", G_CALLBACK(pick_network), guide);
+	return list;
+}
+
+
+static void push_shelf_step(Guide *guide, guint shelf) {
+	GtkWidget *list = create_network_list(guide, NETWORK_SHELVES[shelf].group);
+	adw_navigation_view_push(guide->pages, create_step(NETWORK_SHELVES[shelf].title, NULL,
+		NETWORK_SHELVES[shelf].icon, list, NULL, NETWORK_SHELVES[shelf].help));
 }
 
 
 void show_server_guide(Window *window) {
 	Guide *guide = create_guide(window, TEXT_ADD_SERVER_TITLE);
 	guide->bouncer = find_bouncer(window->chat);
-	GtkWidget *list = create_boxed_list();
-	for (guint index = 0; index < G_N_ELEMENTS(KNOWN_NETWORKS); index++)
-		gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(KNOWN_NETWORKS[index].name,
-			KNOWN_NETWORKS[index].about, KNOWN_NETWORKS[index].picture, FALSE));
-	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, NULL, TRUE));
-	g_signal_connect(list, "row-activated", G_CALLBACK(pick_network), guide);
+	GtkWidget *list = create_network_list(guide, KNOWN_FEATURED);
+	for (guint shelf = 0; shelf < G_N_ELEMENTS(NETWORK_SHELVES); shelf++) {
+		GtkWidget *row = create_network_row(NETWORK_SHELVES[shelf].title, NETWORK_SHELVES[shelf].about, NULL,
+			NETWORK_SHELVES[shelf].icon, NULL);
+		/* Stored one higher so the first shelf is not mistaken for a missing one */
+		g_object_set_data(G_OBJECT(row), "shelf", GUINT_TO_POINTER(shelf + 1));
+		gtk_list_box_append(GTK_LIST_BOX(list), row);
+	}
+	gtk_list_box_append(GTK_LIST_BOX(list), create_network_row(TEXT_OTHER_SERVER, NULL, NULL, "list-add-symbolic", NULL));
 	adw_navigation_view_push(guide->pages, create_step(TEXT_PICK_NETWORK_TITLE, NULL,
 		"crimson-chats-symbolic", list, NULL, guide->bouncer ? TEXT_HELP_PICK_ON_BOUNCER : TEXT_HELP_PICK));
 	adw_dialog_present(guide->dialog, GTK_WIDGET(window->window));
