@@ -15,6 +15,8 @@ typedef struct {
 	/* A click on a person's name or picture opens their profile, and a right click their menu */
 	void (*show_person)(const char *nick, gpointer data);
 	void (*person_menu)(GtkWidget *anchor, const char *nick, double x, double y, gpointer data);
+	/* A click on a note that offers help runs its window action for the room's server */
+	void (*run_note_action)(const char *action, gpointer data);
 	gpointer data;
 } MessageActions;
 
@@ -27,6 +29,8 @@ typedef struct {
 	gboolean starts_unread, ends_group;
 	/* An event run's notes one per line on its first row, and NULL on the rest, which draw nothing */
 	const char *notes;
+	/* What clicking the run's pill does, from its newest event that offers something, or NULL */
+	const char *action;
 } RowPlace;
 
 /* Rebuilds the row for a message, joining it to the group above it when the same person wrote both, with a line

@@ -290,13 +290,15 @@ static gboolean ends_group_at(RoomView *view, guint position, CrimsonMessage *me
 }
 
 
-/* The first event of a run gathers the events below it, one per line */
-static char *gather_notes(RoomView *view, guint position, CrimsonMessage *message) {
+/* The first event of a run gathers the events below it, one per line, and what the newest of them offers to do */
+static char *gather_notes(RoomView *view, guint position, CrimsonMessage *message, const char **action) {
 	GString *notes = g_string_new(NULL);
 	CrimsonMessage *current = message;
 	for (guint index = position;; index++) {
 		g_autofree char *plain = strip_irc_formatting(current->text);
 		g_string_append_printf(notes, "%s%s", notes->len ? "\n" : "", plain);
+		if (current->action)
+			*action = current->action;
 		CrimsonMessage *next = get_message_at(view, index + 1);
 		if (!next || !continues_note_run(next, current, starts_unread(view, next, current)))
 			break;
@@ -311,10 +313,10 @@ static void fill_row(RoomView *view, GtkListItem *item) {
 	guint position = gtk_list_item_get_position(item);
 	CrimsonMessage *previous = position ? get_message_at(view, position - 1) : NULL;
 	RowPlace place = {previous, starts_unread(view, message, previous), ends_group_at(view, position, message),
-		NULL};
+		NULL, NULL};
 	g_autofree char *notes = NULL;
 	if (message->kind == MESSAGE_EVENT && !continues_note_run(message, previous, place.starts_unread))
-		notes = gather_notes(view, position, message);
+		notes = gather_notes(view, position, message, &place.action);
 	place.notes = notes;
 	fill_message_row(gtk_list_item_get_child(item), message, &place, view->room, &view->conversation->actions);
 }
@@ -1464,11 +1466,19 @@ static void relabel_days(gpointer data) {
 }
 
 
+static void run_note_action(const char *action, gpointer data) {
+	Conversation *conversation = data;
+	if (conversation->room)
+		g_action_group_activate_action(G_ACTION_GROUP(conversation->window->window), action,
+			g_variant_new_string(conversation->room->network->key));
+}
+
+
 Conversation *create_conversation(Window *window) {
 	Conversation *conversation = g_new0(Conversation, 1);
 	conversation->window = window;
 	conversation->actions = (MessageActions){reply_to, react_to, remove_message, resend_message, show_message,
-		show_person, show_person_menu, conversation};
+		show_person, show_person_menu, run_note_action, conversation};
 	/* Coming back to the window counts as seeing the open chat, so what arrived meanwhile is read */
 	g_signal_connect_swapped(window->window, "notify::is-active", G_CALLBACK(mark_read_when_seen), conversation);
 	conversation->stack = gtk_stack_new();
@@ -1565,6 +1575,7 @@ static void follow_connection(Conversation *conversation) {
 	CrimsonRoom *room = conversation->room;
 	g_autofree char *wait = room && room->kind != ROOM_SERVER ? describe_connection_wait(room->network) : NULL;
 	set_composer_waiting(conversation->composer, wait);
+	set_composer_refusal(conversation->composer, room ? room->refusal : NULL);
 	refresh_composer_sharing(conversation->composer);
 }
 

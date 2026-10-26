@@ -34,6 +34,9 @@ struct Composer {
 	gboolean is_typing;
 	/* Whether the room's server is not connected, which turns the send button into a spinner and holds the text */
 	gboolean is_waiting, is_spinner_shown;
+	/* Why the room takes no messages from the user, such as needing a login, which greys out the send button for
+	 * anything but commands, or NULL */
+	char *refusal;
 	/* The send button only takes room beside the field while there is text to send or a wait to show */
 	GtkWidget *send_icons, *field_area;
 	AdwAnimation *send_room_animation;
@@ -95,9 +98,15 @@ static void stop_typing_notice(Composer *composer) {
 }
 
 
+/* Commands still go to a room that refuses messages, so the user can log in or join from it */
+static gboolean can_send_text(Composer *composer, const char *text) {
+	return !composer->is_waiting && (!composer->refusal || *text == '/');
+}
+
+
 static void send_field(Composer *composer) {
 	g_autofree char *text = get_field_text(composer);
-	if (!composer->room || composer->is_waiting || strspn(text, " \n\t") == strlen(text))
+	if (!composer->room || !can_send_text(composer, text) || strspn(text, " \n\t") == strlen(text))
 		return;
 	send_room_text(composer->room, text, composer->reply_to);
 	gtk_text_buffer_set_text(composer->buffer, "", -1);
@@ -413,7 +422,7 @@ static void move_field_aside(double value, gpointer data) {
 /* Going, the button shrinks away at once while the field takes the room back */
 static void refresh_send_button(Composer *composer) {
 	g_autofree char *text = get_field_text(composer);
-	gtk_widget_set_sensitive(composer->send_button, *text && !composer->is_waiting);
+	gtk_widget_set_sensitive(composer->send_button, *text && can_send_text(composer, text));
 	gboolean is_shown = *text || composer->is_spinner_shown;
 	if (is_shown == composer->is_send_shown)
 		return;
@@ -782,7 +791,8 @@ static gboolean show_send_waiting(gpointer data) {
 
 void set_composer_waiting(Composer *composer, const char *message) {
 	gboolean is_waiting = message != NULL;
-	gtk_widget_set_tooltip_text(composer->send_button, message ? message : TEXT_SEND);
+	gtk_widget_set_tooltip_text(composer->send_button, message ? message : composer->refusal ? composer->refusal
+		: TEXT_SEND);
 	if (composer->is_waiting == is_waiting)
 		return;
 	composer->is_waiting = is_waiting;
@@ -792,5 +802,16 @@ void set_composer_waiting(Composer *composer, const char *message) {
 		composer->wait_source = g_timeout_add(WAIT_SHOWN_MS, show_send_waiting, composer);
 	else
 		show_send_look(composer, FALSE);
+	refresh_send_button(composer);
+}
+
+
+void set_composer_refusal(Composer *composer, const char *refusal) {
+	if (g_strcmp0(composer->refusal, refusal) == 0)
+		return;
+	g_free(composer->refusal);
+	composer->refusal = g_strdup(refusal);
+	if (!composer->is_waiting)
+		gtk_widget_set_tooltip_text(composer->send_button, refusal ? refusal : TEXT_SEND);
 	refresh_send_button(composer);
 }

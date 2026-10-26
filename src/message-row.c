@@ -626,6 +626,8 @@ typedef struct {
 	GtkWidget *text_line, *body, *reveal, *previews, *footer, *bot, *time, *state, *reactions_slot;
 	/* The colour class of the sender's name, which the next message's replaces */
 	char *name_color;
+	/* The window action the event pill runs when clicked, or NULL */
+	const char *note_action;
 	RowContext context;
 } RowParts;
 
@@ -860,6 +862,12 @@ static GtkWidget *create_message_line(RowParts *parts) {
 }
 
 
+static void click_note(GtkGestureClick *gesture, int presses, double x, double y, RowParts *parts) {
+	if (parts->note_action)
+		parts->context.actions->run_note_action(parts->note_action, parts->context.actions->data);
+}
+
+
 GtkWidget *create_message_row(void) {
 	GtkWidget *row = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_add_css_class(row, "message-row");
@@ -868,6 +876,9 @@ GtkWidget *create_message_row(void) {
 	parts->day_pill = create_pill(NULL, "day-pill");
 	parts->read_line = create_read_line();
 	parts->event_pill = create_pill(NULL, "event-pill");
+	GtkGesture *click = gtk_gesture_click_new();
+	g_signal_connect(click, "released", G_CALLBACK(click_note), parts);
+	gtk_widget_add_controller(parts->event_pill, GTK_EVENT_CONTROLLER(click));
 	GtkWidget *pieces[] = {parts->day_pill, parts->read_line, parts->event_pill, create_message_line(parts)};
 	for (guint index = 0; index < G_N_ELEMENTS(pieces); index++) {
 		gtk_widget_set_visible(pieces[index], FALSE);
@@ -897,12 +908,15 @@ static void show_day(GtkWidget *row, RowParts *parts, CrimsonMessage *message) {
 }
 
 
-/* Events and the server's own short lines both show as a pill in the middle of the chat */
-static void show_notes(RowParts *parts, CrimsonMessage *message, const char *notes) {
+/* Events and the server's own short lines both show as a pill in the middle of the chat, which can be clicked
+ * where it offers help */
+static void show_notes(RowParts *parts, CrimsonMessage *message, const char *notes, const char *action) {
 	g_autofree char *status = message && message->kind == MESSAGE_STATUS ? strip_irc_formatting(message->text)
 		: NULL;
 	const char *text = notes ? notes : status;
+	parts->note_action = text ? action : NULL;
 	gtk_widget_set_visible(parts->event_pill, text != NULL);
+	gtk_widget_set_cursor_from_name(parts->event_pill, parts->note_action ? "pointer" : NULL);
 	if (!text)
 		return;
 	gtk_label_set_text(GTK_LABEL(parts->event_pill), text);
@@ -1058,7 +1072,8 @@ void fill_message_row(GtkWidget *row, CrimsonMessage *message, const RowPlace *p
 	gboolean is_new_day = !previous || !is_same_day(previous->time, message->time);
 	show_day(row, parts, !is_folded && is_new_day && message->kind != MESSAGE_STATUS ? message : NULL);
 	gtk_widget_set_visible(parts->read_line, !is_folded && place->starts_unread);
-	show_notes(parts, is_folded ? NULL : message, is_folded ? NULL : place->notes);
+	show_notes(parts, is_folded ? NULL : message, is_folded ? NULL : place->notes, place->notes ? place->action
+		: message->action);
 	gboolean is_spoken = !is_folded && message->kind != MESSAGE_EVENT && message->kind != MESSAGE_STATUS;
 	gtk_widget_set_visible(parts->line, is_spoken);
 	/* The new messages start a group of their own, so the first one shows who wrote it again */

@@ -123,6 +123,7 @@ static void finalize_room(GObject *object) {
 	CrimsonRoom *room = CRIMSON_ROOM(object);
 	g_free(room->name);
 	g_free(room->topic);
+	g_free(room->refusal);
 	g_free(room->preview);
 	g_free(room->preview_sender);
 	g_free(room->new_reaction);

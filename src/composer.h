@@ -18,6 +18,8 @@ void focus_composer_field(Composer *composer);
 /* While the room's server is not connected the send button spins and nothing is sent, keeping what was typed */
 /* The message says what the server waits for, or is NULL once it is connected */
 void set_composer_waiting(Composer *composer, const char *message);
+/* Why the room takes no messages from the user, which the greyed out send button says, or NULL */
+void set_composer_refusal(Composer *composer, const char *refusal);
 /* Shows the button for sharing a file while the room's server takes files */
 void refresh_composer_sharing(Composer *composer);
 /* Puts a person's nick into the message, at the start as "Nick: " or where the cursor is */

@@ -395,6 +395,7 @@ static void handle_network_status(IrcClient *client, IrcClientStatus status, con
 		for (guint index = 0; index < count; index++) {
 			g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
 			room->is_joined = FALSE;
+			g_clear_pointer(&room->refusal, g_free);
 			room->history_request = HISTORY_NONE;
 			g_hash_table_remove_all(room->typing);
 			if (status == IRC_CLIENT_DISCONNECTED)

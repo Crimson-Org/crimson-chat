@@ -407,11 +407,13 @@ static void deliver_redaction(CrimsonNetwork *network, const IrcMessage *message
 }
 
 
-static void add_event(CrimsonRoom *room, const IrcMessage *message, char *text, gboolean is_membership) {
+static void add_event(CrimsonRoom *room, const IrcMessage *message, char *text, gboolean is_membership,
+	const char *action) {
 	g_autofree char *owned = text;
 	g_autoptr(CrimsonMessage) line = create_message(MESSAGE_EVENT, NULL, text, read_message_time(message));
 	line->id = g_strdup(get_irc_tag(message, "msgid"));
 	line->is_membership = is_membership;
+	line->action = action;
 	if (insert_room_message(room, line))
 		announce_room_change(room);
 }
@@ -436,6 +438,7 @@ void save_network_channels(CrimsonNetwork *network) {
 
 static void handle_own_join(CrimsonNetwork *network, CrimsonRoom *room) {
 	room->is_joined = TRUE;
+	g_clear_pointer(&room->refusal, g_free);
 	/* A server reached directly is asked who the room's people are, which a bouncer asks for itself */
 	IrcState *joined_state = get_network_state(network);
 	if (!network->bouncer_id && joined_state && get_irc_support(joined_state, "WHOX"))
@@ -466,7 +469,7 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 		if (room && is_self && !load)
 			handle_own_join(network, room);
 		else if (room)
-			add_event(room, message, g_strdup_printf(TEXT_JOINED, sender), TRUE);
+			add_event(room, message, g_strdup_printf(TEXT_JOINED, sender), TRUE, NULL);
 	} else if (g_str_equal(command, "PART") && room) {
 		const char *reason = get_irc_parameter(message, 1);
 		stop_typing(room, sender);
@@ -474,23 +477,23 @@ static void deliver_membership(CrimsonNetwork *network, const IrcMessage *messag
 			room->is_joined = FALSE;
 			save_network_channels(network);
 		}
-		add_event(room, message, describe_leaving(sender, reason), !is_self);
+		add_event(room, message, describe_leaving(sender, reason), !is_self, NULL);
 	} else if (g_str_equal(command, "KICK") && room) {
 		const char *kicked = get_irc_parameter(message, 1);
 		if (kicked && is_own_nick(state, kicked) && !load)
 			room->is_joined = FALSE;
 		add_event(room, message, describe_kick(sender, kicked, get_irc_parameter(message, 2)),
-			FALSE);
+			FALSE, NULL);
 	} else if (g_str_equal(command, "TOPIC") && room) {
 		g_free(room->topic);
 		room->topic = g_strdup(get_irc_parameter(message, 1));
 		add_event(room, message, g_strdup_printf(TEXT_TOPIC_CHANGED, sender, get_last_irc_parameter(message)),
-			FALSE);
+			FALSE, NULL);
 	} else if (g_str_equal(command, "MODE") && room) {
 		/* Changes to the room and its people stay in view, unlike the comings and goings that are hidden by choice */
 		char *text = describe_room_modes(state, message, 1);
 		if (text)
-			add_event(room, message, text, FALSE);
+			add_event(room, message, text, FALSE, NULL);
 	}
 }
 
@@ -522,7 +525,7 @@ static void deliver_departure(CrimsonNetwork *network, const IrcMessage *message
 	for (guint index = 0; index < rooms->len; index++) {
 		char *text = is_nick ? g_strdup_printf(TEXT_RENAMED, sender, new_nick)
 			: describe_leaving(sender, get_irc_parameter(message, 0));
-		add_event(g_ptr_array_index(rooms, index), message, text, !is_own_rename);
+		add_event(g_ptr_array_index(rooms, index), message, text, !is_own_rename, NULL);
 	}
 	for (guint index = 0; index < rooms->len; index++) {
 		stop_typing(g_ptr_array_index(rooms, index), sender);
@@ -711,7 +714,7 @@ static void finish_split(CrimsonNetwork *network, const IrcMessage *message, GHa
 		int people = GPOINTER_TO_INT(count);
 		char *text = is_join ? g_strdup_printf(people == 1 ? TEXT_NETJOIN_ONE : TEXT_NETJOIN, people)
 			: g_strdup_printf(people == 1 ? TEXT_NETSPLIT_ONE : TEXT_NETSPLIT, people);
-		add_event(room, message, text, TRUE);
+		add_event(room, message, text, TRUE, NULL);
 		announce_room_change(room);
 	}
 }
@@ -852,7 +855,7 @@ static gboolean is_latest_line(CrimsonRoom *room, const char *text) {
  * note saying why, problems with what the app asked by itself stay with the server's messages, and other replies go
  * with the room they concern */
 static void show_reply(CrimsonNetwork *network, const IrcMessage *message, ReplyKind kind, const char *words,
-	const char *subject) {
+	const char *subject, const char *action) {
 	CrimsonRoom *room = subject ? find_room(network, subject) : NULL;
 	gboolean is_problem = kind == REPLY_PROBLEM || kind == REPLY_REFUSED_JOIN;
 	if (is_problem && find_question(network, message))
@@ -860,9 +863,34 @@ static void show_reply(CrimsonNetwork *network, const IrcMessage *message, Reply
 	else if (kind == REPLY_PROBLEM)
 		add_status(network->server_room, message, words);
 	else if (room && !is_latest_line(room, words))
-		add_event(room, message, g_strdup(words), FALSE);
+		add_event(room, message, g_strdup(words), FALSE, action);
 	else if (!room)
 		add_server_line(network, message, words);
+}
+
+
+/* A room that would not let the user in or speak takes no messages until a join or login succeeds */
+static void refuse_room(CrimsonRoom *room, const char *words) {
+	if (!room || room->kind != ROOM_CHANNEL)
+		return;
+	g_free(room->refusal);
+	room->refusal = g_strdup(words);
+	announce_room_change(room);
+}
+
+
+/* Logging in can open the rooms that refused the user, so they take messages again and the ones left are joined */
+static void forgive_refused_rooms(CrimsonNetwork *network) {
+	guint count = g_list_model_get_n_items(G_LIST_MODEL(network->rooms));
+	for (guint index = 0; index < count; index++) {
+		g_autoptr(CrimsonRoom) room = g_list_model_get_item(G_LIST_MODEL(network->rooms), index);
+		if (!room->refusal)
+			continue;
+		g_clear_pointer(&room->refusal, g_free);
+		if (!room->is_joined)
+			send_irc_client_command(network->client, "JOIN", room->name, NULL);
+		announce_room_change(room);
+	}
 }
 
 
@@ -894,8 +922,8 @@ static void deliver_welcome_message(CrimsonNetwork *network, const IrcMessage *m
 /* A reply kept in the server's chat shows in plain words, without anything a live one would also do */
 static void deliver_kept_reply(CrimsonNetwork *network, const IrcMessage *message) {
 	ReplyKind kind = REPLY_NOTE;
-	const char *subject = NULL;
-	g_autofree char *words = describe_reply(message, &kind, &subject);
+	const char *subject = NULL, *action = NULL;
+	g_autofree char *words = describe_reply(message, &kind, &subject, &action);
 	if (kind != REPLY_HIDDEN && words && *words)
 		add_status(network->server_room, message, words);
 }
@@ -905,9 +933,9 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 	const char *command = message->command;
 	int number = (int)g_ascii_strtoll(command, NULL, 10);
 	ReplyKind kind = REPLY_NOTE;
-	const char *subject = NULL;
-	g_autofree char *words = describe_reply(message, &kind, &subject);
-	if (kind == REPLY_PROBLEM && subject && (number == 401 || number == 404))
+	const char *subject = NULL, *action = NULL;
+	g_autofree char *words = describe_reply(message, &kind, &subject, &action);
+	if (subject && (number == 401 || number == 404 || number == 477))
 		{
 		CrimsonRoom *refusing = find_room(network, subject);
 		if (refusing)
@@ -946,6 +974,10 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 			announce_room_change(room);
 		return;
 	}
+	if (number == 900)
+		forgive_refused_rooms(network);
+	if (kind == REPLY_REFUSED_JOIN && subject)
+		refuse_room(find_room(network, subject), words);
 	if (kind == REPLY_HIDDEN)
 		return;
 	/* A person or room that refuses messages, such as one missing or open only to registered accounts, is left
@@ -953,7 +985,7 @@ static void deliver_numeric(CrimsonNetwork *network, const IrcMessage *message) 
 	const char *target = get_irc_parameter(message, 1);
 	if ((number == 401 || number == 403 || number == 404 || number == 477) && target)
 		refuse_target(network, target);
-	show_reply(network, message, kind, words, subject);
+	show_reply(network, message, kind, words, subject, action);
 }
 
 

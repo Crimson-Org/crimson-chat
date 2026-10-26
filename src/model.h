@@ -66,6 +66,8 @@ struct _CrimsonMessage {
 	gboolean is_spotlit;
 	/* Someone else joining, leaving, quitting, renaming or changing modes, kept always and shown by the setting */
 	gboolean is_membership;
+	/* The window action clicking the line runs for its server, such as opening the login, or NULL */
+	const char *action;
 	/* The monotonic moment a live message arrived, or 0 for one loaded from history */
 	gint64 arrival_time;
 	/* A file of this many bytes on its way to the bouncer, shown as a card under its name until it is sent, and how
@@ -95,6 +97,8 @@ struct _CrimsonRoom {
 	gint64 last_time, read_time;
 	guint unread_count;
 	gboolean has_mention, is_joined, has_all_history, has_history;
+	/* Why the room refused the user on this connection, such as needing a login, until a join or login, or NULL */
+	char *refusal;
 	HistoryRequest history_request;
 	Presence presence;
 	/* For a private chat, when the person was last active and when the server was last asked, in real time */
