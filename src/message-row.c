@@ -626,6 +626,8 @@ typedef struct {
 	GtkWidget *text_line, *body, *reveal, *previews, *footer, *bot, *time, *state, *reactions_slot;
 	/* The colour class of the sender's name, which the next message's replaces */
 	char *name_color;
+	/* What the previews show, so a row drawn again for the messages beside it keeps them */
+	char *previews_key;
 	/* The window action the event pill runs when clicked, or NULL */
 	const char *note_action;
 	RowContext context;
@@ -636,6 +638,7 @@ static void free_parts(gpointer data) {
 	RowParts *parts = data;
 	g_clear_object(&parts->context.message);
 	g_free(parts->name_color);
+	g_free(parts->previews_key);
 	g_free(parts);
 }
 
@@ -971,16 +974,30 @@ static void show_footer(RowParts *parts, CrimsonMessage *message) {
 }
 
 
-static void show_text(RowParts *parts, CrimsonMessage *message, const char *text) {
-	g_autofree char *markup = build_body_markup(message, text);
-	gboolean can_reveal = message->is_redacted && *text;
-	gtk_widget_set_visible(parts->reveal, can_reveal);
-	g_object_set_data_full(G_OBJECT(parts->reveal), "original", build_text_markup(message, text), g_free);
-	g_object_set_data_full(G_OBJECT(parts->reveal), "note", g_strdup(markup), g_free);
-	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(parts->reveal), FALSE);
-	toggle_deleted_text(GTK_TOGGLE_BUTTON(parts->reveal), GTK_LABEL(parts->body));
-	set_class(parts->body, "redacted", message->is_redacted);
-	set_class(parts->body, "body", !message->is_redacted);
+/* Everything the previews are built from, down to which pictures and pages have loaded */
+static char *describe_previews(CrimsonMessage *message, const char *text) {
+	GString *key = g_string_new(NULL);
+	g_string_printf(key, "%p %d %d %d %" G_GINT64_FORMAT " %s", (void *)message, message->is_uploading,
+		message->is_redacted, get_settings()->shows_images, (gint64)message->upload_size, text);
+	g_autoptr(GPtrArray) links = find_image_links(message->text);
+	for (guint index = 0; index < links->len; index++)
+		g_string_append_c(key, get_loaded_image(g_ptr_array_index(links, index)) ? '1' : '0');
+	g_autoptr(GPtrArray) pages = find_page_links(message->text);
+	const LinkPreview *preview = pages->len ? get_link_preview(g_ptr_array_index(pages, 0)) : NULL;
+	g_string_append_c(key, !preview ? '0' : preview->image_url && get_loaded_image(preview->image_url) ? '2'
+		: '1');
+	return g_string_free(key, FALSE);
+}
+
+
+/* A row is drawn again whenever a line arrives after it, and building its previews anew would pop their pictures in
+ * again each time */
+static void show_previews(RowParts *parts, CrimsonMessage *message, const char *text) {
+	g_autofree char *key = describe_previews(message, text);
+	if (g_strcmp0(key, parts->previews_key) == 0)
+		return;
+	g_free(parts->previews_key);
+	parts->previews_key = g_steal_pointer(&key);
 	clear_children(parts->previews);
 	/* A file on its way or shared shows its card in place of the text, with a picture's preview under it */
 	SharedFile shared = {0};
@@ -999,6 +1016,20 @@ static void show_text(RowParts *parts, CrimsonMessage *message, const char *text
 			: GTK_ALIGN_CENTER);
 	clear_shared_file(&shared);
 	gtk_widget_set_visible(parts->previews, gtk_widget_get_first_child(parts->previews) != NULL);
+}
+
+
+static void show_text(RowParts *parts, CrimsonMessage *message, const char *text) {
+	g_autofree char *markup = build_body_markup(message, text);
+	gboolean can_reveal = message->is_redacted && *text;
+	gtk_widget_set_visible(parts->reveal, can_reveal);
+	g_object_set_data_full(G_OBJECT(parts->reveal), "original", build_text_markup(message, text), g_free);
+	g_object_set_data_full(G_OBJECT(parts->reveal), "note", g_strdup(markup), g_free);
+	gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(parts->reveal), FALSE);
+	toggle_deleted_text(GTK_TOGGLE_BUTTON(parts->reveal), GTK_LABEL(parts->body));
+	set_class(parts->body, "redacted", message->is_redacted);
+	set_class(parts->body, "body", !message->is_redacted);
+	show_previews(parts, message, text);
 }
 
 
