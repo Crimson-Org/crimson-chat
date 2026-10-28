@@ -405,7 +405,7 @@ static GtkWidget *create_link_card(CrimsonMessage *message, const LinkPreview *p
 		gtk_widget_set_size_request(picture, -1, LINK_PICTURE_HEIGHT);
 		gtk_widget_set_overflow(picture, GTK_OVERFLOW_HIDDEN);
 		gtk_widget_add_css_class(picture, "link-picture");
-		gtk_box_append(GTK_BOX(card), picture);
+		gtk_box_append(GTK_BOX(card), wrap_in_clamp(picture, GTK_ORIENTATION_VERTICAL, LINK_PICTURE_HEIGHT));
 	} else if (preview->image_url) {
 		preload_image(preview->image_url, refresh_message, G_OBJECT(message));
 	}
@@ -755,18 +755,17 @@ static void measure_text_line(GtkWidget *widget, GtkOrientation orientation, int
 		int unused;
 		measure_text_line_width(content, previews, footer, &unused, &width);
 	}
-	int content_minimum, content_natural, previews_minimum, previews_natural, footer_height;
-	gtk_widget_measure(content, GTK_ORIENTATION_VERTICAL, width, &content_minimum, &content_natural, NULL, NULL);
-	gtk_widget_measure(previews, GTK_ORIENTATION_VERTICAL, width, &previews_minimum, &previews_natural, NULL, NULL);
+	int content_natural, previews_natural, footer_height;
+	gtk_widget_measure(content, GTK_ORIENTATION_VERTICAL, width, NULL, &content_natural, NULL, NULL);
+	gtk_widget_measure(previews, GTK_ORIENTATION_VERTICAL, width, NULL, &previews_natural, NULL, NULL);
 	gtk_widget_measure(footer, GTK_ORIENTATION_VERTICAL, -1, NULL, &footer_height, NULL, NULL);
+	/* The parts are always placed at their natural height, so the line never asks for less */
 	if (fits_time_beside(content, previews, footer, width)) {
-		*minimum = MAX(content_minimum, footer_height);
-		*natural = MAX(content_natural, footer_height);
+		*minimum = *natural = MAX(content_natural, footer_height);
 		return;
 	}
 	int previews_space = gtk_widget_get_visible(previews) ? TEXT_PART_SPACING : 0;
-	*minimum = content_minimum + previews_space + previews_minimum + TEXT_PART_SPACING + footer_height;
-	*natural = content_natural + previews_space + previews_natural + TEXT_PART_SPACING + footer_height;
+	*minimum = *natural = content_natural + previews_space + previews_natural + TEXT_PART_SPACING + footer_height;
 }
 
 
