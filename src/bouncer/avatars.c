@@ -5,6 +5,9 @@
 #include "bouncer.h"
 
 /* Pictures are decoded at no more than this many times their final size, so a huge one never fills the memory */
+/* PNG compresses from 0 to 9, more for a lower quality setting */
+#define MOST_PNG_COMPRESSION 9
+#define WHITE 0xffffff
 #define DECODE_FACTOR 2
 #define NAME_RANDOM_BYTES 8
 
@@ -54,14 +57,17 @@ static GdkPixbuf *shape_picture(GdkPixbuf *picture, int size) {
 
 static gboolean save_picture(GdkPixbuf *picture, const AvatarSettings *settings, const char *path, GError **error) {
 	if (g_str_equal(settings->format, "jpeg")) {
-		g_autofree char *quality = g_strdup_printf("%d", CLAMP(settings->quality, 1, 100));
+		g_autofree char *quality = g_strdup_printf("%d", CLAMP(settings->quality, 1, BEST_JPEG_QUALITY));
 		/* JPEG has no transparency, so a transparent picture keeps its look over white */
-		g_autoptr(GdkPixbuf) flat = gdk_pixbuf_get_has_alpha(picture) ? gdk_pixbuf_composite_color_simple(picture,
-			gdk_pixbuf_get_width(picture), gdk_pixbuf_get_height(picture), GDK_INTERP_NEAREST, 255, 1, 0xffffff,
-			0xffffff) : g_object_ref(picture);
+		int width = gdk_pixbuf_get_width(picture), height = gdk_pixbuf_get_height(picture);
+		g_autoptr(GdkPixbuf) flat = gdk_pixbuf_get_has_alpha(picture)
+			? gdk_pixbuf_composite_color_simple(picture, width, height, GDK_INTERP_NEAREST, G_MAXUINT8, 1, WHITE, WHITE)
+			: g_object_ref(picture);
 		return gdk_pixbuf_save(flat, path, "jpeg", error, "quality", quality, NULL);
 	}
-	g_autofree char *compression = g_strdup_printf("%d", 9 - CLAMP(settings->quality, 0, 100) * 9 / 100);
+	int quality = CLAMP(settings->quality, 0, BEST_JPEG_QUALITY);
+	g_autofree char *compression = g_strdup_printf("%d",
+		MOST_PNG_COMPRESSION - quality * MOST_PNG_COMPRESSION / BEST_JPEG_QUALITY);
 	return gdk_pixbuf_save(picture, path, "png", error, "compression", compression, NULL);
 }
 
@@ -98,7 +104,7 @@ char *store_avatar(Bouncer *bouncer, BouncerUser *user, Upstream *upstream, cons
 	if (!decoded)
 		return NULL;
 	g_autoptr(GdkPixbuf) shaped = shape_picture(decoded, settings->size);
-	g_mkdir_with_parents(settings->folder, 0700);
+	g_mkdir_with_parents(settings->folder, PRIVATE_FOLDER_MODE);
 	g_autofree char *start = describe_name_start(user, upstream, target);
 	guint8 random[NAME_RANDOM_BYTES];
 	for (int index = 0; index < NAME_RANDOM_BYTES; index++)

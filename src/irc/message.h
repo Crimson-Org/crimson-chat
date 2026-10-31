@@ -34,6 +34,13 @@ guint count_irc_parameters(const IrcMessage *message);
 /* The last parameter, which holds the human readable text of most replies, or "" without any */
 const char *get_last_irc_parameter(const IrcMessage *message);
 
+/* Client queries and /me actions travel inside a message between two of these marks, such as \001VERSION\001 */
+#define CTCP_MARK '\001'
+#define CTCP_MARK_TEXT "\001"
+#define CTCP_ACTION "ACTION"
+/* Whether the text after the opening mark is the given query, as a whole word in any case */
+gboolean starts_ctcp_command(const char *text, const char *command);
+
 /* A tag without a value reads as an empty string, and a missing tag as NULL */
 const char *get_irc_tag(const IrcMessage *message, const char *name);
 void set_irc_tag(IrcMessage *message, const char *name, const char *value);

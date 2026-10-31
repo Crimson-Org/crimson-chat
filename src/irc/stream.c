@@ -3,6 +3,8 @@
 
 #include "stream.h"
 
+#define LINE_END "\r\n"
+#define MILLISECONDS_PER_SECOND 1000
 #define READ_CHUNK_BYTES 4096
 /* A peer that sends this much without ending a line is broken or hostile */
 #define LONGEST_LINE_BYTES 65536
@@ -205,7 +207,7 @@ static gboolean take_send_credit(IrcStream *stream) {
 		return TRUE;
 	}
 	if (!stream->rate_source) {
-		guint wait = (guint)((1.0 - stream->send_credit) / LINES_PER_SECOND * 1000) + 1;
+		guint wait = (guint)((1.0 - stream->send_credit) / LINES_PER_SECOND * MILLISECONDS_PER_SECOND) + 1;
 		stream->rate_source = g_timeout_add(wait, resume_writing, stream);
 	}
 	return FALSE;
@@ -306,12 +308,13 @@ void send_irc_message(IrcStream *stream, const IrcMessage *message) {
 	if (stream->is_closing || stream->has_failed)
 		return;
 	g_autofree char *line = format_irc_line(message);
-	stream->queued_bytes += strlen(line) + 2;
+	stream->queued_bytes += strlen(line) + strlen(LINE_END);
 	if (stream->queued_bytes > LARGEST_QUEUE_BYTES) {
 		fail_stream(stream, "The other end stopped reading");
 		return;
 	}
-	g_queue_push_tail(&stream->outgoing, g_bytes_new_take(g_strconcat(line, "\r\n", NULL), strlen(line) + 2));
+	gsize length = strlen(line) + strlen(LINE_END);
+	g_queue_push_tail(&stream->outgoing, g_bytes_new_take(g_strconcat(line, LINE_END, NULL), length));
 	write_next(stream);
 }
 

@@ -3,7 +3,6 @@
 #include "bouncer.h"
 
 #define JOIN_LINE_BYTES 400
-#define CTCP_MARK '\001'
 
 /* Everything the bouncer can pass on or use, which the server grants where it supports it */
 static const char *const WANTED_CAPS[] = {
@@ -306,7 +305,7 @@ static void keep_new_login(Upstream *upstream, const IrcMessage *message) {
 static gboolean is_ctcp_query(const IrcMessage *message) {
 	const char *text = get_last_irc_parameter(message);
 	gboolean is_text = g_str_equal(message->command, "PRIVMSG") || g_str_equal(message->command, "NOTICE");
-	return is_text && text && *text == CTCP_MARK && g_ascii_strncasecmp(text + 1, "ACTION ", 7) != 0;
+	return is_text && text && *text == CTCP_MARK && !starts_ctcp_command(text + 1, CTCP_ACTION);
 }
 
 
@@ -318,16 +317,16 @@ static void answer_ctcp(Upstream *upstream, const IrcMessage *message) {
 	if (end)
 		*end = '\0';
 	g_autofree char *answer = NULL;
-	if (g_ascii_strncasecmp(request, "VERSION", 7) == 0)
+	if (starts_ctcp_command(request, "VERSION"))
 		answer = g_strdup_printf("VERSION Crimson Chat %s", APPLICATION_VERSION);
-	else if (g_ascii_strncasecmp(request, "PING", 4) == 0)
+	else if (starts_ctcp_command(request, "PING"))
 		answer = g_strdup(request);
-	else if (g_ascii_strncasecmp(request, "TIME", 4) == 0) {
+	else if (starts_ctcp_command(request, "TIME")) {
 		g_autoptr(GDateTime) now = g_date_time_new_now_local();
 		g_autofree char *moment = g_date_time_format(now, "%a %b %d %H:%M:%S %Y");
 		answer = g_strdup_printf("TIME %s", moment);
 	}
-	else if (g_ascii_strncasecmp(request, "CLIENTINFO", 10) == 0)
+	else if (starts_ctcp_command(request, "CLIENTINFO"))
 		answer = g_strdup("CLIENTINFO ACTION CLIENTINFO PING TIME VERSION");
 	if (!answer || !g_str_equal(message->command, "PRIVMSG"))
 		return;

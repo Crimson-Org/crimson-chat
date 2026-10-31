@@ -54,7 +54,7 @@ static GLogWriterOutput write_log(GLogLevelFlags level, const GLogField *fields,
 
 static char *build_path(const char *base, const char *name) {
 	g_autofree char *folder = g_build_filename(base, BOUNCER_NAME, NULL);
-	g_mkdir_with_parents(folder, 0700);
+	g_mkdir_with_parents(folder, PRIVATE_FOLDER_MODE);
 	return g_build_filename(folder, name, NULL);
 }
 
@@ -199,11 +199,11 @@ static void read_avatar_settings(GKeyFile *config, AvatarSettings *settings) {
 	settings->format = g_strdup(format && (g_ascii_strcasecmp(format, "jpeg") == 0 || g_ascii_strcasecmp(format,
 		"jpg") == 0) ? "jpeg" : DEFAULT_AVATAR_FORMAT);
 	int quality = g_key_file_get_integer(config, GROUP, "avatar-quality", NULL);
-	settings->quality = quality > 0 ? CLAMP(quality, 1, 100) : DEFAULT_AVATAR_QUALITY;
+	settings->quality = quality > 0 ? CLAMP(quality, 1, BEST_JPEG_QUALITY) : DEFAULT_AVATAR_QUALITY;
 	int size = g_key_file_get_integer(config, GROUP, "avatar-size", NULL);
-	settings->size = size > 0 ? CLAMP(size, 32, 1024) : DEFAULT_AVATAR_SIZE;
+	settings->size = size > 0 ? CLAMP(size, SMALLEST_AVATAR_SIZE, LARGEST_AVATAR_SIZE) : DEFAULT_AVATAR_SIZE;
 	double largest = g_key_file_get_double(config, GROUP, "avatar-largest-mb", NULL);
-	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_AVATAR_LARGEST_MB) * 1024 * 1024);
+	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_AVATAR_LARGEST_MB) * BYTES_PER_MEGABYTE);
 	settings->folder = build_path(g_get_user_data_dir(), AVATAR_FOLDER);
 }
 
@@ -211,7 +211,7 @@ static void read_avatar_settings(GKeyFile *config, AvatarSettings *settings) {
 static void read_file_settings(GKeyFile *config, FileSettings *settings) {
 	settings->is_enabled = read_switch(config, "files");
 	double largest = g_key_file_get_double(config, GROUP, "file-largest-mb", NULL);
-	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_FILE_LARGEST_MB) * 1024 * 1024);
+	settings->largest_bytes = (gsize)((largest > 0 ? largest : DEFAULT_FILE_LARGEST_MB) * BYTES_PER_MEGABYTE);
 	int days = g_key_file_get_integer(config, GROUP, "file-kept-days", NULL);
 	settings->kept_seconds = (gint64)(days > 0 ? days : DEFAULT_FILE_KEPT_DAYS) * SECONDS_PER_DAY;
 	settings->folder = build_path(g_get_user_data_dir(), FILE_FOLDER);

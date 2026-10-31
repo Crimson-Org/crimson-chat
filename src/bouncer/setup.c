@@ -7,8 +7,13 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include "bouncer.h"
 #include "setup.h"
 
+/* Certificates today are version 3, the one that can carry extensions */
+#define CERTIFICATE_VERSION 3
+/* Clears the top bit of a byte */
+#define POSITIVE_BYTE_MASK 0x7f
 #define LONGEST_ANSWER 1024
 #define SHORTEST_PASSWORD 8
 #define HASH_ITERATIONS 210000
@@ -120,10 +125,10 @@ static int fill_certificate(gnutls_x509_crt_t certificate, gnutls_x509_privkey_t
 	unsigned char serial[SERIAL_BYTES];
 	int status = gnutls_rnd(GNUTLS_RND_NONCE, serial, sizeof serial);
 	/* A serial number must be positive, which a clear top bit guarantees */
-	serial[0] &= 0x7f;
+	serial[0] &= POSITIVE_BYTE_MASK;
 	time_t now = time(NULL);
 	if (status >= 0)
-		status = gnutls_x509_crt_set_version(certificate, 3);
+		status = gnutls_x509_crt_set_version(certificate, CERTIFICATE_VERSION);
 	if (status >= 0)
 		status = gnutls_x509_crt_set_serial(certificate, serial, sizeof serial);
 	if (status >= 0)
@@ -170,9 +175,9 @@ gboolean create_certificate(const char *host, const char *certificate_path, cons
 		gnutls_x509_privkey_deinit(key);
 	if (!report_tls_failure(status, error))
 		return FALSE;
-	if (!write_datum(key_path, &key_text, 0600, error)) {
+	if (!write_datum(key_path, &key_text, PRIVATE_FILE_MODE, error)) {
 		gnutls_free(certificate_text.data);
 		return FALSE;
 	}
-	return write_datum(certificate_path, &certificate_text, 0644, error);
+	return write_datum(certificate_path, &certificate_text, PUBLIC_FILE_MODE, error);
 }

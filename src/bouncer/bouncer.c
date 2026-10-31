@@ -3,6 +3,8 @@
 #include "bouncer.h"
 #include "setup.h"
 
+#define LONGEST_USER_NAME 32
+
 
 static void free_bouncer_user(BouncerUser *user) {
 	g_ptr_array_unref(user->upstreams);
@@ -170,7 +172,7 @@ BouncerUser *log_in_user(Bouncer *bouncer, const char *name, const char *passwor
 
 gboolean is_valid_user_name(const char *name) {
 	gsize length = name ? strlen(name) : 0;
-	if (!length || length > 32)
+	if (!length || length > LONGEST_USER_NAME)
 		return FALSE;
 	for (const char *character = name; *character; character++) {
 		if (!g_ascii_isalnum(*character) && !strchr("_-.", *character))

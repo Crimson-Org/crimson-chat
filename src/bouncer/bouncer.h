@@ -2,6 +2,17 @@
 
 #include <gio/gio.h>
 
+/* Settings, history and pictures are only for the bouncer's own user */
+#define PRIVATE_FOLDER_MODE 0700
+#define PRIVATE_FILE_MODE 0600
+/* The certificate is for everyone to read, unlike its key */
+#define PUBLIC_FILE_MODE 0644
+#define BYTES_PER_MEGABYTE (1024 * 1024)
+/* Avatar settings stay within these, whatever the settings file says */
+#define BEST_JPEG_QUALITY 100
+#define SMALLEST_AVATAR_SIZE 32
+#define LARGEST_AVATAR_SIZE 1024
+
 #include "../irc/client.h"
 #include "../irc/stream.h"
 #include "database.h"

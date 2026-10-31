@@ -3,6 +3,23 @@
 #include "bouncer.h"
 #include "setup.h"
 
+#define HTTP_OK 200
+#define HTTP_CREATED 201
+#define HTTP_NO_CONTENT 204
+#define HTTP_SEE_OTHER 303
+#define HTTP_BAD_REQUEST 400
+#define HTTP_UNAUTHORIZED 401
+#define HTTP_NOT_FOUND 404
+#define HTTP_CONFLICT 409
+#define HTTP_TOO_LARGE 413
+#define HTTP_UNSUPPORTED_TYPE 415
+#define HTTP_SERVER_ERROR 500
+/* A request's headers end with an empty line, and a login comes as Basic and the name and password */
+#define HEADER_END "\r\n\r\n"
+#define BASIC_LOGIN "Basic "
+/* An upload's name in the encoded form, such as filename*=UTF-8''name, after the charset and language */
+#define ENCODED_NAME "filename*="
+#define ENCODED_NAME_LANGUAGE_END "''"
 #define LARGEST_REQUEST_BYTES 65536
 #define READ_CHUNK_BYTES 4096
 #define REQUEST_SECONDS 15
@@ -197,7 +214,7 @@ static void clear_answer(WebAnswer *answer) {
 
 /* Pages with lists, such as an admin's home, get a wider card than the forms */
 static void begin_page(WebAnswer *answer, const char *title, gboolean is_wide) {
-	answer->status = answer->status ? answer->status : 200;
+	answer->status = answer->status ? answer->status : HTTP_OK;
 	answer->body = g_string_new(NULL);
 	g_autofree char *escaped = g_markup_escape_text(title, -1);
 	g_string_append_printf(answer->body, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
@@ -230,7 +247,7 @@ static void add_text(WebAnswer *answer, const char *format, ...) {
 
 
 static void redirect(WebAnswer *answer, const char *location) {
-	answer->status = 303;
+	answer->status = HTTP_SEE_OTHER;
 	answer->location = g_strdup(location);
 }
 
@@ -632,7 +649,7 @@ static gboolean sign_in(WebAnswer *answer, WebRequest *request) {
 
 static void show_invite(WebAnswer *answer, WebRequest *request, const char *token, const char *problem) {
 	if (count_invite_uses(request->bouncer->database, token) == 0) {
-		answer->status = 404;
+		answer->status = HTTP_NOT_FOUND;
 		start_page(answer, "Invite not found");
 		add_text(answer, "<h1>This invite has expired</h1>");
 		end_page(answer);
@@ -894,10 +911,10 @@ static void answer_plainly(WebAnswer *answer, int status, const char *text) {
  * network or their own name after a slash or an at sign */
 static BouncerUser *read_basic_login(WebRequest *request) {
 	const char *header = g_hash_table_lookup(request->headers, "authorization");
-	if (!header || g_ascii_strncasecmp(header, "Basic ", 6) != 0)
+	if (!header || g_ascii_strncasecmp(header, BASIC_LOGIN, strlen(BASIC_LOGIN)) != 0)
 		return NULL;
 	gsize length = 0;
-	g_autofree guchar *decoded = g_base64_decode(header + 6, &length);
+	g_autofree guchar *decoded = g_base64_decode(header + strlen(BASIC_LOGIN), &length);
 	g_autofree char *text = g_strndup((const char *)decoded, length);
 	char *colon = strchr(text, ':');
 	if (!colon)
@@ -919,24 +936,24 @@ static char *describe_base_url(WebRequest *request) {
 /* A picture for the user, or for a room they run, on one of their networks */
 static void upload_avatar(WebAnswer *answer, WebRequest *request) {
 	if (!request->bouncer->avatars.is_enabled) {
-		answer_plainly(answer, 404, "This bouncer does not take pictures");
+		answer_plainly(answer, HTTP_NOT_FOUND, "This bouncer does not take pictures");
 		return;
 	}
 	BouncerUser *user = read_basic_login(request);
 	if (!user) {
 		answer->is_delayed = TRUE;
-		answer_plainly(answer, 401, "The bouncer login was not accepted");
+		answer_plainly(answer, HTTP_UNAUTHORIZED, "The bouncer login was not accepted");
 		return;
 	}
 	const char *network = request->query ? g_hash_table_lookup(request->query, "network") : NULL;
 	const char *target = request->query ? g_hash_table_lookup(request->query, "target") : NULL;
 	Upstream *upstream = find_upstream(user, network);
 	if (!upstream || get_irc_client_status(upstream->client) != IRC_CLIENT_REGISTERED) {
-		answer_plainly(answer, 409, "That server is not connected right now");
+		answer_plainly(answer, HTTP_CONFLICT, "That server is not connected right now");
 		return;
 	}
 	if (!has_irc_cap(get_irc_client_state(upstream->client), "draft/metadata-2")) {
-		answer_plainly(answer, 409, "That server does not support pictures");
+		answer_plainly(answer, HTTP_CONFLICT, "That server does not support pictures");
 		return;
 	}
 	g_autoptr(GError) error = NULL;
@@ -945,10 +962,10 @@ static void upload_avatar(WebAnswer *answer, WebRequest *request) {
 		request->body, g_hash_table_lookup(request->headers, "content-type"), base, &error);
 	if (!url) {
 		gboolean is_large = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE);
-		answer_plainly(answer, is_large ? 413 : 415, error->message);
+		answer_plainly(answer, is_large ? HTTP_TOO_LARGE : HTTP_UNSUPPORTED_TYPE, error->message);
 		return;
 	}
-	answer_plainly(answer, 201, url);
+	answer_plainly(answer, HTTP_CREATED, url);
 	answer->location = g_strdup(url);
 }
 
@@ -957,10 +974,10 @@ static void serve_avatar(WebAnswer *answer, WebRequest *request, const char *nam
 	const char *content_type = NULL;
 	GBytes *bytes = load_avatar(request->bouncer, name, &content_type);
 	if (!bytes) {
-		answer_plainly(answer, 404, "No such picture");
+		answer_plainly(answer, HTTP_NOT_FOUND, "No such picture");
 		return;
 	}
-	answer->status = 200;
+	answer->status = HTTP_OK;
 	answer->content_type = content_type;
 	answer->bytes = bytes;
 	answer->is_lasting = TRUE;
@@ -970,11 +987,11 @@ static void serve_avatar(WebAnswer *answer, WebRequest *request, const char *nam
 /* The name in a Content-Disposition header, plain or quoted, or in the encoded form for names outside ASCII */
 static char *read_upload_name(WebRequest *request) {
 	const char *header = g_hash_table_lookup(request->headers, "content-disposition");
-	const char *encoded = header ? strstr(header, "filename*=") : NULL;
+	const char *encoded = header ? strstr(header, ENCODED_NAME) : NULL;
 	if (encoded) {
-		const char *quote = strstr(encoded, "''");
-		g_autofree char *value = g_strndup(quote ? quote + 2 : encoded + 10, strcspn(quote ? quote + 2 : encoded
-			+ 10, ";"));
+		const char *quote = strstr(encoded, ENCODED_NAME_LANGUAGE_END);
+		const char *start = quote ? quote + strlen(ENCODED_NAME_LANGUAGE_END) : encoded + strlen(ENCODED_NAME);
+		g_autofree char *value = g_strndup(start, strcspn(start, ";"));
 		char *name = g_uri_unescape_string(g_strstrip(value), NULL);
 		if (name)
 			return name;
@@ -993,13 +1010,13 @@ static char *read_upload_name(WebRequest *request) {
 /* A file shared in a chat, sent as the body with its name in Content-Disposition and answered with its address */
 static void upload_file(WebAnswer *answer, WebRequest *request) {
 	if (!request->bouncer->files.is_enabled) {
-		answer_plainly(answer, 404, "This bouncer does not take files");
+		answer_plainly(answer, HTTP_NOT_FOUND, "This bouncer does not take files");
 		return;
 	}
 	BouncerUser *user = read_basic_login(request);
 	if (!user) {
 		answer->is_delayed = TRUE;
-		answer_plainly(answer, 401, "The bouncer login was not accepted");
+		answer_plainly(answer, HTTP_UNAUTHORIZED, "The bouncer login was not accepted");
 		return;
 	}
 	g_autoptr(GError) error = NULL;
@@ -1008,10 +1025,10 @@ static void upload_file(WebAnswer *answer, WebRequest *request) {
 	g_autofree char *url = store_file(request->bouncer, user, request->body, name, base, &error);
 	if (!url) {
 		gboolean is_large = g_error_matches(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE);
-		answer_plainly(answer, is_large ? 413 : 500, error->message);
+		answer_plainly(answer, is_large ? HTTP_TOO_LARGE : HTTP_SERVER_ERROR, error->message);
 		return;
 	}
-	answer_plainly(answer, 201, url);
+	answer_plainly(answer, HTTP_CREATED, url);
 	answer->location = g_strdup(url);
 }
 
@@ -1021,10 +1038,10 @@ static void serve_file(WebAnswer *answer, WebRequest *request, const char *name)
 	gboolean is_download = FALSE;
 	GBytes *bytes = load_file(request->bouncer, name, &content_type, &is_download);
 	if (!bytes) {
-		answer_plainly(answer, 404, "No such file");
+		answer_plainly(answer, HTTP_NOT_FOUND, "No such file");
 		return;
 	}
-	answer->status = 200;
+	answer->status = HTTP_OK;
 	answer->content_type = content_type;
 	answer->bytes = bytes;
 	answer->is_lasting = TRUE;
@@ -1047,7 +1064,7 @@ static void route_request(WebAnswer *answer, WebRequest *request) {
 	} else if (g_str_equal(path, "/upload") && is_post) {
 		upload_file(answer, request);
 	} else if (g_str_equal(path, "/upload") && g_str_equal(request->method, "OPTIONS")) {
-		answer->status = request->bouncer->files.is_enabled ? 204 : 404;
+		answer->status = request->bouncer->files.is_enabled ? HTTP_NO_CONTENT : HTTP_NOT_FOUND;
 		answer->allow = "OPTIONS, POST";
 	} else if (g_str_has_prefix(path, "/files/") && !is_post) {
 		serve_file(answer, request, path + strlen("/files/"));
@@ -1070,7 +1087,7 @@ static void route_request(WebAnswer *answer, WebRequest *request) {
 		else
 			show_sign_in(answer, request, NULL);
 	} else {
-		answer->status = 404;
+		answer->status = HTTP_NOT_FOUND;
 		start_page(answer, "Not found");
 		add_text(answer, "<h1>Not found</h1><p><a href=\"/\">Go to the start page</a></p>");
 		end_page(answer);
@@ -1123,8 +1140,8 @@ static gboolean parse_request(WebRequest *request, gsize header_length) {
 		g_hash_table_insert(request->headers, g_ascii_strdown(lines[index], -1), g_strdup(g_strstrip(colon + 1)));
 	}
 	request->host = g_strdup(g_hash_table_lookup(request->headers, "host"));
-	const char *body = (const char *)request->data->data + header_length + 4;
-	gsize body_length = request->data->len - header_length - 4;
+	const char *body = (const char *)request->data->data + header_length + strlen(HEADER_END);
+	gsize body_length = request->data->len - header_length - strlen(HEADER_END);
 	request->body = g_bytes_new(body, body_length);
 	const char *type = g_hash_table_lookup(request->headers, "content-type");
 	gboolean is_form = !type || g_str_has_prefix(type, "application/x-www-form-urlencoded");
@@ -1138,7 +1155,7 @@ static void answer_request(WebRequest *request, gsize header_length) {
 	g_clear_handle_id(&request->timeout_source, g_source_remove);
 	WebAnswer answer = {0};
 	if (!parse_request(request, header_length)) {
-		answer.status = 400;
+		answer.status = HTTP_BAD_REQUEST;
 		if (!request->method)
 			request->method = g_strdup("GET");
 		start_page(&answer, "Bad request");
@@ -1197,8 +1214,8 @@ static void refuse_large_request(WebRequest *request) {
 	request->method = g_strdup("POST");
 	gsize largest = find_largest_body(request);
 	g_autofree char *text = largest > LARGEST_REQUEST_BYTES ? g_strdup_printf("Files can be at most %.0f MB",
-		largest / (1024.0 * 1024.0)) : g_strdup("That request is too large");
-	answer_plainly(&answer, 413, text);
+		largest / (double)BYTES_PER_MEGABYTE) : g_strdup("That request is too large");
+	answer_plainly(&answer, HTTP_TOO_LARGE, text);
 	send_answer(request, &answer);
 	clear_answer(&answer);
 }
@@ -1244,7 +1261,7 @@ static void check_request(WebRequest *request) {
 	gsize largest = find_largest_body(request) + LARGEST_REQUEST_BYTES;
 	if (has_head && body_length > find_largest_body(request))
 		refuse_large_request(request);
-	else if (has_head && request->data->len >= header_length + 4 + body_length)
+	else if (has_head && request->data->len >= header_length + strlen(HEADER_END) + body_length)
 		answer_request(request, header_length);
 	else if (request->data->len > largest)
 		g_io_stream_close_async(request->connection, G_PRIORITY_DEFAULT, NULL, finish_closing, request);

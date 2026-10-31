@@ -266,7 +266,8 @@ char *get_source_nick(const char *source) {
 char *format_irc_time(GDateTime *time) {
 	g_autoptr(GDateTime) universal = g_date_time_to_utc(time);
 	g_autofree char *seconds = g_date_time_format(universal, "%Y-%m-%dT%H:%M:%S");
-	return g_strdup_printf("%s.%03dZ", seconds, g_date_time_get_microsecond(universal) / 1000);
+	int milliseconds = (int)(g_date_time_get_microsecond(universal) / G_TIME_SPAN_MILLISECOND);
+	return g_strdup_printf("%s.%03dZ", seconds, milliseconds);
 }
 
 
@@ -313,4 +314,11 @@ char *create_irc_identifier(void) {
 const char *get_last_irc_parameter(const IrcMessage *message) {
 	guint count = count_irc_parameters(message);
 	return count ? get_irc_parameter(message, count - 1) : "";
+}
+
+
+gboolean starts_ctcp_command(const char *text, const char *command) {
+	gsize length = strlen(command);
+	return g_ascii_strncasecmp(text, command, length) == 0
+		&& (text[length] == '\0' || text[length] == ' ' || text[length] == CTCP_MARK);
 }

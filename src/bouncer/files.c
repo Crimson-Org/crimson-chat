@@ -58,19 +58,19 @@ char *store_file(Bouncer *bouncer, BouncerUser *user, GBytes *data, const char *
 	const FileSettings *settings = &bouncer->files;
 	if (g_bytes_get_size(data) > settings->largest_bytes) {
 		g_set_error(error, G_IO_ERROR, G_IO_ERROR_MESSAGE_TOO_LARGE, "Files can be at most %.0f MB",
-			settings->largest_bytes / (1024.0 * 1024.0));
+			settings->largest_bytes / (double)BYTES_PER_MEGABYTE);
 		return NULL;
 	}
 	guint8 random[NAME_RANDOM_BYTES];
 	for (int index = 0; index < NAME_RANDOM_BYTES; index++)
-		random[index] = (guint8)g_random_int_range(0, 256);
+		random[index] = (guint8)g_random_int_range(0, G_MAXUINT8 + 1);
 	g_autofree char *token = g_compute_checksum_for_data(G_CHECKSUM_SHA256, random, sizeof random);
 	g_autofree char *safe = make_safe_name(file_name);
 	g_autofree char *name = g_strdup_printf("%" G_GINT64_FORMAT "-%.*s-%s", user->id, TOKEN_CHARS, token, safe);
-	g_mkdir_with_parents(settings->folder, 0700);
+	g_mkdir_with_parents(settings->folder, PRIVATE_FOLDER_MODE);
 	g_autofree char *path = g_build_filename(settings->folder, name, NULL);
 	if (!g_file_set_contents_full(path, g_bytes_get_data(data, NULL), (gssize)g_bytes_get_size(data),
-		G_FILE_SET_CONTENTS_CONSISTENT, 0600, error))
+		G_FILE_SET_CONTENTS_CONSISTENT, PRIVATE_FILE_MODE, error))
 		return NULL;
 	g_message("%s shared %s", user->name, name);
 	return g_strdup_printf("%s/files/%s", base_url, name);

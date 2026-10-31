@@ -38,7 +38,7 @@
 				{"pkg": ["gtk4 >= 4.14", "libadwaita-1 >= 1.6", "libsoup-3.0"]},
 				{"mkdir": ["build/obj"]},
 				"glib-compile-resources --sourcedir assets --target build/resources.c --generate-source assets/crimson-chat.gresource.xml",
-				{"each": {"from": "src/*.c", "to": "build/obj/{id}.o", "run": "cc -std=${STD} $WARN $OPT $DEFINES $INCLUDES $(pkg-config --cflags $PKGS | sed \"s/-I/-isystem /g\") -c {from} -o {to}", "also": ["src/*.h", "src/irc/*.h", "src/lang/*.h", "subprojects/crimson-core/src/common/*.h"]}},
+				{"each": {"from": "src/*.c src/app/*.c src/conversation/*.c src/rooms/*.c src/session/*.c src/window/*.c", "to": "build/obj/{id}.o", "run": "cc -std=${STD} $WARN $OPT $DEFINES $INCLUDES $(pkg-config --cflags $PKGS | sed \"s/-I/-isystem /g\") -c {from} -o {to}", "also": ["src/*/*.h", "subprojects/crimson-core/src/common/*.h"]}},
 				{"each": {"from": "subprojects/crimson-core/src/common/*.c", "to": "build/obj/{id}.o", "run": "cc -std=${STD} $WARN $OPT $DEFINES $INCLUDES $(pkg-config --cflags $PKGS | sed \"s/-I/-isystem /g\") -c {from} -o {to}", "also": ["subprojects/crimson-core/src/common/*.h"]}},
 				"cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/resources.c -o build/obj/resources.o",
 				"glib-compile-resources --sourcedir subprojects/crimson-core/assets --target build/core-resources.c --generate-source subprojects/crimson-core/assets/crimson-core.gresource.xml",
