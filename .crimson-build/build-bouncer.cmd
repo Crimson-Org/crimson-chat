@@ -39,9 +39,17 @@ echo(==^> mkdir build/bouncer
 call :crimson_mkdir "build\bouncer"
 if errorlevel 1 exit /b %errorlevel%
 echo(==^> each src/irc/*.c
+set "CRIMSON_EACH_FROM=src/irc/*.c"
+set "CRIMSON_EACH_TO=build/irc/{id}.o"
+set "CRIMSON_EACH_RUN=cc -std=%STD% $WARN $OPT $DEFINES $(pkg-config --cflags $BOUNCER_PKGS | sed s/-I/-isystem /g) -c {from} -o {to}"
+set "CRIMSON_EACH_ALSO=src/irc/*.h"
 call :crimson_each
 if errorlevel 1 exit /b %errorlevel%
 echo(==^> each src/bouncer/*.c
+set "CRIMSON_EACH_FROM=src/bouncer/*.c"
+set "CRIMSON_EACH_TO=build/bouncer/{id}.o"
+set "CRIMSON_EACH_RUN=cc -std=%STD% $WARN $OPT $DEFINES $(pkg-config --cflags $BOUNCER_PKGS | sed s/-I/-isystem /g) -c {from} -o {to}"
+set "CRIMSON_EACH_ALSO=src/irc/*.h src/bouncer/*.h"
 call :crimson_each
 if errorlevel 1 exit /b %errorlevel%
 echo(==^> cc -o build/%BOUNCER% build/irc/*.o build/bouncer/*.o $^(pkg-config --libs $BOUNCER_PKGS^)
@@ -82,5 +90,92 @@ pkg-config --exists "%~1" || (echo The development files for %~1 are missing & e
 exit /b 0
 
 :crimson_each
-echo Building each file needs a Unix shell with make
-exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$text = [IO.File]::ReadAllText('%~f0'); Invoke-Expression $text.Substring($text.LastIndexOf('<# crimson_each #>'))"
+exit /b
+
+<# crimson_each #>
+# Runs one each step for crimson_each above, which cmd cannot do by itself
+$ErrorActionPreference = 'Stop'
+$root = (Get-Location).Path
+
+function Get-Matches([string] $patterns) {
+	foreach ($pattern in $patterns.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)) {
+		foreach ($file in Get-ChildItem -Path $pattern -File -ErrorAction SilentlyContinue) {
+			(Resolve-Path -LiteralPath $file.FullName -Relative) -replace '^\.[\\/]', '' -replace '\\', '/'
+		}
+	}
+}
+
+function Get-FullPath([string] $path) {
+	return [IO.Path]::Combine($root, $path)
+}
+
+$template = $env:CRIMSON_EACH_TO
+$folder = Split-Path -Parent ($template.Substring(0, $template.IndexOf('{id}')) + 'x')
+if (-not $folder) { $folder = '.' }
+$md5 = [Security.Cryptography.MD5]::Create()
+$hash = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes("$env:CRIMSON_EACH_FROM|$template"))
+$list = Get-FullPath "$folder/.crimson-each-$([BitConverter]::ToString($hash, 0, 4).Replace('-', ''))"
+[void][IO.Directory]::CreateDirectory((Get-FullPath $folder))
+$previous = @()
+if (Test-Path -LiteralPath $list) { $previous = @([IO.File]::ReadAllLines($list)) }
+
+# A changed command or variable makes every earlier result stale
+$settings = $env:CRIMSON_EACH_RUN
+$oldSettings = $null
+if (Test-Path -LiteralPath "$list.run") { $oldSettings = [IO.File]::ReadAllText("$list.run") }
+if ($oldSettings -ne $settings) {
+	foreach ($old in $previous) { Remove-Item -LiteralPath (Get-FullPath $old) -Force -ErrorAction SilentlyContinue }
+	[IO.File]::WriteAllText("$list.run", $settings)
+}
+
+$newestExtra = [DateTime]::MinValue
+foreach ($extra in Get-Matches $env:CRIMSON_EACH_ALSO) {
+	$time = [IO.File]::GetLastWriteTimeUtc((Get-FullPath $extra))
+	if ($time -gt $newestExtra) { $newestExtra = $time }
+}
+
+$outputs = @()
+$work = @()
+foreach ($source in @(Get-Matches $env:CRIMSON_EACH_FROM | Sort-Object -Unique)) {
+	$base = $source
+	if ($source.LastIndexOf('.') -ge 0) { $base = $source.Substring(0, $source.LastIndexOf('.')) }
+	$to = $template.Replace('{id}', $base.Replace('/', '_').Replace('.', '_')).Replace('{name}', (Split-Path -Leaf $base))
+	$outputs += $to
+	$newest = [IO.File]::GetLastWriteTimeUtc((Get-FullPath $source))
+	if ($newestExtra -gt $newest) { $newest = $newestExtra }
+	$target = Get-FullPath $to
+	if ((Test-Path -LiteralPath $target) -and [IO.File]::GetLastWriteTimeUtc($target) -ge $newest) { continue }
+	$command = $settings.Replace('{from}', $source.Replace('/', '\')).Replace('{to}', $to.Replace('/', '\'))
+	$work += [pscustomobject]@{ From = $source; To = $to; Command = $command }
+}
+
+# Results of files that are gone would still be picked up by the steps after this one
+foreach ($old in $previous) {
+	if ($outputs -notcontains $old) { Remove-Item -LiteralPath (Get-FullPath $old) -Force -ErrorAction SilentlyContinue }
+}
+[IO.File]::WriteAllLines($list, [string[]]$outputs)
+
+# Runs as many commands at once as there are processors, and starts no new one after a failure
+$running = New-Object 'Collections.Generic.List[Diagnostics.Process]'
+$hasFailed = $false
+foreach ($item in $work) {
+	while ($running.Count -ge [Environment]::ProcessorCount) {
+		$running[0].WaitForExit()
+		if ($running[0].ExitCode -ne 0) { $hasFailed = $true }
+		$running.RemoveAt(0)
+	}
+	if ($hasFailed) { break }
+	[void][IO.Directory]::CreateDirectory((Split-Path -Parent (Get-FullPath $item.To)))
+	Write-Host "==> $($item.From)"
+	$start = New-Object Diagnostics.ProcessStartInfo $env:ComSpec, "/d /s /c `"$($item.Command)`""
+	$start.UseShellExecute = $false
+	$start.WorkingDirectory = $root
+	$running.Add([Diagnostics.Process]::Start($start))
+}
+foreach ($process in $running) {
+	$process.WaitForExit()
+	if ($process.ExitCode -ne 0) { $hasFailed = $true }
+}
+if ($hasFailed) { exit 1 }
+exit 0
