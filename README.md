@@ -28,7 +28,7 @@ Old protocol, new manners.</p>
 IRC networks now offer history, replies, reactions and read markers, but most clients still show a scrolling wall of text.\
 Crimson Chat looks and feels like a modern messenger, and its bouncer keeps your networks connected when the computer is off.
 
-## Features
+## About
 
 ### A messenger layout
 
