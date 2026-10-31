@@ -23,6 +23,10 @@ Old protocol, new manners.</p>
   <a href="https://github.com/Crimson-Org/crimson-chat/releases/latest"><b>Download Here!</b></a>
 </p>
 
+<p align="center">
+  <img src="./demo1.png" alt="Crimson Chat with a room open">
+</p>
+
 ## Why
 
 IRC networks now offer history, replies, reactions and read markers, but most clients still show a scrolling wall of text.\
