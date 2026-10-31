@@ -4,7 +4,7 @@
 
 <h1 align="center">Crimson Chat</h1>
 <p align="center">An <a href="https://ircv3.net">IRCv3</a> client for Linux with replies, reactions, typing indicators and synced history.<br>
-Includes its own bouncer that keeps you online while away.<br>
+Comes with a bouncer that keeps you online while away.<br>
 Old protocol, new manners.</p>
 
 <p align="center">
@@ -30,7 +30,7 @@ Old protocol, new manners.</p>
 ## Why
 
 IRC networks have history, replies, reactions and read markers, but most clients still show a wall of scrolling text.\
-Crimson Chat looks like a modern messenger, and its bouncer keeps your networks connected when your computer is off.
+Crimson Chat acts like a modern messenger, and the bouncer keeps your networks connected when your computer is off.
 
 ## About
 
@@ -42,7 +42,7 @@ The first start helps you add a server and suggests networks with good IRCv3 sup
 ### Modern IRC
 
 Replies, reactions, typing indicators and read markers that follow you between devices.\
-Avatars and names come from the server, links and pictures show a preview, and pasting or dropping a file shares it.\
+Avatars and names come from the server, links show previews, and pasting or dropping files shares them.\
 Search finds messages in a room.
 
 ### Rooms in plain words
@@ -52,8 +52,8 @@ Moderators manage room settings, bans and invites from the room's page.
 
 ### Your own bouncer
 
-`crimson-chat-bouncer` keeps you connected while you are away, saves the history and sends it to all your devices.\
-Admins invite people with links on its website.
+`crimson-chat-bouncer` keeps you connected while you are away, saves the chat history and sends that history to all your devices.\
+Admins invite people with links from the bouncer's website.
 
 ### Notifications
 
@@ -69,4 +69,4 @@ Steps:
  2. Run `sh .crimson-build/install.sh`
 
 `sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs no graphical libraries.\
-`sh .crimson-build/uninstall.sh` removes it again.
+`sh .crimson-build/uninstall.sh` uninstalls Crimson Chat.
