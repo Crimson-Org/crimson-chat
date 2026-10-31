@@ -3,8 +3,8 @@
 </p>
 
 <h1 align="center">Crimson Chat</h1>
-<p align="center">An <a href="https://ircv3.net">IRCv3</a> client for Linux with replies, reactions, typing notices and synced history.<br>
-Comes with its own bouncer that keeps you online while you are away.<br>
+<p align="center">An <a href="https://ircv3.net">IRCv3</a> client for Linux with replies, reactions, typing indicators and synced history.<br>
+Includes its own bouncer that keeps you online while away.<br>
 Old protocol, new manners.</p>
 
 <p align="center">
@@ -29,49 +29,39 @@ Old protocol, new manners.</p>
 
 ## Why
 
-IRC networks now offer history, replies, reactions and read markers, but most clients still show a scrolling wall of text.\
-Crimson Chat looks and feels like a modern messenger, and its bouncer keeps your networks connected when the computer is off.
+IRC networks have history, replies, reactions and read markers, but most clients still show a wall of scrolling text.\
+Crimson Chat looks like a modern messenger, and its bouncer keeps your networks connected when your computer is off.
 
 ## About
 
 ### A messenger layout
 
-The first start helps you add a bouncer or a server, and suggests networks with good IRCv3 support.\
-Rooms and private chats sit in one list, newest first, and messages from the same person group into bubbles.\
-A rail of servers shows down the left once you use more than one.
-
-### Rooms in plain words
-
-Changes to a room read as sentences, such as "Alice made Bob a moderator and muted the room".\
-A room's page shows its settings, and moderators change them and keep its ban and invite lists there.
+Rooms and private chats sit in one list, newest first, and messages group into bubbles.\
+The first start helps you add a server and suggests networks with good IRCv3 support.
 
 ### Modern IRC
 
-Replies, reactions and typing notices, and read markers that follow you between devices.\
-Avatars, display names and status lines come from the server, and you set your own in Account.\
-Pictures and web links show a preview, and pasting or dropping a file shares it.\
-History loads as you scroll up, and search finds what was said in a room.
+Replies, reactions, typing indicators and read markers that follow you between devices.\
+Avatars and names come from the server, links and pictures show a preview, and pasting or dropping a file shares it.\
+Search finds messages in a room.
+
+### Rooms in plain words
+
+Room changes read as sentences, like "Alice made Bob a moderator".\
+Moderators manage room settings, bans and invites from the room's page.
 
 ### Your own bouncer
 
-`crimson-chat-bouncer` is a small program for a server or a computer that is always on.\
-It keeps your networks connected, saves their history and sends it to each device you connect.\
-Start it once to set the admin login, then add it in Crimson Chat with that login.\
-Admins invite people with links and manage accounts on the bouncer's website.
+`crimson-chat-bouncer` keeps you connected while you are away, saves the history and sends it to all your devices.\
+Admins invite people with links on its website.
 
-### Notifications and the tray
+### Notifications
 
-Mentions and private messages raise a desktop notification that opens the conversation or marks it read.\
-Closing the window keeps the chats connected in the tray, and Ctrl+Q quits.
-
-### Keyboard
-
-Ctrl+K searches the chats, Ctrl+J joins a room and Ctrl+N messages someone.\
-Commands such as /join, /msg and /me work like in any IRC client.
+Mentions and private messages show desktop notifications, and closing the window keeps you connected in the tray.
 
 ## Building
 
-You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org) 4.14, [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) 1.6, [libsoup](https://libsoup.gnome.org) 3, [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org) 3.6.13.\
+You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), [libsoup](https://libsoup.gnome.org), [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org).\
 On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel libsoup-devel sqlite3-devel libgnutls-devel`.
 
 Steps:
