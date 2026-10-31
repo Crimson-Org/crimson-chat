@@ -23,14 +23,14 @@ printf '==> %s\n' 'install -Dm755 build/${PROGRAM} ${PREFIX}/bin/${PROGRAM}'
 install -Dm755 build/${PROGRAM} ${PREFIX}/bin/${PROGRAM}
 printf '==> %s\n' 'install -Dm755 build/${BOUNCER} ${PREFIX}/bin/${BOUNCER}'
 install -Dm755 build/${BOUNCER} ${PREFIX}/bin/${BOUNCER}
-printf '==> %s\n' 'mkdir -p ${PREFIX}/share/applications && for desktop in data/${APPLICATION_ID}*.desktop.in; do sed "s|@EXEC@|${PREFIX}/bin/${PROGRAM}|" "$desktop" > "${PREFIX}/share/applications/$(basename "$desktop" .in)"; done'
-mkdir -p ${PREFIX}/share/applications && for desktop in data/${APPLICATION_ID}*.desktop.in; do sed "s|@EXEC@|${PREFIX}/bin/${PROGRAM}|" "$desktop" > "${PREFIX}/share/applications/$(basename "$desktop" .in)"; done
-printf '==> %s\n' 'install -Dm644 data/icons/scalable/apps/${APPLICATION_ID}.svg ${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg'
-install -Dm644 data/icons/scalable/apps/${APPLICATION_ID}.svg ${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg
-printf '==> %s\n' 'install -Dm644 data/icons/symbolic/apps/${APPLICATION_ID}-symbolic.svg ${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg'
-install -Dm644 data/icons/symbolic/apps/${APPLICATION_ID}-symbolic.svg ${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg
-printf '==> %s\n' 'install -Dm644 data/${APPLICATION_ID}.metainfo.xml ${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml'
-install -Dm644 data/${APPLICATION_ID}.metainfo.xml ${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml
+printf '==> %s\n' 'mkdir -p ${PREFIX}/share/applications && for desktop in assets/${APPLICATION_ID}*.desktop.in; do sed "s|@EXEC@|${PREFIX}/bin/${PROGRAM}|" "$desktop" > "${PREFIX}/share/applications/$(basename "$desktop" .in)"; done'
+mkdir -p ${PREFIX}/share/applications && for desktop in assets/${APPLICATION_ID}*.desktop.in; do sed "s|@EXEC@|${PREFIX}/bin/${PROGRAM}|" "$desktop" > "${PREFIX}/share/applications/$(basename "$desktop" .in)"; done
+printf '==> %s\n' 'install -Dm644 assets/icons/scalable/apps/${APPLICATION_ID}.svg ${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg'
+install -Dm644 assets/icons/scalable/apps/${APPLICATION_ID}.svg ${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg
+printf '==> %s\n' 'install -Dm644 assets/icons/symbolic/apps/${APPLICATION_ID}-symbolic.svg ${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg'
+install -Dm644 assets/icons/symbolic/apps/${APPLICATION_ID}-symbolic.svg ${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg
+printf '==> %s\n' 'install -Dm644 assets/${APPLICATION_ID}.metainfo.xml ${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml'
+install -Dm644 assets/${APPLICATION_ID}.metainfo.xml ${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml
 printf '==> %s\n' 'update-desktop-database ${PREFIX}/share/applications >/dev/null 2>&1 || true'
 update-desktop-database ${PREFIX}/share/applications >/dev/null 2>&1 || true
 printf '==> %s\n' 'gtk-update-icon-cache --quiet --ignore-theme-index ${PREFIX}/share/icons/hicolor >/dev/null 2>&1 || true'

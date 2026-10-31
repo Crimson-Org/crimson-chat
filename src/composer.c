@@ -2,7 +2,7 @@
 
 #include <adwaita.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "common/identity.h"
 #include "composer.h"
 #include "formatting.h"

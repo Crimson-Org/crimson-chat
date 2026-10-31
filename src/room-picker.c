@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "room-picker.h"
 #include "wizards.h"
 

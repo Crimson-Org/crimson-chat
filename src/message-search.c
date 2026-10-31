@@ -1,4 +1,4 @@
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "formatting.h"
 #include "message-search.h"
 #include "room-look.h"

@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "dialogs.h"
 #include "images.h"
 #include "known-networks.h"

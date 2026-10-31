@@ -1,4 +1,4 @@
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "known-networks.h"
 
 /* Modern networks are those the ircv3.net network table shows with broad IRCv3 support, legacy ones are the largest

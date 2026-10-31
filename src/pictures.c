@@ -2,7 +2,7 @@
 #include <glib/gstdio.h>
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "common/key-store.h"
 #include "images.h"
 #include "known-networks.h"

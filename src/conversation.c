@@ -1,4 +1,4 @@
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "settings.h"
 #include "common/startup.h"
 #include "composer.h"

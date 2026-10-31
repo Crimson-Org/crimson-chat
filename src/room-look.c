@@ -1,4 +1,4 @@
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "formatting.h"
 #include "images.h"
 #include "profile.h"

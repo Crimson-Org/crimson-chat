@@ -40,8 +40,8 @@ if errorlevel 1 exit /b %errorlevel%
 echo(==^> mkdir build/obj
 call :crimson_mkdir "build\obj"
 if errorlevel 1 exit /b %errorlevel%
-echo(==^> glib-compile-resources --sourcedir data --target build/resources.c --generate-source data/crimson-chat.gresource.xml
-glib-compile-resources --sourcedir data --target build/resources.c --generate-source data/crimson-chat.gresource.xml
+echo(==^> glib-compile-resources --sourcedir assets --target build/resources.c --generate-source assets/crimson-chat.gresource.xml
+glib-compile-resources --sourcedir assets --target build/resources.c --generate-source assets/crimson-chat.gresource.xml
 if errorlevel 1 exit /b %errorlevel%
 echo(==^> each src/*.c
 call :crimson_each
@@ -52,8 +52,8 @@ if errorlevel 1 exit /b %errorlevel%
 echo(==^> cc -std=gnu11 -O2 -g $^(pkg-config --cflags gio-2.0^) -c build/resources.c -o build/obj/resources.o
 cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/resources.c -o build/obj/resources.o
 if errorlevel 1 exit /b %errorlevel%
-echo(==^> glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml
-glib-compile-resources --sourcedir subprojects/crimson-core/data --target build/core-resources.c --generate-source subprojects/crimson-core/data/crimson-core.gresource.xml
+echo(==^> glib-compile-resources --sourcedir subprojects/crimson-core/assets --target build/core-resources.c --generate-source subprojects/crimson-core/assets/crimson-core.gresource.xml
+glib-compile-resources --sourcedir subprojects/crimson-core/assets --target build/core-resources.c --generate-source subprojects/crimson-core/assets/crimson-core.gresource.xml
 if errorlevel 1 exit /b %errorlevel%
 echo(==^> cc -std=gnu11 -O2 -g $^(pkg-config --cflags gio-2.0^) -c build/core-resources.c -o build/obj/core-resources.o
 cc -std=gnu11 -O2 -g $(pkg-config --cflags gio-2.0) -c build/core-resources.c -o build/obj/core-resources.o

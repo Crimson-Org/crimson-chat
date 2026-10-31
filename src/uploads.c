@@ -1,7 +1,7 @@
 #include <libsoup/soup.h>
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "session.h"
 #include "uploads.h"
 #include "window.h"

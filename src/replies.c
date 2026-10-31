@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "replies.h"
 
 /* Replies the app words itself, with the positions of the parameters its text names and of the one naming the room

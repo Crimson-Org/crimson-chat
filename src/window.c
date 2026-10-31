@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "common/sidebar-width.h"
 #include "common/startup.h"
 #include "dialogs.h"

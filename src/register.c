@@ -1,4 +1,4 @@
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "register.h"
 
 #define DIALOG_WIDTH 420

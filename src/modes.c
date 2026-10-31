@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "modes.h"
 
 /* What a member status does, by the symbol it shows before a nick */

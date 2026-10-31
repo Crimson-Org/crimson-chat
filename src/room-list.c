@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "formatting.h"
 #include "images.h"
 #include "notifications.h"
