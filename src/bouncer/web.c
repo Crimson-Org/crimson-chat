@@ -451,7 +451,7 @@ static char *describe_networks(BouncerUser *user) {
 		Upstream *upstream = g_ptr_array_index(user->upstreams, index);
 		const char *name = upstream->record.name && *upstream->record.name ? upstream->record.name
 			: upstream->record.host;
-		g_string_append_printf(text, "%s%s, %s", index ? " · " : "", name, describe_upstream_state(upstream));
+		g_string_append_printf(text, "%s%s, %s", index ? "; " : "", name, describe_upstream_state(upstream));
 	}
 	return g_string_free(text, FALSE);
 }

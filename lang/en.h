@@ -1,7 +1,7 @@
 #pragma once
 
 #define TEXT_APPLICATION_NAME "Crimson Chat"
-#define TEXT_LINKS_OPTION "[LINK…]"
+#define TEXT_LINKS_OPTION "[LINK...]"
 #define TEXT_QUIT_MESSAGE "Crimson Chat"
 #define TEXT_AWAY_DEFAULT "Away"
 
@@ -25,7 +25,7 @@
 
 /* Connection states */
 #define TEXT_CONNECTED "Connected"
-#define TEXT_CONNECTING "Connecting…"
+#define TEXT_CONNECTING "Connecting..."
 #define TEXT_DISCONNECTED "Disconnected"
 #define TEXT_SERVER_MESSAGES "Server Messages"
 #define TEXT_REMOVE_SERVER "Remove Server"
@@ -46,7 +46,7 @@
 #define TEXT_AWAY_WITH_MESSAGE "Away: %s"
 /* The user's own status at the top of the main menu, the same on every network */
 #define TEXT_AVAILABLE "Available"
-#define TEXT_AWAY_MESSAGE_ITEM "Away Message…"
+#define TEXT_AWAY_MESSAGE_ITEM "Away Message..."
 #define TEXT_AWAY_MESSAGE_TITLE "Away Message"
 #define TEXT_AWAY_MESSAGE_BODY "Shown to everyone on your servers until you are back."
 #define TEXT_SET_AWAY "Set Away"
@@ -185,7 +185,7 @@
 #define TEXT_NOTIFICATION_TITLE "%s in %s"
 
 /* Composer */
-#define TEXT_WRITE_MESSAGE "Write a message…"
+#define TEXT_WRITE_MESSAGE "Write a message..."
 #define TEXT_SEND_COMMAND "Send a command"
 #define TEXT_SEND "Send"
 #define TEXT_EMOJI "Emoji"
@@ -328,7 +328,7 @@
 #define TEXT_OVERRIDE_ON "On"
 #define TEXT_OVERRIDE_OFF "Off"
 #define TEXT_OVERRIDE_UNTIL "%s until %s"
-#define TEXT_OVERRIDE_ROOM "%s · %s"
+#define TEXT_OVERRIDE_ROOM "%s - %s"
 #define TEXT_PRIVACY "Privacy"
 #define TEXT_PRIVACY_GROUP "Sharing"
 #define TEXT_SEND_TYPING "Tell Others When I Type"
@@ -362,7 +362,7 @@
 #define TEXT_DISCONNECT_BOUNCER_TITLE "Disconnect from %s?"
 #define TEXT_DISCONNECT_BOUNCER_BODY "Your servers stay on the bouncer."
 #define TEXT_SEARCH_IN "Search %s"
-#define TEXT_RECONNECTING "Reconnecting…"
+#define TEXT_RECONNECTING "Reconnecting..."
 #define TEXT_LEAVE_ROOM "Leave Room"
 #define TEXT_DELETE_CHAT "Delete Chat"
 #define TEXT_LEAVE "Leave"
@@ -375,7 +375,7 @@
 #define TEXT_BACK "Back"
 #define TEXT_HELP "Help"
 #define TEXT_ROOMS "Rooms"
-#define TEXT_FINDING_ROOMS "Finding rooms…"
+#define TEXT_FINDING_ROOMS "Finding rooms..."
 #define TEXT_SEARCH_ROOMS "Search or type a room"
 #define TEXT_JOIN_ONE_ROOM "Join 1 Room"
 #define TEXT_JOIN_ROOMS "Join %u Rooms"
@@ -493,7 +493,7 @@
 #define TEXT_LAST_ACTIVE "Last active %s"
 #define TEXT_TOPIC_SET_BY "Topic Set By"
 #define TEXT_TOPIC_SET_ON "%s, %s"
-#define TEXT_ROOMS_WAIT "This server shows its rooms after you have been connected for a minute. Asking again in %u seconds…"
+#define TEXT_ROOMS_WAIT "This server shows its rooms after you have been connected for a minute. Asking again in %u seconds..."
 #define TEXT_HIDE "Hide"
 #define TEXT_MARK_READ "Mark as Read"
 #define TEXT_LOGIN_REFUSED "Login rejected"
@@ -527,7 +527,7 @@
 #define TEXT_REMOVE_YOUR_PICTURE_BODY "Nobody will see it anymore."
 #define TEXT_PICTURE_ONLY_YOURS "Only you see this picture"
 #define TEXT_REGISTER "Register"
-#define TEXT_REGISTERING "Registering…"
+#define TEXT_REGISTERING "Registering..."
 #define TEXT_REGISTER_ON "Register on %s"
 #define TEXT_REGISTER_ABOUT "An account keeps your nickname yours on %s, and Crimson Chat logs you in with it from now on."
 #define TEXT_REGISTERED_AS "Registered as %s"
@@ -567,3 +567,5 @@
 #define TEXT_OPEN_LINK_TITLE "Open This Link?"
 #define TEXT_OPEN_LINK "Open Link"
 #define TEXT_PLAY_SOUNDS "Play Sounds"
+#define TEXT_CUT_OFF "..."
+#define TEXT_SEPARATOR " - "

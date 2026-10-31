@@ -123,7 +123,7 @@ static void fill_person_metadata(ProfileView *view) {
 	gtk_label_set_text(GTK_LABEL(view->name), has_display ? display_name : view->nick);
 	g_autoptr(GString) identity = g_string_new(has_display ? view->nick : "");
 	if (pronouns && *pronouns)
-		g_string_append_printf(identity, "%s%s", identity->len ? " · " : "", pronouns);
+		g_string_append_printf(identity, "%s%s", identity->len ? TEXT_SEPARATOR : "", pronouns);
 	gtk_label_set_text(GTK_LABEL(view->identity), identity->str);
 	gtk_widget_set_visible(view->identity, identity->len > 0);
 	gtk_label_set_text(GTK_LABEL(view->status), status ? status : "");

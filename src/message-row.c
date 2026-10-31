@@ -32,6 +32,9 @@
 /* The part of the way to the real progress the ring moves each frame, so it fills smoothly between updates */
 #define UPLOAD_RING_EASING 0.18
 
+/* How a quoted excerpt may end when cut short, by this app and by others */
+static const char *const CUT_OFF_MARKS[] = {TEXT_CUT_OFF, "\u2026"};
+
 static const char *const QUICK_REACTIONS[] = {"👍", "❤️", "😂", "😮", "😢", "🙏", NULL};
 
 /* What a bubble's buttons and menus need, kept alive as long as the row shows the message */
@@ -253,10 +256,11 @@ static void show_replied_message(GtkGestureClick *gesture, int presses, double x
 /* The message a text quote names, the latest one before the reply from that person that starts the same way */
 static CrimsonMessage *find_quoted_message(CrimsonRoom *room, CrimsonMessage *reply, const TextQuote *quote) {
 	g_autofree char *excerpt = g_strdup(quote->excerpt);
-	if (g_str_has_suffix(excerpt, "…"))
-		excerpt[strlen(excerpt) - strlen("…")] = '\0';
-	else if (g_str_has_suffix(excerpt, "..."))
-		excerpt[strlen(excerpt) - 3] = '\0';
+	for (guint index = 0; index < G_N_ELEMENTS(CUT_OFF_MARKS); index++)
+		if (g_str_has_suffix(excerpt, CUT_OFF_MARKS[index])) {
+			excerpt[strlen(excerpt) - strlen(CUT_OFF_MARKS[index])] = '\0';
+			break;
+		}
 	guint count = g_list_model_get_n_items(G_LIST_MODEL(room->messages));
 	gboolean is_before = FALSE;
 	for (guint index = count; index-- > 0;) {

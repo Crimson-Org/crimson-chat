@@ -412,7 +412,8 @@ static void refresh_welcome(Window *window) {
 		: describe_state(state);
 	g_autofree char *stop = describe_stop(read_account_failure(bouncer));
 	g_autofree char *description = state == NETWORK_DISCONNECTED && error && !bouncer->has_connected
-		? g_strdup_printf("%s · %s", TEXT_BOUNCER, stop) : g_strdup_printf("%s · %s", TEXT_BOUNCER, shown);
+		? g_strdup_printf("%s" TEXT_SEPARATOR "%s", TEXT_BOUNCER, stop)
+		: g_strdup_printf("%s" TEXT_SEPARATOR "%s", TEXT_BOUNCER, shown);
 	adw_status_page_set_description(page, description);
 }
 

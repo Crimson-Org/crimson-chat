@@ -350,7 +350,7 @@ static void note_new_reaction(CrimsonNetwork *network, CrimsonRoom *room, Crimso
 	}
 	g_autofree char *plain = strip_irc_formatting(target->text);
 	g_autofree char *start = g_utf8_substring(plain, 0, REACTION_EXCERPT_CHARS);
-	g_autofree char *excerpt = g_utf8_strlen(plain, -1) > REACTION_EXCERPT_CHARS ? g_strconcat(start, "…", NULL)
+	g_autofree char *excerpt = g_utf8_strlen(plain, -1) > REACTION_EXCERPT_CHARS ? g_strconcat(start, TEXT_CUT_OFF, NULL)
 		: g_strdup(plain);
 	g_free(room->new_reaction);
 	g_free(room->new_reaction_text);

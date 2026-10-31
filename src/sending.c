@@ -296,7 +296,7 @@ static char *describe_reply_excerpt(CrimsonMessage *message) {
 	char *space = strrchr(plain, ' ');
 	if (space && space > plain)
 		*space = '\0';
-	return g_strconcat(plain, "…", NULL);
+	return g_strconcat(plain, TEXT_CUT_OFF, NULL);
 }
 
 

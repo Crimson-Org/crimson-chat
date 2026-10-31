@@ -261,7 +261,7 @@ static char *shorten_shared_name(const char *name) {
 		return g_strdup(name);
 	g_autofree char *start = g_utf8_substring(name, 0, SHARED_NAME_CHARS - SHARED_NAME_END_CHARS - 1);
 	g_autofree char *end = g_utf8_substring(name, length - SHARED_NAME_END_CHARS, length);
-	return g_strconcat(start, "…", end, NULL);
+	return g_strconcat(start, TEXT_CUT_OFF, end, NULL);
 }
 
 
