@@ -19,6 +19,10 @@ Old protocol, new manners.</p>
   </a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Crimson-Org/crimson-chat/releases/latest"><b>Download Here!</b></a>
+</p>
+
 ## Why
 
 IRC networks now offer history, replies, reactions and read markers, but most clients still show a scrolling wall of text.\
@@ -28,54 +32,28 @@ Crimson Chat looks and feels like a modern messenger, and its bouncer keeps your
 
 ### A messenger layout
 
-The first start welcomes you with a choice between a bouncer and a server, followed by a short guide for either.\
-The guide suggests Crimson's own server, chat.skenliv.se, first, followed by well known networks with good IRCv3 support.\
-Once a server connects, it lists its rooms busiest first, so you can tick several and join them at once.\
-Each server's rooms and private chats sit in one list, newest first, with rooms as rounded squares and people as circles.\
-A rail of servers appears down the left only when you use more than one.\
-Right-click a room to leave it, or a person to message, mention, ignore or look them up.\
-Your account on each server sets your nickname, display name, picture and login, wherever that server supports them.\
-Without an account, a banner offers to register your nickname, with the IRCv3 commands or NickServ, and to log in when the nickname turns out to be registered already.\
-Messages from the same person group into bubbles under one avatar, with your own on the right.
+The first start helps you add a bouncer or a server, and suggests networks with good IRCv3 support.\
+Rooms and private chats sit in one list, newest first, and messages from the same person group into bubbles.\
+A rail of servers shows down the left once you use more than one.
 
 ### Rooms in plain words
 
 Changes to a room read as sentences, such as "Alice made Bob a moderator and muted the room".\
-Server replies read the same way, and a message the server refused can be sent again or deleted.\
-A room's page shows its settings, invite only, hidden, muted, members only, locked topic, password and size.\
-Moderators switch them there and keep its ban, exception and invite lists, while everyone else sees them.\
-The room's page also invites people, and an invite to you comes with a Join button.\
-Removing or banning someone asks first and takes an optional reason.
+A room's page shows its settings, and moderators change them and keep its ban and invite lists there.
 
 ### Modern IRC
 
-Replies quote the message they answer, and a right click reacts with an emoji, copies the text or deletes your message.\
-Typing notices show who is writing, and the read position follows you between your devices through the bouncer.\
-Long and multi-line messages arrive in one piece on servers with multiline batches, and history loads as you scroll up.\
-Avatars, display names, pronouns, status lines, homepages and network icons come from the IRCv3 metadata the server shares, and you set your own in Account.\
-Clicking the picture of a person, room or server lets you choose your own, which stays on this computer.\
-Links to pictures over HTTPS show the picture, and bold, italics, colours and monospace keep their formatting.\
-On servers with a file host, the paperclip shares a file and posts its name, size and link once it has uploaded.\
-Typing **bold**, *italics*, ~~struck~~, `code` or ||spoilers|| sends them formatted.\
-Pasting or dropping a file or a screenshot shares it the same way as the paperclip.\
-Links to web pages show a card with the page's title, description and picture.\
-The search button finds what was said in a room, through the bouncer's full history.\
-Picking a result or a quoted reply scrolls to the message and makes it glow for a moment.\
-Typing @ suggests people in the room, and / suggests commands with what each does.
+Replies, reactions and typing notices, and read markers that follow you between devices.\
+Avatars, display names and status lines come from the server, and you set your own in Account.\
+Pictures and web links show a preview, and pasting or dropping a file shares it.\
+History loads as you scroll up, and search finds what was said in a room.
 
 ### Your own bouncer
 
-`crimson-chat-bouncer` is a small command line program for a server or an always on computer.\
-The first launch prompts for an admin username and password, creates a TLS certificate and prints its fingerprint.\
-Add the bouncer in Crimson Chat with that login, trust the fingerprint once, and add networks through it from then on.\
-The bouncer joins your channels, keeps their history in [SQLite](https://sqlite.org) and replays it to each client you connect.\
-It keeps each server's own chat as well, its notices, messages of the day and replies to your commands.\
-Admins invite people with links made in Crimson Chat or on the bouncer's website, where the invited pick their own login.\
-On the website admins also see every account with its servers, make other admins, set passwords, delete accounts and delete uploaded pictures.\
-Crimson Chat uses one connection to it for all of your networks.\
-Files shared through it go to its own file host, up to 20 MB each and kept for five weeks.\
-While none of your devices is connected it shows you as away, and it answers version requests for you.\
-It keeps your display name and picture for each network and sets them again whenever the network reconnects.
+`crimson-chat-bouncer` is a small program for a server or a computer that is always on.\
+It keeps your networks connected, saves their history and sends it to each device you connect.\
+Start it once to set the admin login, then add it in Crimson Chat with that login.\
+Admins invite people with links and manage accounts on the bouncer's website.
 
 ### Notifications and the tray
 
@@ -84,21 +62,17 @@ Closing the window keeps the chats connected in the tray, and Ctrl+Q quits.
 
 ### Keyboard
 
-Ctrl+J joins a room, Ctrl+N messages someone, Ctrl+K searches the chats and Ctrl+Shift+F the open room.\
-Alt+Up and Alt+Down step through the rooms, Alt+Left or the mouse back button returns to the last chat, and Tab completes nicks in the message field.\
-Commands such as /join, /msg, /me, /topic, /away and /whois work in any room, and other commands go to the server unchanged.
+Ctrl+K searches the chats, Ctrl+J joins a room and Ctrl+N messages someone.\
+Commands such as /join, /msg and /me work like in any IRC client.
 
 ## Building
 
-You need a [C compiler](https://gcc.gnu.org/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org) 4.14, [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) 1.6, [libsoup](https://libsoup.gnome.org) 3, SQLite and [GnuTLS](https://gnutls.org) 3.6.13.\
+You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org) 4.14, [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) 1.6, [libsoup](https://libsoup.gnome.org) 3, [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org) 3.6.13.\
 On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel libsoup-devel sqlite3-devel libgnutls-devel`.
 
-Clone it with `git clone --recurse-submodules` so the shared Crimson Core code comes along.\
-`sh .crimson-build/install.sh` installs both programs and `sh .crimson-build/uninstall.sh` removes them.\
-`sh .crimson-build/run.sh` builds and starts Crimson Chat, and `sh .crimson-build/archive.sh` writes a tar.gz to `dist/`.\
-`sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, SQLite and GnuTLS but no graphical libraries.\
-`crimson-chat-bouncer --listen 6697 --web 8443` sets the IRC and website ports, and `--password` changes a password.\
-People can upload pictures for themselves and for rooms they run, which the bouncer scales, keeps and sets as their avatar on servers with IRCv3 metadata.\
-The settings file takes `avatars`, `avatar-format`, `avatar-quality`, `avatar-size` and `avatar-largest-mb` for pictures.\
-`files`, `file-largest-mb` and `file-kept-days` set up shared files.\
-`public-url` is the address pictures and files are served from, which needs a certificate other people's apps trust.
+Steps:
+ 1. Clone using `git clone --recurse-submodules https://github.com/Crimson-Org/crimson-chat`
+ 2. Run `sh .crimson-build/install.sh`
+
+`sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs no graphical libraries.\
+`sh .crimson-build/uninstall.sh` removes it again.
