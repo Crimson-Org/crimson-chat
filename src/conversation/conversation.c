@@ -1423,11 +1423,14 @@ static GtkWidget *create_room_page(Conversation *conversation) {
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	gtk_widget_add_css_class(toolbar, "title-bar");
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), create_header(conversation));
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), create_message_area(conversation));
+	/* The composer sits below the messages rather than in a bottom bar, since a bar is a window handle that takes
+	 * double clicks meant to select a word */
+	GtkWidget *content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_box_append(GTK_BOX(content), create_message_area(conversation));
 	conversation->composer = create_composer();
-	adw_toolbar_view_add_bottom_bar(ADW_TOOLBAR_VIEW(toolbar), get_composer_widget(conversation->composer));
+	gtk_box_append(GTK_BOX(content), get_composer_widget(conversation->composer));
+	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), content);
 	accept_dropped_files(conversation->composer, toolbar);
-	adw_toolbar_view_set_bottom_bar_style(ADW_TOOLBAR_VIEW(toolbar), ADW_TOOLBAR_FLAT);
 	conversation->split = adw_overlay_split_view_new();
 	adw_overlay_split_view_set_sidebar_position(ADW_OVERLAY_SPLIT_VIEW(conversation->split), GTK_PACK_END);
 	adw_overlay_split_view_set_show_sidebar(ADW_OVERLAY_SPLIT_VIEW(conversation->split), FALSE);
