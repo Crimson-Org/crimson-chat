@@ -156,6 +156,18 @@ static GtkWidget *create_menu_button(const char *label, const char *icon, const 
 }
 
 
+/* Where a menu opened from y in the bubble starts: under the bubble, or at the chat's lower edge when a tall bubble
+ * runs past it, so the menu always opens on screen */
+static int get_menu_top(GtkWidget *bubble, double y) {
+	int top = gtk_widget_get_height(bubble);
+	GtkWidget *chat = gtk_widget_get_ancestor(bubble, GTK_TYPE_SCROLLED_WINDOW);
+	graphene_point_t edge;
+	if (chat && gtk_widget_compute_point(chat, bubble, &GRAPHENE_POINT_INIT(0, gtk_widget_get_height(chat)), &edge))
+		top = MIN(top, (int)edge.y);
+	return MAX(top, (int)y);
+}
+
+
 static GtkWidget *create_reaction_strip(RowContext *context) {
 	GtkWidget *strip = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_HAIRLINE);
 	gtk_widget_add_css_class(strip, "reaction-strip");
@@ -218,7 +230,7 @@ static void open_message_menu(RowContext *context, double x, double y) {
 	 * towards the chat, as the menu about a person does */
 	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
 	gtk_widget_set_halign(popover, GTK_ALIGN_START);
-	GdkRectangle point = {(int)x, gtk_widget_get_height(context->bubble), 1, 1};
+	GdkRectangle point = {(int)x, get_menu_top(context->bubble, y), 1, 1};
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &point);
 	g_signal_connect(popover, "closed", G_CALLBACK(gtk_widget_unparent), NULL);
 	gtk_popover_popup(GTK_POPOVER(popover));
