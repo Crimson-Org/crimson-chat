@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "lang/en.h"
-#include "common/key-store.h"
+#include "common/storage/key-store.h"
 #include "conversation/images.h"
 #include "session/known-networks.h"
 #include "conversation/pictures.h"
@@ -12,7 +12,6 @@
 #include "session/uploads.h"
 
 #define PICTURES_FILE "pictures.ini"
-#define PICTURES_FOLDER "pictures"
 #define GROUP "pictures"
 /* Chosen pictures are scaled down to this, enough for the largest avatar on a sharp screen */
 #define PICTURE_PIXELS 512
@@ -44,7 +43,7 @@ static const char *describe_picture_address(const char *file) {
 		addresses = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	const char *address = g_hash_table_lookup(addresses, file);
 	if (!address) {
-		g_autofree char *path = get_state_file_path(PICTURES_FOLDER);
+		g_autofree char *path = get_state_file_path(OWN_PICTURES_FOLDER);
 		g_autofree char *full = g_build_filename(path, file, NULL);
 		char *uri = g_filename_to_uri(full, NULL, NULL);
 		g_hash_table_insert(addresses, g_strdup(file), uri);
@@ -94,9 +93,7 @@ const char *pick_person_picture(CrimsonRoom *room, const char *nick) {
 
 static void save_pictures(void) {
 	g_autofree char *path = get_state_file_path(PICTURES_FILE);
-	g_autofree char *folder = g_path_get_dirname(path);
-	make_private_folder(folder);
-	g_key_file_save_to_file(get_pictures(), path, NULL);
+	save_key_file(get_pictures(), path);
 }
 
 
@@ -113,7 +110,7 @@ typedef struct {
 
 
 static void remove_picture_file(const char *file) {
-	g_autofree char *folder = get_state_file_path(PICTURES_FOLDER);
+	g_autofree char *folder = get_state_file_path(OWN_PICTURES_FOLDER);
 	g_autofree char *path = g_build_filename(folder, file, NULL);
 	g_remove(path);
 }
@@ -354,7 +351,7 @@ static void finish_choosing(GObject *source, GAsyncResult *result, gpointer data
 		free_picture_choice(choice);
 		return;
 	}
-	g_autofree char *folder = get_state_file_path(PICTURES_FOLDER);
+	g_autofree char *folder = get_state_file_path(OWN_PICTURES_FOLDER);
 	make_private_folder(folder);
 	/* Each picture gets a new name, so a replaced one is never shown from what was loaded before */
 	g_autofree char *id = g_uuid_string_random();

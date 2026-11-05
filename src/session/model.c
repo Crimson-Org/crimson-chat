@@ -352,6 +352,8 @@ void remove_room_message(CrimsonRoom *room, CrimsonMessage *message) {
 	guint position = 0;
 	if (!g_list_store_find(room->messages, message, &position))
 		return;
+	if (message->id && g_hash_table_lookup(room->by_id, message->id) == message)
+		g_hash_table_remove(room->by_id, message->id);
 	g_list_store_remove(room->messages, position);
 	redraw_around(room, position, 0);
 }

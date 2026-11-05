@@ -61,12 +61,12 @@ Mentions and private messages show desktop notifications, and closing the window
 
 ## Building
 
-You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), [libsoup](https://libsoup.gnome.org), [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org).\
-On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel libsoup-devel sqlite3-devel libgnutls-devel`.
+You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), [libsoup](https://libsoup.gnome.org), [gdk-pixbuf](https://gitlab.gnome.org/GNOME/gdk-pixbuf), [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org).\
+On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel libsoup-devel gdk-pixbuf-devel sqlite3-devel libgnutls-devel`.
 
 Steps:
  1. Clone using `git clone --recurse-submodules https://github.com/Crimson-Org/crimson-chat`
  2. Run `sh .crimson-build/install.sh`
 
-`sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs no graphical libraries.\
+`sh .crimson-build/build-bouncer.sh` builds only the bouncer, which needs GLib, gdk-pixbuf, SQLite and GnuTLS but no GTK.\
 `sh .crimson-build/uninstall.sh` uninstalls Crimson Chat.

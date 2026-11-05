@@ -3,6 +3,9 @@
 
 #include "message.h"
 
+/* How many client queries are answered within one period */
+#define MOST_CTCP_ANSWERS 3
+#define CTCP_PERIOD_SECONDS 10
 #define IDENTIFIER_BYTES 12
 
 
@@ -174,6 +177,14 @@ static gboolean needs_trailing_mark(const char *parameter) {
 }
 
 
+gboolean can_format_irc_message(const IrcMessage *message) {
+	for (guint index = 0; index + 1 < message->parameters->len; index++)
+		if (needs_trailing_mark(g_ptr_array_index(message->parameters, index)))
+			return FALSE;
+	return TRUE;
+}
+
+
 char *format_irc_line(const IrcMessage *message) {
 	GString *text = g_string_new(NULL);
 	if (g_hash_table_size(message->tags)) {
@@ -314,6 +325,16 @@ char *create_irc_identifier(void) {
 const char *get_last_irc_parameter(const IrcMessage *message) {
 	guint count = count_irc_parameters(message);
 	return count ? get_irc_parameter(message, count - 1) : "";
+}
+
+
+gboolean may_answer_ctcp(CtcpLimit *limit) {
+	gint64 now = g_get_monotonic_time();
+	if (now - limit->started >= CTCP_PERIOD_SECONDS * G_USEC_PER_SEC) {
+		limit->started = now;
+		limit->count = 0;
+	}
+	return limit->count++ < MOST_CTCP_ANSWERS;
 }
 
 

@@ -1,8 +1,10 @@
 #include <string.h>
 
 #include "lang/en.h"
-#include "common/sidebar-width.h"
-#include "common/startup.h"
+#include "common/widgets/sidebar-width.h"
+#include "common/app/startup.h"
+#include "common/widgets/loading.h"
+#include "common/window/navigation.h"
 #include "window/dialogs.h"
 #include "conversation/images.h"
 #include "app/notifications.h"
@@ -15,7 +17,7 @@
 #include "window/window.h"
 #include "window/wizards.h"
 #include "conversation/pictures.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define TOAST_SECONDS 4
 #define NARROW_CONDITION "max-width: 640sp"
@@ -32,7 +34,6 @@
 #define RAIL_DIMMED 0.45
 /* How long after connecting the offer to register waits, so a login prompt from NickServ can come first */
 #define REGISTER_OFFER_DELAY_US (5 * G_USEC_PER_SEC)
-#define MOUSE_BACK_BUTTON 8
 /* How many earlier chats going back can return through */
 #define ROOM_HISTORY_LIMIT 50
 #define MINIMUM_WIDTH 452
@@ -71,6 +72,8 @@ void show_toast(Window *window, const char *text) {
 		return;
 	}
 	AdwToast *toast = adw_toast_new(text);
+	/* Messages carry names and words from servers, which show as typed */
+	adw_toast_set_use_markup(toast, FALSE);
 	adw_toast_set_timeout(toast, TOAST_SECONDS);
 	adw_toast_overlay_add_toast(window->toasts, toast);
 }
@@ -79,6 +82,7 @@ void show_toast(Window *window, const char *text) {
 void offer_room_invite(Window *window, CrimsonNetwork *network, const char *room_name) {
 	g_autofree char *title = g_strdup_printf(TEXT_INVITED_TO, room_name);
 	AdwToast *toast = adw_toast_new(title);
+	adw_toast_set_use_markup(toast, FALSE);
 	adw_toast_set_timeout(toast, INVITE_TOAST_SECONDS);
 	adw_toast_set_button_label(toast, TEXT_JOIN);
 	adw_toast_set_action_name(toast, "win.join-invited");
@@ -348,7 +352,7 @@ static GtkWidget *create_rail_row(gpointer item, gpointer data) {
 	g_object_bind_property(badge, "visible", ring, "visible", G_BINDING_SYNC_CREATE);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), ring);
 	GtkWidget *state = gtk_stack_new();
-	show_after_wait(state, G_CALLBACK(dim_rail_avatar), avatar);
+	reveal_after_delay(state, G_CALLBACK(dim_rail_avatar), avatar);
 	GtkWidget *spinner = adw_spinner_new();
 	gtk_widget_set_size_request(spinner, RAIL_SPINNER_SIZE, RAIL_SPINNER_SIZE);
 	gtk_stack_add_named(GTK_STACK(state), spinner, "waiting");
@@ -510,7 +514,7 @@ static void refresh_connection(Window *window) {
 		window->is_connection_shown = TRUE;
 		show_connection(window);
 	} else if (!window->connection_source)
-		window->connection_source = g_timeout_add(is_same_server ? CONNECTION_DELAY_MS : WAIT_SHOWN_MS,
+		window->connection_source = g_timeout_add(is_same_server ? CONNECTION_DELAY_MS : SPINNER_DELAY_MILLISECONDS,
 			reveal_connection, window);
 }
 
@@ -889,8 +893,8 @@ static void follow_collapse(CrimsonPanes *panes, GParamSpec *spec, Window *windo
 
 
 void hide_window(Window *window) {
-	if (window->tray && is_tray_shown(window->tray))
-		gtk_widget_set_visible(GTK_WIDGET(window->window), FALSE);
+	if (window->tray)
+		hide_window_to_tray(window->tray);
 	else
 		gtk_window_minimize(GTK_WINDOW(window->window));
 }
@@ -966,9 +970,9 @@ static void invite_action(GSimpleAction *action, GVariant *parameter, gpointer d
 static void bouncer_admin_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	Window *window = data;
 	Session *bouncer = find_bouncer(window->chat);
-	if (!bouncer || !bouncer->web_port)
+	g_autofree char *link = bouncer ? build_bouncer_address(bouncer, bouncer->website, "/") : NULL;
+	if (!link)
 		return;
-	g_autofree char *link = g_strdup_printf("https://%s:%s/", bouncer->record->host, bouncer->web_port);
 	g_autoptr(GtkUriLauncher) launcher = gtk_uri_launcher_new(link);
 	gtk_uri_launcher_launch(launcher, GTK_WINDOW(window->window), NULL, NULL, NULL);
 }
@@ -1289,11 +1293,6 @@ static void go_back(Window *window) {
 }
 
 
-static void press_back_button(GtkGestureClick *gesture, int presses, double x, double y, Window *window) {
-	go_back(window);
-}
-
-
 static void go_back_action(GSimpleAction *action, GVariant *parameter, gpointer data) {
 	go_back(data);
 }
@@ -1414,57 +1413,9 @@ void restore_window_choice(Window *window) {
 }
 
 
-typedef struct {
-	GtkWidget *widget;
-	guint source;
-	GCallback shown;
-	gpointer data;
-} WaitShown;
-
-
-static gboolean reveal_wait(gpointer data) {
-	WaitShown *wait = data;
-	wait->source = 0;
-	gtk_widget_set_opacity(wait->widget, 1);
-	if (wait->shown)
-		((void (*)(gpointer))wait->shown)(wait->data);
-	return G_SOURCE_REMOVE;
-}
-
-
-static void start_wait(GtkWidget *widget, WaitShown *wait) {
-	gtk_widget_set_opacity(widget, 0);
-	g_clear_handle_id(&wait->source, g_source_remove);
-	wait->source = g_timeout_add(WAIT_SHOWN_MS, reveal_wait, wait);
-}
-
-
-static void stop_wait(GtkWidget *widget, WaitShown *wait) {
-	g_clear_handle_id(&wait->source, g_source_remove);
-	gtk_widget_set_opacity(widget, 0);
-}
-
-
-static void free_wait(gpointer data) {
-	WaitShown *wait = data;
-	g_clear_handle_id(&wait->source, g_source_remove);
-	g_free(wait);
-}
-
-
-void show_after_wait(GtkWidget *widget, GCallback shown, gpointer data) {
-	WaitShown *wait = g_new0(WaitShown, 1);
-	*wait = (WaitShown){widget, 0, shown, data};
-	gtk_widget_set_opacity(widget, 0);
-	g_signal_connect(widget, "map", G_CALLBACK(start_wait), wait);
-	g_signal_connect(widget, "unmap", G_CALLBACK(stop_wait), wait);
-	g_object_set_data_full(G_OBJECT(widget), "wait-shown", wait, free_wait);
-}
-
-
 GtkWidget *create_spinner(void) {
 	GtkWidget *spinner = adw_spinner_new();
-	show_after_wait(spinner, NULL, NULL);
+	reveal_after_delay(spinner, NULL, NULL);
 	return spinner;
 }
 
@@ -1505,11 +1456,7 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	adw_toast_overlay_set_child(window->toasts, window->pages);
 	adw_application_window_set_content(window->window, GTK_WIDGET(window->toasts));
 	add_breakpoint(window);
-	GtkGesture *back = gtk_gesture_click_new();
-	gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(back), MOUSE_BACK_BUTTON);
-	gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(back), GTK_PHASE_CAPTURE);
-	g_signal_connect(back, "pressed", G_CALLBACK(press_back_button), window);
-	gtk_widget_add_controller(GTK_WIDGET(window->window), GTK_EVENT_CONTROLLER(back));
+	add_mouse_navigation(GTK_WIDGET(window->window), "win.go-back", NULL);
 	g_signal_connect(window->panes, "notify::show-content", G_CALLBACK(follow_shown_content), window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
 	static const TrayEntry TRAY_ENTRIES[] = {
@@ -1520,6 +1467,6 @@ Window *create_window(GtkApplication *application, Chat *chat) {
 	TraySetup tray = {TRAY_ENTRIES, G_N_ELEMENTS(TRAY_ENTRIES), NULL, NULL};
 	window->tray = create_tray(G_APPLICATION(application), GTK_WINDOW(window->window), &tray);
 	follow_collapse(window->panes, NULL, window);
-	note_first_frame(GTK_WIDGET(window->window));
+	watch_window_frames(GTK_WIDGET(window->window));
 	return window;
 }

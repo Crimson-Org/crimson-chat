@@ -1,4 +1,4 @@
-#include "common/key-store.h"
+#include "common/storage/key-store.h"
 #include "app/state.h"
 
 #define STATE_FILE "window.ini"
@@ -26,10 +26,7 @@ static GKeyFile *load_state(void) {
 static void write_state_text(gpointer text, gpointer data) {
 	g_autofree char *contents = text;
 	g_autofree char *path = get_state_file_path(STATE_FILE);
-	g_autofree char *folder = g_path_get_dirname(path);
-	g_autoptr(GError) error = NULL;
-	if (!make_private_folder(folder) || !g_file_set_contents(path, contents, -1, &error))
-		g_warning("%s was not saved", path);
+	save_text_file(path, contents, FALSE);
 }
 
 

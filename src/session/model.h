@@ -165,6 +165,7 @@ G_DECLARE_FINAL_TYPE(CrimsonAccount, crimson_account, CRIMSON, ACCOUNT, GObject)
  * networks change */
 struct _CrimsonAccount {
 	GObject parent;
+	/* NULL once the account is removed, so whatever still holds the item knows */
 	Session *session;
 };
 

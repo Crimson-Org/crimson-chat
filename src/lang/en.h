@@ -38,8 +38,8 @@
 #define TEXT_PREVIEW_OWN "You: %s"
 
 /* Room details */
-#define TEXT_MEMBERS "%u members"
-#define TEXT_ONE_MEMBER "%u member"
+#define TEXT_MEMBERS "%s members"
+#define TEXT_ONE_MEMBER "%s member"
 #define TEXT_NOT_JOINED "Not joined"
 #define TEXT_ONLINE "Online"
 /* Someone away, with their away message */
@@ -500,8 +500,8 @@
 #define TEXT_CERTIFICATE_REFUSED "Certificate not trusted"
 #define TEXT_CANNOT_CONNECT "Can't connect right now"
 #define TEXT_TRY_AGAIN "Try Again"
-#define TEXT_MEMBERS_COUNT "%u Members"
-#define TEXT_MEMBERS_ONE "%u Member"
+#define TEXT_MEMBERS_COUNT "%s Members"
+#define TEXT_MEMBERS_ONE "%s Member"
 #define TEXT_ROOM_DETAILS "Room Details"
 #define TEXT_CHOOSE_PICTURE_TITLE "Choose a Picture"
 #define TEXT_CHANGE_PICTURE "Change Picture"

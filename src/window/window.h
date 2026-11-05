@@ -2,9 +2,10 @@
 
 #include <adwaita.h>
 
-#include "common/panes.h"
-#include "common/tray.h"
-#include "common/window-geometry.h"
+#include "common/widgets/panes.h"
+#include "common/tray/tray.h"
+#include "common/widgets/loading.h"
+#include "common/window/window-geometry.h"
 #include "session/session.h"
 
 typedef struct Window Window;
@@ -74,11 +75,7 @@ void mark_read_in_window(Window *window, CrimsonRoom *room);
 void offer_room_invite(Window *window, CrimsonNetwork *network, const char *room_name);
 /* Redraws badges, the room order and the open conversation once the current changes are done */
 void refresh_window_later(Window *window);
-/* A wait only shows once it has lasted this long, so quick ones pass without anything flashing up */
-#define WAIT_SHOWN_MS 500
-/* Keeps a widget invisible until it has been on screen for WAIT_SHOWN_MS, each time it appears, then calls shown */
-void show_after_wait(GtkWidget *widget, GCallback shown, gpointer data);
-/* A spinner that only shows once its wait has lasted WAIT_SHOWN_MS */
+/* A spinner that only shows once its wait has lasted SPINNER_DELAY_MILLISECONDS */
 GtkWidget *create_spinner(void);
 /* Hides the window in the tray when there is one, so the chats stay connected */
 void hide_window(Window *window);

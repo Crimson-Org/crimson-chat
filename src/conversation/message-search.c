@@ -3,7 +3,7 @@
 #include "conversation/message-search.h"
 #include "rooms/room-look.h"
 #include "session/session.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define SEARCH_WIDTH 400
 #define SEARCH_HEIGHT 620

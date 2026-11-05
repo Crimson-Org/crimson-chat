@@ -1,7 +1,9 @@
 #include <string.h>
 
 #include "bouncer.h"
+#include "logins.h"
 #include "setup.h"
+#include "secret.h"
 
 #define HTTP_OK 200
 #define HTTP_CREATED 201
@@ -14,6 +16,8 @@
 #define HTTP_TOO_LARGE 413
 #define HTTP_UNSUPPORTED_TYPE 415
 #define HTTP_SERVER_ERROR 500
+/* The header a body's length is read from, lowered like the head it is found in */
+#define LENGTH_HEADER "\r\ncontent-length:"
 /* A request's headers end with an empty line, and a login comes as Basic and the name and password */
 #define HEADER_END "\r\n\r\n"
 #define BASIC_LOGIN "Basic "
@@ -26,7 +30,6 @@
 #define SESSION_SECONDS (7 * 24 * 60 * 60)
 #define FAILED_LOGIN_DELAY_MILLISECONDS 1000
 #define DEFAULT_HTTPS_PORT "443"
-#define SHORTEST_PASSWORD 8
 /* Lists show this many accounts, invites or pictures a page, however many there are */
 #define ITEMS_PER_PAGE 50
 #define COOKIE_NAME "crimson_session"
@@ -92,6 +95,8 @@ typedef struct {
 	GIOStream *connection;
 	GByteArray *data;
 	guint8 chunk[READ_CHUNK_BYTES];
+	/* Cancelled to give up on a browser, so the waiting read ends the request the one way it always does */
+	GCancellable *reading;
 	guint timeout_source;
 	char *method, *path, *host;
 	GHashTable *headers, *query, *form;
@@ -99,6 +104,10 @@ typedef struct {
 	GBytes *body;
 	/* Whether the client was told to go on sending a body it asked about first */
 	gboolean has_continued;
+	/* The address the browser connects from, and the user its name and password belong to once checked */
+	char *remote;
+	gint64 login_id;
+	gboolean is_login_checked;
 } WebRequest;
 
 /* A signed in browser and when its sign in runs out */
@@ -129,10 +138,12 @@ static gboolean give_up(gpointer data);
 static void free_request(WebRequest *request) {
 	g_clear_handle_id(&request->timeout_source, g_source_remove);
 	g_byte_array_unref(request->data);
+	g_object_unref(request->reading);
 	g_object_unref(request->connection);
 	g_free(request->method);
 	g_free(request->path);
 	g_free(request->host);
+	g_free(request->remote);
 	g_clear_pointer(&request->headers, g_hash_table_unref);
 	g_clear_pointer(&request->query, g_hash_table_unref);
 	g_clear_pointer(&request->form, g_hash_table_unref);
@@ -156,16 +167,16 @@ static void finish_writing(GObject *source, GAsyncResult *result, gpointer data)
 
 static const char *describe_status(int status) {
 	switch (status) {
-	case 200: return "OK";
-	case 201: return "Created";
-	case 204: return "No Content";
-	case 303: return "See Other";
-	case 400: return "Bad Request";
-	case 401: return "Unauthorized";
-	case 404: return "Not Found";
-	case 409: return "Conflict";
-	case 413: return "Content Too Large";
-	case 415: return "Unsupported Media Type";
+	case HTTP_OK: return "OK";
+	case HTTP_CREATED: return "Created";
+	case HTTP_NO_CONTENT: return "No Content";
+	case HTTP_SEE_OTHER: return "See Other";
+	case HTTP_BAD_REQUEST: return "Bad Request";
+	case HTTP_UNAUTHORIZED: return "Unauthorized";
+	case HTTP_NOT_FOUND: return "Not Found";
+	case HTTP_CONFLICT: return "Conflict";
+	case HTTP_TOO_LARGE: return "Content Too Large";
+	case HTTP_UNSUPPORTED_TYPE: return "Unsupported Media Type";
 	default: return "Error";
 	}
 }
@@ -284,18 +295,47 @@ static void add_connection_details(WebAnswer *answer, WebRequest *request, const
 }
 
 
-static BouncerUser *find_signed_in_user(WebRequest *request) {
+/* The user whose name and password came with the request, once the check found them right */
+static BouncerUser *find_logged_in_user(WebRequest *request) {
+	return request->login_id ? find_user(request->bouncer, request->login_id) : NULL;
+}
+
+
+/* The sign in token the browser sent, whether or not the bouncer still knows it */
+static char *read_session_token(WebRequest *request) {
 	const char *cookies = g_hash_table_lookup(request->headers, "cookie");
 	g_auto(GStrv) parts = g_strsplit(cookies ? cookies : "", ";", -1);
 	for (int index = 0; parts[index]; index++) {
 		char *cookie = g_strstrip(parts[index]);
-		if (!g_str_has_prefix(cookie, COOKIE_NAME "="))
-			continue;
-		WebSession *session = g_hash_table_lookup(request->bouncer->web_sessions, cookie + strlen(COOKIE_NAME "="));
-		if (session && session->expires > g_get_monotonic_time())
-			return find_user(request->bouncer, session->user_id);
+		if (g_str_has_prefix(cookie, COOKIE_NAME "="))
+			return g_strdup(cookie + strlen(COOKIE_NAME "="));
 	}
 	return NULL;
+}
+
+
+static BouncerUser *find_signed_in_user(WebRequest *request) {
+	g_autofree char *token = read_session_token(request);
+	WebSession *session = token ? g_hash_table_lookup(request->bouncer->web_sessions, token) : NULL;
+	if (session && session->expires > g_get_monotonic_time())
+		return find_user(request->bouncer, session->user_id);
+	return NULL;
+}
+
+
+static gboolean is_session_forgotten(gpointer token, gpointer value, gpointer data) {
+	WebSession *session = value;
+	const gint64 *user_id = data;
+	return session->expires <= g_get_monotonic_time() || (user_id && session->user_id == *user_id);
+}
+
+
+void forget_web_sessions(Bouncer *bouncer, gint64 user_id, const char *kept) {
+	WebSession *keeping = kept ? g_hash_table_lookup(bouncer->web_sessions, kept) : NULL;
+	WebSession saved = keeping ? *keeping : (WebSession){0};
+	g_hash_table_foreach_remove(bouncer->web_sessions, is_session_forgotten, &user_id);
+	if (keeping && saved.expires > g_get_monotonic_time())
+		g_hash_table_insert(bouncer->web_sessions, g_strdup(kept), g_memdup2(&saved, sizeof saved));
 }
 
 
@@ -335,7 +375,7 @@ static const struct {
 	{"removed", "The account was deleted."},
 	{"pictures", "The pictures were deleted."},
 	{"picture", "The picture was deleted."},
-	{"short", "Use at least 8 characters for the password."},
+	{"short", "Use at least " SHORTEST_PASSWORD_TEXT " characters for the password."},
 };
 
 
@@ -501,8 +541,8 @@ static void add_account_actions(WebAnswer *answer, BouncerUser *account, gboolea
 	}
 	add_text(answer, "<form method=\"post\" action=\"/accounts/password\"><input type=\"hidden\" name=\"id\" "
 		"value=\"%" G_GINT64_FORMAT "\"><input name=\"password\" type=\"password\" placeholder=\"New password\" "
-		"aria-label=\"New password for %s\" autocomplete=\"new-password\" minlength=\"8\" required>", account->id,
-		account->name);
+		"aria-label=\"New password for %s\" autocomplete=\"new-password\" minlength=\"" SHORTEST_PASSWORD_TEXT "\" "
+		"required>", account->id, account->name);
 	add_back_field(answer, back);
 	add_text(answer, "<button class=\"quiet small\">Set Password</button></form>");
 	if (pictures) {
@@ -620,25 +660,26 @@ static void show_home(WebAnswer *answer, WebRequest *request, BouncerUser *user,
 		"<form method=\"post\" action=\"/password\"><label for=\"current\">Current password</label>"
 		"<input id=\"current\" name=\"current\" type=\"password\" autocomplete=\"current-password\" required>"
 		"<label for=\"new\">New password</label><input id=\"new\" name=\"password\" type=\"password\" "
-		"autocomplete=\"new-password\" minlength=\"8\" required><label for=\"repeat\">Repeat new password</label>"
-		"<input id=\"repeat\" name=\"repeat\" type=\"password\" autocomplete=\"new-password\" minlength=\"8\" "
-		"required><button>Change Password</button></form></section>");
+		"autocomplete=\"new-password\" minlength=\"" SHORTEST_PASSWORD_TEXT "\" required>"
+		"<label for=\"repeat\">Repeat new password</label><input id=\"repeat\" name=\"repeat\" type=\"password\" "
+		"autocomplete=\"new-password\" minlength=\"" SHORTEST_PASSWORD_TEXT "\" required>"
+		"<button>Change Password</button></form></section>");
 	end_page(answer);
 }
 
 
 static gboolean sign_in(WebAnswer *answer, WebRequest *request) {
-	BouncerUser *user = log_in_user(request->bouncer, read_field(request, "username"), read_field(request, "password"));
+	BouncerUser *user = find_logged_in_user(request);
 	if (!user) {
 		show_sign_in(answer, request, "That username and password do not match.");
 		answer->is_delayed = TRUE;
 		return FALSE;
 	}
-	g_autofree char *first = create_irc_identifier(), *second = create_irc_identifier();
-	char *token = g_strconcat(first, second, NULL);
+	char *token = create_secret_token(SIGN_IN_TOKEN_BYTES);
 	WebSession *session = g_new0(WebSession, 1);
 	session->user_id = user->id;
 	session->expires = g_get_monotonic_time() + (gint64)SESSION_SECONDS * G_USEC_PER_SEC;
+	g_hash_table_foreach_remove(request->bouncer->web_sessions, is_session_forgotten, NULL);
 	g_hash_table_insert(request->bouncer->web_sessions, token, session);
 	answer->cookie = g_strdup_printf(COOKIE_NAME "=%s; Path=/; Max-Age=%d; HttpOnly; Secure; SameSite=Strict", token,
 		SESSION_SECONDS);
@@ -662,7 +703,8 @@ static void show_invite(WebAnswer *answer, WebRequest *request, const char *toke
 	add_text(answer, "<form method=\"post\" action=\"/invite\"><input type=\"hidden\" name=\"token\" value=\"%s\">"
 		"<label for=\"username\">Username</label><input id=\"username\" name=\"username\" autocomplete=\"username\" "
 		"maxlength=\"32\" required><label for=\"password\">Password</label><input id=\"password\" name=\"password\" "
-		"type=\"password\" autocomplete=\"new-password\" minlength=\"8\" required><label for=\"repeat\">"
+		"type=\"password\" autocomplete=\"new-password\" minlength=\"" SHORTEST_PASSWORD_TEXT "\" required>"
+		"<label for=\"repeat\">"
 		"Repeat password</label><input id=\"repeat\" name=\"repeat\" type=\"password\" "
 		"autocomplete=\"new-password\" required><button>Create Account</button></form>", token);
 	end_page(answer);
@@ -671,7 +713,7 @@ static void show_invite(WebAnswer *answer, WebRequest *request, const char *toke
 
 static const char *find_password_problem(const char *password, const char *repeat) {
 	if (strlen(password) < SHORTEST_PASSWORD)
-		return "Use at least 8 characters for the password.";
+		return "Use at least " SHORTEST_PASSWORD_TEXT " characters for the password.";
 	return g_str_equal(password, repeat) ? NULL : "The two passwords differ.";
 }
 
@@ -754,7 +796,7 @@ static void delete_web_invite(WebAnswer *answer, WebRequest *request, BouncerUse
 
 static void change_own_password(WebAnswer *answer, WebRequest *request, BouncerUser *user) {
 	const char *password = read_field(request, "password");
-	if (!check_password(read_field(request, "current"), user->password_hash)) {
+	if (find_logged_in_user(request) != user) {
 		answer->is_delayed = TRUE;
 		show_home(answer, request, user, "The current password is not right.");
 		return;
@@ -765,6 +807,9 @@ static void change_own_password(WebAnswer *answer, WebRequest *request, BouncerU
 		return;
 	}
 	set_user_password(user, password);
+	/* Every other browser signed in as the user signs out, while this one stays */
+	g_autofree char *token = read_session_token(request);
+	forget_web_sessions(request->bouncer, user->id, token);
 	redirect(answer, "/?notice=password");
 }
 
@@ -790,6 +835,7 @@ static void change_account_password(WebAnswer *answer, WebRequest *request, Boun
 		return;
 	}
 	set_user_password(account, password);
+	forget_web_sessions(request->bouncer, account->id, NULL);
 	return_to_list(answer, request, "/accounts?", "account-password");
 }
 
@@ -888,13 +934,9 @@ static gboolean run_admin_action(WebAnswer *answer, WebRequest *request, Bouncer
 
 
 static void sign_out(WebAnswer *answer, WebRequest *request) {
-	const char *cookies = g_hash_table_lookup(request->headers, "cookie");
-	g_auto(GStrv) parts = g_strsplit(cookies ? cookies : "", ";", -1);
-	for (int index = 0; parts[index]; index++) {
-		char *cookie = g_strstrip(parts[index]);
-		if (g_str_has_prefix(cookie, COOKIE_NAME "="))
-			g_hash_table_remove(request->bouncer->web_sessions, cookie + strlen(COOKIE_NAME "="));
-	}
+	g_autofree char *token = read_session_token(request);
+	if (token)
+		g_hash_table_remove(request->bouncer->web_sessions, token);
 	answer->cookie = g_strdup(COOKIE_NAME "=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict");
 	redirect(answer, "/");
 }
@@ -904,24 +946,6 @@ static void answer_plainly(WebAnswer *answer, int status, const char *text) {
 	answer->status = status;
 	answer->content_type = "text/plain; charset=utf-8";
 	answer->body = g_string_new(text);
-}
-
-
-/* An app logs in with the user's bouncer name and password, as it does over IRC, where other clients may add the
- * network or their own name after a slash or an at sign */
-static BouncerUser *read_basic_login(WebRequest *request) {
-	const char *header = g_hash_table_lookup(request->headers, "authorization");
-	if (!header || g_ascii_strncasecmp(header, BASIC_LOGIN, strlen(BASIC_LOGIN)) != 0)
-		return NULL;
-	gsize length = 0;
-	g_autofree guchar *decoded = g_base64_decode(header + strlen(BASIC_LOGIN), &length);
-	g_autofree char *text = g_strndup((const char *)decoded, length);
-	char *colon = strchr(text, ':');
-	if (!colon)
-		return NULL;
-	*colon = '\0';
-	text[strcspn(text, "/@")] = '\0';
-	return log_in_user(request->bouncer, text, colon + 1);
 }
 
 
@@ -939,7 +963,7 @@ static void upload_avatar(WebAnswer *answer, WebRequest *request) {
 		answer_plainly(answer, HTTP_NOT_FOUND, "This bouncer does not take pictures");
 		return;
 	}
-	BouncerUser *user = read_basic_login(request);
+	BouncerUser *user = find_logged_in_user(request);
 	if (!user) {
 		answer->is_delayed = TRUE;
 		answer_plainly(answer, HTTP_UNAUTHORIZED, "The bouncer login was not accepted");
@@ -1013,7 +1037,7 @@ static void upload_file(WebAnswer *answer, WebRequest *request) {
 		answer_plainly(answer, HTTP_NOT_FOUND, "This bouncer does not take files");
 		return;
 	}
-	BouncerUser *user = read_basic_login(request);
+	BouncerUser *user = find_logged_in_user(request);
 	if (!user) {
 		answer->is_delayed = TRUE;
 		answer_plainly(answer, HTTP_UNAUTHORIZED, "The bouncer login was not accepted");
@@ -1125,8 +1149,10 @@ static gboolean read_request_line(WebRequest *request, const char *line) {
 }
 
 
-/* Splits the request into its first line, headers and form body, once all of it has arrived */
-static gboolean parse_request(WebRequest *request, gsize header_length) {
+/* Splits the head into its first line and headers once it has arrived, before any body */
+static gboolean parse_head(WebRequest *request, gsize header_length) {
+	if (request->headers)
+		return TRUE;
 	g_autofree char *head = g_strndup((const char *)request->data->data, header_length);
 	g_auto(GStrv) lines = g_strsplit(head, "\r\n", -1);
 	if (!lines[0] || !read_request_line(request, lines[0]))
@@ -1140,6 +1166,16 @@ static gboolean parse_request(WebRequest *request, gsize header_length) {
 		g_hash_table_insert(request->headers, g_ascii_strdown(lines[index], -1), g_strdup(g_strstrip(colon + 1)));
 	}
 	request->host = g_strdup(g_hash_table_lookup(request->headers, "host"));
+	return TRUE;
+}
+
+
+/* Reads the form body once all of it has arrived, which a request checked for its login has already done */
+static gboolean parse_request(WebRequest *request, gsize header_length) {
+	if (!parse_head(request, header_length))
+		return FALSE;
+	if (request->body)
+		return TRUE;
 	const char *body = (const char *)request->data->data + header_length + strlen(HEADER_END);
 	gsize body_length = request->data->len - header_length - strlen(HEADER_END);
 	request->body = g_bytes_new(body, body_length);
@@ -1151,10 +1187,72 @@ static gboolean parse_request(WebRequest *request, gsize header_length) {
 }
 
 
+/* The name and password a request carries: an app's bouncer login, as over IRC where other clients may add the
+ * network or their own name after a slash or an at sign, the sign in form, or the current password when changing
+ * it. Returns FALSE for a request without any */
+static gboolean find_login(WebRequest *request, char **name, char **password) {
+	const char *header = g_hash_table_lookup(request->headers, "authorization");
+	if (header && g_ascii_strncasecmp(header, BASIC_LOGIN, strlen(BASIC_LOGIN)) == 0) {
+		gsize length = 0;
+		g_autofree guchar *decoded = g_base64_decode(header + strlen(BASIC_LOGIN), &length);
+		g_autofree char *text = g_strndup((const char *)decoded, length);
+		char *colon = strchr(text, ':');
+		if (!colon)
+			return FALSE;
+		*password = g_strdup(colon + 1);
+		*colon = '\0';
+		text[strcspn(text, "/@")] = '\0';
+		*name = g_strdup(text);
+		return TRUE;
+	}
+	if (!g_str_equal(request->method, "POST"))
+		return FALSE;
+	if (g_str_equal(request->path, "/login")) {
+		*name = g_strdup(read_field(request, "username"));
+		*password = g_strdup(read_field(request, "password"));
+		return TRUE;
+	}
+	BouncerUser *user = find_signed_in_user(request);
+	if (g_str_equal(request->path, "/password") && user) {
+		*name = g_strdup(user->name);
+		*password = g_strdup(read_field(request, "current"));
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+static void check_request(WebRequest *request);
+static void answer_request(WebRequest *request, gsize header_length);
+
+
+static void finish_web_login(BouncerUser *user, gpointer data) {
+	WebRequest *request = data;
+	request->is_login_checked = TRUE;
+	request->login_id = user ? user->id : 0;
+	check_request(request);
+}
+
+
+/* Starts checking the name and password a request carries, and returns FALSE when it carries none */
+static gboolean start_login_check(WebRequest *request) {
+	g_autofree char *name = NULL, *password = NULL;
+	if (request->is_login_checked || !find_login(request, &name, &password))
+		return FALSE;
+	check_login(request->bouncer, request->remote, name, password, NULL, finish_web_login, request);
+	if (password)
+		memset(password, 0, strlen(password));
+	return TRUE;
+}
+
+
 static void answer_request(WebRequest *request, gsize header_length) {
 	g_clear_handle_id(&request->timeout_source, g_source_remove);
 	WebAnswer answer = {0};
-	if (!parse_request(request, header_length)) {
+	gboolean is_parsed = parse_request(request, header_length);
+	if (is_parsed && start_login_check(request))
+		return;
+	if (!is_parsed) {
 		answer.status = HTTP_BAD_REQUEST;
 		if (!request->method)
 			request->method = g_strdup("GET");
@@ -1183,8 +1281,8 @@ static gboolean read_head(WebRequest *request, gsize *header_length, gsize *body
 		return FALSE;
 	*header_length = (gsize)(end - (const char *)request->data->data);
 	g_autofree char *head = g_ascii_strdown((const char *)request->data->data, (gssize)*header_length);
-	const char *length_header = strstr(head, "\r\ncontent-length:");
-	*body_length = length_header ? (gsize)g_ascii_strtoull(length_header + 17, NULL, 10) : 0;
+	const char *length_header = strstr(head, LENGTH_HEADER);
+	*body_length = length_header ? (gsize)g_ascii_strtoull(length_header + strlen(LENGTH_HEADER), NULL, 10) : 0;
 	return TRUE;
 }
 
@@ -1255,11 +1353,34 @@ static gboolean continue_request(WebRequest *request, gsize header_length) {
 }
 
 
+/* An upload without a right login is refused before its body is read or asked for, so nobody signed out can fill
+ * the bouncer's memory */
+static void refuse_signed_out_upload(WebRequest *request) {
+	g_clear_handle_id(&request->timeout_source, g_source_remove);
+	WebAnswer answer = {0};
+	answer.is_delayed = TRUE;
+	answer_plainly(&answer, HTTP_UNAUTHORIZED, "The bouncer login was not accepted");
+	DelayedAnswer *delayed = g_new0(DelayedAnswer, 1);
+	*delayed = (DelayedAnswer){request, answer};
+	g_timeout_add(FAILED_LOGIN_DELAY_MILLISECONDS, send_delayed_answer, delayed);
+}
+
+
+static gboolean is_upload(WebRequest *request) {
+	return find_largest_body(request) > LARGEST_REQUEST_BYTES;
+}
+
+
 static void check_request(WebRequest *request) {
 	gsize header_length = 0, body_length = 0;
 	gboolean has_head = read_head(request, &header_length, &body_length);
 	gsize largest = find_largest_body(request) + LARGEST_REQUEST_BYTES;
-	if (has_head && body_length > find_largest_body(request))
+	gboolean is_checked_upload = has_head && is_upload(request) && parse_head(request, header_length);
+	if (is_checked_upload && !request->is_login_checked && start_login_check(request))
+		return;
+	if (is_checked_upload && !find_logged_in_user(request))
+		refuse_signed_out_upload(request);
+	else if (has_head && body_length > find_largest_body(request))
 		refuse_large_request(request);
 	else if (has_head && request->data->len >= header_length + strlen(HEADER_END) + body_length)
 		answer_request(request, header_length);
@@ -1284,7 +1405,7 @@ static void finish_reading(GObject *source, GAsyncResult *result, gpointer data)
 
 static void read_more(WebRequest *request) {
 	g_input_stream_read_async(g_io_stream_get_input_stream(request->connection), request->chunk,
-		sizeof request->chunk, G_PRIORITY_DEFAULT, NULL, finish_reading, request);
+		sizeof request->chunk, G_PRIORITY_DEFAULT, request->reading, finish_reading, request);
 }
 
 
@@ -1292,14 +1413,16 @@ static void read_more(WebRequest *request) {
 static gboolean give_up(gpointer data) {
 	WebRequest *request = data;
 	request->timeout_source = 0;
-	g_io_stream_close(request->connection, NULL, NULL);
+	g_cancellable_cancel(request->reading);
 	return G_SOURCE_REMOVE;
 }
 
 
-void serve_web(Bouncer *bouncer, GIOStream *connection) {
+void serve_web(Bouncer *bouncer, GIOStream *connection, const char *host) {
 	WebRequest *request = g_new0(WebRequest, 1);
 	request->bouncer = bouncer;
+	request->remote = g_strdup(host);
+	request->reading = g_cancellable_new();
 	request->connection = g_object_ref(connection);
 	request->data = g_byte_array_new();
 	request->timeout_source = g_timeout_add_seconds(REQUEST_SECONDS, give_up, request);

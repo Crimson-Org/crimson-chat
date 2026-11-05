@@ -1,6 +1,4 @@
-/* Start the Crimson Chat bouncer, which keeps IRC networks connected for its users
- *
- */
+/* Start the Crimson Chat bouncer, which keeps IRC networks connected for its users */
 
 #include <glib-unix.h>
 #include <stdio.h>
@@ -18,13 +16,13 @@
 #define DEFAULT_LISTEN "6697"
 #define DEFAULT_WEB "8443"
 #define FAILURE_STATUS 1
-/* Uploaded pictures are on unless the owner turns them off, as square PNGs of 96 pixels from at most 2.5 MB */
+/* Uploaded pictures are on unless the admin turns them off, as square PNGs of 96 pixels from at most 2.5 MB */
 #define DEFAULT_AVATAR_FORMAT "png"
 #define DEFAULT_AVATAR_QUALITY 90
 #define DEFAULT_AVATAR_SIZE 96
 #define DEFAULT_AVATAR_LARGEST_MB 2.5
 #define AVATAR_FOLDER "avatars"
-/* Shared files are on unless the owner turns them off, up to 20 MB each and kept for five weeks */
+/* Shared files are on unless the admin turns them off, up to 20 MB each and kept for five weeks */
 #define DEFAULT_FILE_LARGEST_MB 20
 #define DEFAULT_FILE_KEPT_DAYS 35
 #define FILE_FOLDER "files"
@@ -91,7 +89,7 @@ static gboolean report_missing_answers(void) {
 static gboolean create_admin(Database *database) {
 	g_print("Welcome to the Crimson Chat bouncer. Choose the admin account clients log in with.\n");
 	g_autofree char *name = NULL;
-	while (!name || !*name || strpbrk(name, " :/@!")) {
+	while (!is_valid_user_name(name)) {
 		g_free(name);
 		name = ask_line("Username: ", FALSE);
 		if (!name)

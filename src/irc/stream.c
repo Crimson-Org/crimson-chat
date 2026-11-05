@@ -38,6 +38,8 @@ struct IrcStream {
 	double send_credit;
 	gint64 credit_time;
 	guint keepalive_source, rate_source, deadline_source, probe_source;
+	/* Why a send failed, told to the owner once that send is over */
+	char *failure;
 	/* When the last probe went out, which anything received afterwards answers */
 	gint64 probe_time;
 	IrcStreamReceived received;
@@ -64,6 +66,7 @@ static void release_stream(IrcStream *stream) {
 	g_clear_handle_id(&stream->probe_source, g_source_remove);
 	g_queue_clear_full(&stream->outgoing, (GDestroyNotify)g_bytes_unref);
 	g_clear_pointer(&stream->current, g_bytes_unref);
+	g_free(stream->failure);
 	g_byte_array_unref(stream->unread);
 	g_object_unref(stream->reading);
 	g_object_unref(stream->writing);
@@ -78,6 +81,27 @@ static void fail_stream(IrcStream *stream, const char *reason) {
 	stream->has_failed = TRUE;
 	g_clear_handle_id(&stream->keepalive_source, g_source_remove);
 	stream->closed(stream, reason, stream->data);
+}
+
+
+static gboolean report_failure(gpointer data) {
+	IrcStream *stream = data;
+	if (!stream->is_closing)
+		stream->closed(stream, stream->failure, stream->data);
+	release_stream(stream);
+	return G_SOURCE_REMOVE;
+}
+
+
+/* A failure found while sending is told after the send, since the owner may free what the sender still walks, such
+ * as the list of clients it relays one line to */
+static void fail_stream_after_send(IrcStream *stream, const char *reason) {
+	if (stream->has_failed || stream->is_closing)
+		return;
+	stream->has_failed = TRUE;
+	g_clear_handle_id(&stream->keepalive_source, g_source_remove);
+	stream->failure = g_strdup(reason);
+	g_idle_add(report_failure, hold_stream(stream));
 }
 
 
@@ -307,10 +331,15 @@ void pass_irc_stream_pings(IrcStream *stream) {
 void send_irc_message(IrcStream *stream, const IrcMessage *message) {
 	if (stream->is_closing || stream->has_failed)
 		return;
+	if (!can_format_irc_message(message)) {
+		g_warning("A %s line was not sent, since a parameter before its last held a space or was empty",
+			message->command);
+		return;
+	}
 	g_autofree char *line = format_irc_line(message);
 	stream->queued_bytes += strlen(line) + strlen(LINE_END);
 	if (stream->queued_bytes > LARGEST_QUEUE_BYTES) {
-		fail_stream(stream, "The other end stopped reading");
+		fail_stream_after_send(stream, "The other end stopped reading");
 		return;
 	}
 	gsize length = strlen(line) + strlen(LINE_END);

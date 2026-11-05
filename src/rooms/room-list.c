@@ -7,7 +7,7 @@
 #include "rooms/room-look.h"
 #include "app/settings.h"
 #include "window/window.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 /* Rooms the user is no longer in show faded */
 #define LEFT_ROOM_OPACITY 0.6

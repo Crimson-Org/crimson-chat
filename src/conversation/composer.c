@@ -3,14 +3,14 @@
 #include <adwaita.h>
 
 #include "lang/en.h"
-#include "common/identity.h"
+#include "common/app/identity.h"
 #include "conversation/composer.h"
 #include "conversation/formatting.h"
 #include "session/session.h"
 #include "session/uploads.h"
 #include "window/window.h"
-#include "common/key-store.h"
-#include "common/spacing.h"
+#include "common/storage/key-store.h"
+#include "common/widgets/spacing.h"
 
 #define TYPING_INTERVAL_MICROSECONDS (3 * G_USEC_PER_SEC)
 #define SEND_SPINNER_SIZE 20
@@ -523,8 +523,7 @@ static void finish_pasting_picture(GObject *source, GAsyncResult *result, gpoint
 	g_autoptr(GdkTexture) texture = gdk_clipboard_read_texture_finish(GDK_CLIPBOARD(source), result, NULL);
 	if (!texture || !can_share(composer))
 		return;
-	g_autofree char *folder = g_build_filename(g_get_user_cache_dir(), get_application_identity()->slug,
-		PASTED_FOLDER, NULL);
+	g_autofree char *folder = get_cache_file_path(PASTED_FOLDER);
 	g_autoptr(GFile) old = g_file_new_for_path(folder);
 	g_autoptr(GFileEnumerator) entries = g_file_enumerate_children(old, G_FILE_ATTRIBUTE_STANDARD_NAME,
 		G_FILE_QUERY_INFO_NONE, NULL, NULL);
@@ -801,7 +800,7 @@ void set_composer_waiting(Composer *composer, const char *message) {
 	/* Sending stops at once, while the button only turns into a spinner once the wait has lasted */
 	g_clear_handle_id(&composer->wait_source, g_source_remove);
 	if (is_waiting)
-		composer->wait_source = g_timeout_add(WAIT_SHOWN_MS, show_send_waiting, composer);
+		composer->wait_source = g_timeout_add(SPINNER_DELAY_MILLISECONDS, show_send_waiting, composer);
 	else
 		show_send_look(composer, FALSE);
 	refresh_send_button(composer);

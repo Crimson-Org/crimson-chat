@@ -2,10 +2,10 @@
 
 #include "conversation/link-previews.h"
 
-/* The head of a page, where its title and description are, sits within this many bytes */
 /* The longest named or numbered entity read, such as &hellip; or &#x1F600; */
 #define LONGEST_ENTITY 10
 #define WEB_PREFIX "www."
+/* The head of a page, where its title and description are, sits within this many bytes */
 #define LARGEST_HEAD_BYTES (256 * 1024)
 #define READ_CHUNK_BYTES 16384
 /* The previews kept at most, after which the kept ones are let go and fetched again when shown */
@@ -187,7 +187,8 @@ static void finish_page(PageFetch *fetch, LinkPreview *preview) {
 		g_hash_table_remove_all(previews);
 	g_hash_table_replace(previews, g_strdup(fetch->url), preview);
 	Waiters *waiters = NULL;
-	g_hash_table_steal_extended(waiting, fetch->url, NULL, (gpointer *)&waiters);
+	g_autofree char *waiting_url = NULL;
+	g_hash_table_steal_extended(waiting, fetch->url, (gpointer *)&waiting_url, (gpointer *)&waiters);
 	for (guint index = 0; waiters && index < waiters->owners->len; index++) {
 		g_autoptr(GObject) owner = g_weak_ref_get(g_ptr_array_index(waiters->owners, index));
 		if (owner)

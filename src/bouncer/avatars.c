@@ -3,11 +3,12 @@
 #include <string.h>
 
 #include "bouncer.h"
+#include "secret.h"
 
-/* Pictures are decoded at no more than this many times their final size, so a huge one never fills the memory */
 /* PNG compresses from 0 to 9, more for a lower quality setting */
 #define MOST_PNG_COMPRESSION 9
 #define WHITE 0xffffff
+/* Pictures are decoded at no more than this many times their final size, so a huge one never fills the memory */
 #define DECODE_FACTOR 2
 #define NAME_RANDOM_BYTES 8
 
@@ -106,11 +107,8 @@ char *store_avatar(Bouncer *bouncer, BouncerUser *user, Upstream *upstream, cons
 	g_autoptr(GdkPixbuf) shaped = shape_picture(decoded, settings->size);
 	g_mkdir_with_parents(settings->folder, PRIVATE_FOLDER_MODE);
 	g_autofree char *start = describe_name_start(user, upstream, target);
-	guint8 random[NAME_RANDOM_BYTES];
-	for (int index = 0; index < NAME_RANDOM_BYTES; index++)
-		random[index] = (guint8)g_random_int_range(0, 256);
-	g_autofree char *token = g_compute_checksum_for_data(G_CHECKSUM_SHA256, random, sizeof random);
-	g_autofree char *name = g_strdup_printf("%s%.16s.%s", start, token, g_str_equal(settings->format, "jpeg")
+	g_autofree char *token = create_secret_token(NAME_RANDOM_BYTES);
+	g_autofree char *name = g_strdup_printf("%s%s.%s", start, token, g_str_equal(settings->format, "jpeg")
 		? "jpg" : "png");
 	g_autofree char *path = g_build_filename(settings->folder, name, NULL);
 	if (!save_picture(shaped, settings, path, error))

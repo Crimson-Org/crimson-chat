@@ -7,6 +7,7 @@
 #define SECONDS_PER_MINUTE 60
 #include "app/settings.h"
 #include "conversation/pictures.h"
+#include "common/text/numbers.h"
 
 #define TYPING_NAMES_SHOWN 2
 #define TYPING_DOTS_MILLISECONDS 750
@@ -176,7 +177,8 @@ static char *describe_channel(CrimsonRoom *room) {
 	if (!channel)
 		return g_strdup(room->is_joined ? "" : TEXT_NOT_JOINED);
 	guint members = g_hash_table_size(channel->members);
-	return g_strdup_printf(members == 1 ? TEXT_ONE_MEMBER : TEXT_MEMBERS, members);
+	g_autofree char *count = format_count(members);
+	return g_strdup_printf(members == 1 ? TEXT_ONE_MEMBER : TEXT_MEMBERS, count);
 }
 
 

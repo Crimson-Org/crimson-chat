@@ -1,13 +1,13 @@
 #include <string.h>
 
 #include "bouncer.h"
+#include "../irc/protocol.h"
 
 #define TIMESTAMP_PREFIX "timestamp="
 #define MESSAGE_ID_PREFIX "msgid="
 /* A search answers with this many messages at most, picked from this many lines that hold the words */
 #define SEARCH_RESULTS 50
 #define SEARCH_SCANNED 2000
-#define SEARCH_BATCH "crimson-chat/search"
 
 
 static gboolean is_reaction(const IrcMessage *message) {
@@ -31,9 +31,26 @@ static HistoryKind classify_message(const IrcMessage *message) {
 }
 
 
+/* The time in the exact form history is stored in, so text order matches time order */
+static char *normalize_time(const char *text) {
+	g_autoptr(GDateTime) time = parse_irc_time(text);
+	return time ? format_irc_time(time) : NULL;
+}
+
+
+/* A server may write its times in another form, so a kept line carries the stored form, or now when it has none */
+static void keep_normal_time(IrcMessage *message) {
+	g_autofree char *time = normalize_time(get_irc_tag(message, "time"));
+	if (!time)
+		time = format_irc_time_now();
+	set_irc_tag(message, "time", time);
+}
+
+
 /* The conversation a message belongs to, which for a private message is the other person */
 static char *find_conversation(IrcState *state, const IrcMessage *message) {
-	const char *target = get_irc_parameter(message, 0);
+	const char *target = get_irc_parameter(message, 0) ? skip_irc_status_symbols(state, get_irc_parameter(message, 0))
+		: NULL;
 	if (!target || is_irc_channel_name(state, target))
 		return g_strdup(target);
 	g_autofree char *sender = get_source_nick(message->source);
@@ -51,6 +68,7 @@ void store_upstream_message(Upstream *upstream, IrcMessage *message, GPtrArray *
 		set_irc_tag(message, "msgid", message_id);
 	}
 	IrcState *state = get_irc_client_state(upstream->client);
+	keep_normal_time(message);
 	g_autofree char *line = format_irc_line(message);
 	const char *time = get_irc_tag(message, "time");
 	const char *message_id = get_irc_tag(message, "msgid");
@@ -97,16 +115,10 @@ void store_server_line(Upstream *upstream, IrcMessage *message) {
 		g_autofree char *message_id = create_irc_identifier();
 		set_irc_tag(message, "msgid", message_id);
 	}
+	keep_normal_time(message);
 	g_autofree char *line = format_irc_line(message);
 	store_history(upstream->user->bouncer->database, upstream->record.id, SERVER_TARGET, SERVER_TARGET,
 		get_irc_tag(message, "time"), get_irc_tag(message, "msgid"), HISTORY_MESSAGE, line);
-}
-
-
-/* The time in the exact form history is stored in, so text order matches time order */
-static char *normalize_time(const char *text) {
-	g_autoptr(GDateTime) time = parse_irc_time(text);
-	return time ? format_irc_time(time) : NULL;
 }
 
 
@@ -322,7 +334,7 @@ void answer_search(Downstream *downstream, Upstream *upstream, const IrcMessage 
 	const char *target = get_irc_parameter(message, 1);
 	const char *words = get_irc_parameter(message, 2);
 	if (!target || !words || !*words) {
-		g_autoptr(IrcMessage) failure = create_irc_message("FAIL", "CRIMSON", "NEED_MORE_PARAMS", "SEARCH",
+		g_autoptr(IrcMessage) failure = create_irc_message("FAIL", CRIMSON_COMMAND, "NEED_MORE_PARAMS", "SEARCH",
 			"Missing parameters", NULL);
 		send_bouncer_line(downstream, upstream, failure, NULL);
 		return;

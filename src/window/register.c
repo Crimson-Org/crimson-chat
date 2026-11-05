@@ -1,6 +1,6 @@
 #include "lang/en.h"
 #include "window/register.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define REGISTER_ICON_SIZE 64
 #define DIALOG_WIDTH 420

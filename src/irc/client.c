@@ -3,14 +3,18 @@
 
 #include "client.h"
 #include "stream.h"
+#include "protocol.h"
 
+/* A server never needs more batches open at once, so one that keeps opening them cannot fill the memory */
+#define MOST_OPEN_BATCHES 100
+/* A taken nick is tried again with a few more underscores before the login counts as failed */
+#define MOST_NICK_TRIES 5
+#define STS_PORT_KEY "port="
 #define CONNECT_TIMEOUT_SECONDS 20
 #define FIRST_RETRY_SECONDS 2
 #define LONGEST_RETRY_SECONDS 300
 /* CAP REQ and AUTHENTICATE lines stay well under the 512 byte line limit */
 #define REQUEST_BYTES 400
-#define AUTHENTICATE_CHUNK 400
-#define TLS_PORT 6697
 
 static const char *const NETWORK_CAPS[] = {BOUNCER_NETWORK_CAPS, NULL};
 
@@ -29,6 +33,7 @@ struct IrcClient {
 	gboolean wants_connection, has_ended_caps;
 	guint reconnect_source, retry_seconds, pending_requests;
 	char *trying_nick;
+	guint nick_tries;
 	GHashTable *batches;
 	/* The label every line sent gets until it is cleared, so the server's replies to them can be told apart */
 	char *label;
@@ -222,6 +227,7 @@ static void send_registration(IrcClient *client) {
 		send_irc_command(client->stream, "PASS", settings->password, NULL);
 	g_free(client->trying_nick);
 	client->trying_nick = g_strdup(settings->nick);
+	client->nick_tries = 0;
 	send_irc_command(client->stream, "NICK", client->trying_nick, NULL);
 	const char *username = settings->username && *settings->username ? settings->username : settings->nick;
 	const char *realname = settings->realname && *settings->realname ? settings->realname : settings->nick;
@@ -302,14 +308,15 @@ static gboolean upgrade_to_tls(IrcClient *client) {
 	const char *policy = g_hash_table_lookup(client->state->available_caps, "sts");
 	if (client->settings.uses_tls || !policy)
 		return FALSE;
-	int port = TLS_PORT;
+	guint64 port = IRC_TLS_PORT;
 	g_auto(GStrv) keys = g_strsplit(policy, ",", -1);
 	for (int index = 0; keys[index]; index++) {
-		if (g_str_has_prefix(keys[index], "port="))
-			port = (int)g_ascii_strtoll(keys[index] + 5, NULL, 10);
+		const char *value = g_str_has_prefix(keys[index], STS_PORT_KEY) ? keys[index] + strlen(STS_PORT_KEY) : NULL;
+		if (value && !g_ascii_string_to_unsigned(value, 10, 1, G_MAXUINT16, &port, NULL))
+			return FALSE;
 	}
 	client->settings.uses_tls = TRUE;
-	client->settings.port = port;
+	client->settings.port = (int)port;
 	drop_connection(client);
 	start_connecting(client);
 	return TRUE;
@@ -408,6 +415,7 @@ static void handle_cap(IrcClient *client, const IrcMessage *message) {
 
 
 static void try_another_nick(IrcClient *client) {
+	client->nick_tries++;
 	char *longer = g_strconcat(client->trying_nick, "_", NULL);
 	g_free(client->trying_nick);
 	client->trying_nick = longer;
@@ -435,6 +443,10 @@ static gboolean handle_registration(IrcClient *client, const IrcMessage *message
 		|| g_str_equal(command, "906") || g_str_equal(command, "908")) {
 		if (!client->state->is_registered)
 			fail_login(client, get_irc_parameter(message, count_irc_parameters(message) - 1));
+		return TRUE;
+	}
+	if (g_str_equal(command, "433") && !client->state->is_registered && client->nick_tries >= MOST_NICK_TRIES) {
+		fail_login(client, get_irc_parameter(message, count_irc_parameters(message) - 1));
 		return TRUE;
 	}
 	if (g_str_equal(command, "433") && !client->state->is_registered) {
@@ -468,7 +480,7 @@ static void track_batch(IrcClient *client, const IrcMessage *message) {
 	const char *reference = get_irc_parameter(message, 0);
 	if (!reference || (*reference != '+' && *reference != '-'))
 		return;
-	if (*reference == '-')
+	if (*reference == '-' || g_hash_table_size(client->batches) >= MOST_OPEN_BATCHES)
 		return;
 	IrcBatch *batch = g_new0(IrcBatch, 1);
 	batch->reference = g_strdup(reference + 1);
@@ -477,7 +489,8 @@ static void track_batch(IrcClient *client, const IrcMessage *message) {
 	for (guint index = 2; index < count_irc_parameters(message); index++)
 		g_ptr_array_add(batch->parameters, g_strdup(get_irc_parameter(message, index)));
 	batch->outer = g_strdup(get_irc_tag(message, "batch"));
-	g_hash_table_insert(client->batches, batch->reference, batch);
+	/* A reference used again replaces the old batch together with its key, which the batch owns */
+	g_hash_table_replace(client->batches, batch->reference, batch);
 }
 
 
@@ -537,7 +550,7 @@ static void take_network_message(IrcClient *network, const IrcMessage *message) 
 		while (g_hash_table_iter_next(&iterator, &name, NULL))
 			g_hash_table_add(network->state->enabled_caps, g_strdup(name));
 	}
-	if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(get_irc_parameter(message, 0), "CAPS") == 0) {
+	if (g_str_equal(message->command, CRIMSON_COMMAND) && g_strcmp0(get_irc_parameter(message, 0), "CAPS") == 0) {
 		take_network_caps(network, message);
 		return;
 	}
@@ -547,9 +560,41 @@ static void take_network_message(IrcClient *network, const IrcMessage *message) 
 }
 
 
+/* Whether a tag or support token belongs to the Crimson protocol, also when a server takes a token back */
+static gboolean is_crimson_name(const char *name) {
+	if (*name == '+' || *name == '-')
+		name++;
+	return g_str_has_prefix(name, CRIMSON_NAMESPACE);
+}
+
+
+static gboolean is_crimson_tag(gpointer name, gpointer value, gpointer data) {
+	return is_crimson_name(name);
+}
+
+
+/* Only the Crimson bouncer speaks the Crimson protocol, so any other server's lines lose its names, and its own
+ * commands from such a server are dropped, since they could steer the app or reach the bouncer's apps */
+static gboolean drop_crimson_names(IrcMessage *message) {
+	const char *first = get_irc_parameter(message, 0);
+	gboolean is_reply = g_str_equal(message->command, "FAIL") || g_str_equal(message->command, "WARN")
+		|| g_str_equal(message->command, "NOTE");
+	if (g_str_equal(message->command, CRIMSON_COMMAND) || (is_reply && g_strcmp0(first, CRIMSON_COMMAND) == 0))
+		return FALSE;
+	g_hash_table_foreach_remove(message->tags, is_crimson_tag, NULL);
+	if (g_str_equal(message->command, ISUPPORT_REPLY))
+		for (guint index = message->parameters->len; index-- > 0;)
+			if (is_crimson_name(message->parameters->pdata[index]))
+				g_ptr_array_remove_index(message->parameters, index);
+	return TRUE;
+}
+
+
 static void handle_message(IrcStream *stream, IrcMessage *message, gpointer data) {
 	IrcClient *client = data;
-	const char *network_id = get_irc_tag(message, IRC_NETWORK_TAG);
+	if (!has_irc_cap(client->state, BOUNCER_CAP) && !drop_crimson_names(message))
+		return;
+	const char *network_id = get_irc_tag(message, NETWORK_TAG);
 	if (network_id) {
 		IrcClient *network = g_hash_table_lookup(client->networks, network_id);
 		if (network && network->wants_connection)
@@ -698,7 +743,7 @@ void send_irc_client_message(IrcClient *client, const IrcMessage *message) {
 	if (needs_label)
 		set_irc_tag(shaped, "label", client->label);
 	if (client->network_id)
-		set_irc_tag(shaped, IRC_NETWORK_TAG, client->network_id);
+		set_irc_tag(shaped, NETWORK_TAG, client->network_id);
 	send_irc_message(stream, shaped);
 }
 

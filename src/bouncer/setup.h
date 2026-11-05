@@ -2,6 +2,10 @@
 
 #include <glib.h>
 
+/* The shortest password the bouncer takes, also written into its pages */
+#define SHORTEST_PASSWORD 8
+#define SHORTEST_PASSWORD_TEXT G_STRINGIFY(SHORTEST_PASSWORD)
+
 /* Asks on the terminal, hiding what is typed when it is a password, and returns NULL when input ends */
 char *ask_line(const char *question, gboolean is_secret);
 /* Asks for a password twice until both match and it is long enough */

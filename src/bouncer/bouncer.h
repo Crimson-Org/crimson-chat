@@ -16,26 +16,11 @@
 #include "../irc/client.h"
 #include "../irc/stream.h"
 #include "database.h"
+#include "../irc/protocol.h"
 
-#define BOUNCER_NAME "crimson-chat-bouncer"
-/* The network attribute that says whether the bouncer will reconnect a disconnected network by itself */
-#define RETRY_ATTRIBUTE "crimson-chat/retrying"
-/* The network attribute that says what kind of problem stopped it, login, certificate or network */
-#define FAILURE_ATTRIBUTE "crimson-chat/failure"
 #define HISTORY_PAGE_LIMIT 1000
-/* The conversation the server's own chat is kept and asked for under, which no nick or channel can be */
-#define SERVER_TARGET "*"
-/* The tag a kept message of the day carries its lines in, joined by line breaks */
-#define WELCOME_MESSAGE_TAG "crimson-chat/motd"
 /* What others see as the user's away message while none of their devices is connected */
 #define ABSENT_MESSAGE "Away right now"
-/* The capability that tells Crimson Chat it reached its own bouncer, and the batch the network list comes in */
-#define BOUNCER_CAP "crimson-chat/bouncer"
-#define NETWORK_LISTING_BATCH "crimson-chat/networks"
-/* Where the app uploads pictures and files, as a whole address or the website's port, and the largest file */
-#define AVATARS_TOKEN "crimson-chat/AVATARS"
-#define FILES_TOKEN "crimson-chat/FILES"
-#define FILE_LIMIT_TOKEN "crimson-chat/FILE-LIMIT"
 
 typedef struct Bouncer Bouncer;
 typedef struct BouncerUser BouncerUser;
@@ -110,6 +95,9 @@ struct Upstream {
 	char *error;
 	/* The account and password a client is registering, kept as the network's login once the server agrees */
 	char *registering_account, *registering_password;
+	/* The nick a client asked for, kept as the network's nick once the server agrees */
+	char *requested_nick;
+	CtcpLimit ctcp_limit;
 };
 
 /* A Crimson Chat app logged in to the bouncer, which reaches all of the user's networks over this one connection */
@@ -118,13 +106,16 @@ struct Downstream {
 	/* A number of its own, which labels the app sends up carry so their answers come back to it alone */
 	guint id;
 	IrcStream *stream;
-	/* Where the client connects from, and the address of the bouncer it reached */
-	char *address, *local_host;
+	/* Where the client connects from, with and without its port */
+	char *address, *host;
 	GHashTable *caps;
 	gboolean is_negotiating, is_registered, has_cap_values;
 	char *nick, *username, *password;
 	GString *login;
 	int failed_logins;
+	/* Cancelled when the client goes, so a login still being checked finds nobody to answer */
+	GCancellable *login_check;
+	gboolean is_checking_login;
 	guint registration_source;
 	BouncerUser *user;
 };
@@ -140,7 +131,6 @@ void set_user_password(BouncerUser *user, const char *password);
 /* Disconnects the user and deletes their account, networks, history and pictures */
 void remove_user(BouncerUser *user);
 gboolean listen_bouncer(Bouncer *bouncer, const char *irc_address, const char *web_address, GError **error);
-BouncerUser *log_in_user(Bouncer *bouncer, const char *name, const char *password);
 Upstream *find_upstream(BouncerUser *user, const char *network_id);
 void add_upstream(BouncerUser *user, const NetworkRecord *record);
 void remove_upstream(Upstream *upstream);
@@ -161,10 +151,15 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 char *get_upstream_nick(Upstream *upstream);
 
 /* Downstream */
-void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, const char *local_host);
+void accept_downstream(Bouncer *bouncer, GIOStream *connection, const char *address, const char *host);
 
 /* Website */
-void serve_web(Bouncer *bouncer, GIOStream *connection);
+void serve_web(Bouncer *bouncer, GIOStream *connection, const char *host);
+/* Where apps reach the website: its public address when the admin set one, or else its port, which apps add to the
+ * address they reached the bouncer by */
+const char *get_bouncer_website(Bouncer *bouncer);
+/* Signs the user out of every browser but the one with the kept token, and drops sign ins that ran out */
+void forget_web_sessions(Bouncer *bouncer, gint64 user_id, const char *kept);
 
 /* Avatars */
 /* Shapes an uploaded picture, keeps it, sets it as the avatar of the user or room on the network, and returns its

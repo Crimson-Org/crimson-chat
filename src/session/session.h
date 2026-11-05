@@ -62,9 +62,9 @@ struct Session {
 	CrimsonAccount *item;
 	/* Whether the account ever got through, after which dropped connections only reconnect quietly */
 	gboolean has_reported_failure, has_connected;
-	/* A bouncer admin can invite people and open the bouncer's admin page on this port */
+	/* A bouncer admin can invite people and open the bouncer's admin page on its website, as the bouncer named it */
 	gboolean is_admin;
-	char *web_port;
+	char *website;
 	/* The bouncer's full list of networks while it arrives, by batch reference and the ids it named */
 	char *listing_batch;
 	GHashTable *listed_ids;
@@ -173,6 +173,7 @@ typedef struct {
 	GHashTable *refused_targets;
 	/* Recent WHOIS answers by folded nick, so opening a profile again soon asks the server nothing */
 	GHashTable *profiles;
+	CtcpLimit ctcp_limit;
 } NetworkWork;
 
 /* Frees what a network collects while a history batch arrives */
@@ -204,6 +205,9 @@ void forgive_target(CrimsonNetwork *network, const char *target);
 gboolean is_target_refused(CrimsonNetwork *network, const char *target);
 /* The one bouncer the user is connected to, if any */
 Session *find_bouncer(Chat *chat);
+/* An address on the bouncer's website from what the bouncer announced, its public address or a port on the host the
+ * account reaches it by, or NULL for anything else */
+char *build_bouncer_address(Session *session, const char *website, const char *path);
 /* Whether the user trusted this certificate for one of their accounts, such as a bouncer's own, which also
  * serves its pictures and files */
 gboolean is_trusted_certificate(Chat *chat, GTlsCertificate *certificate);

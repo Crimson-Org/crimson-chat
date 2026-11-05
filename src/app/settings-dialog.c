@@ -1,7 +1,7 @@
 #include <adwaita.h>
 
 #include "lang/en.h"
-#include "common/themes.h"
+#include "common/themes/themes.h"
 #include "window/dialogs.h"
 #include "conversation/formatting.h"
 #include "app/settings-dialog.h"
@@ -81,7 +81,7 @@ static void change_theme(AdwComboRow *row, GParamSpec *spec, char **theme) {
 /* Lists every theme by name with the one in use for that style picked
  * The row keeps its own ids, since the theme list is read again when a theme file changes */
 static void add_theme_row(GtkWidget *group, const char *title, char **theme, const char *fallback) {
-	GPtrArray *themes = list_themes();
+	g_autoptr(GPtrArray) themes = list_themes();
 	g_autoptr(GtkStringList) names = gtk_string_list_new(NULL);
 	char **ids = g_new0(char *, themes->len + 1);
 	guint selected = 0;

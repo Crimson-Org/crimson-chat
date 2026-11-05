@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common/window-geometry.h"
+#include "common/window/window-geometry.h"
 #include "session/model.h"
 
 void load_window_geometry_state(WindowGeometry *geometry);

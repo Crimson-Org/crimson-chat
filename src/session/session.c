@@ -4,7 +4,10 @@
 #include "conversation/formatting.h"
 #include "session/questions.h"
 #include "irc/numerics.h"
+#include "irc/protocol.h"
 
+/* Browsers leave this port out of an address */
+#define HTTPS_PORT 443
 #define TOPIC_MODES_OPEN "[+"
 #define TOPIC_MODES_CLOSE "] "
 #define CACHE_DELAY_SECONDS 2
@@ -14,14 +17,6 @@
  * reach them and what their profile holds */
 #define ANSWER_KEEP_SECONDS 120
 #define NICKSERV "NickServ"
-/* The bouncer's word on whether it reconnects a network by itself */
-#define RETRY_ATTRIBUTE "crimson-chat/retrying"
-#define FAILURE_ATTRIBUTE "crimson-chat/failure"
-/* The name a bouncer announces when its owner gave it none */
-#define BOUNCER_DEFAULT_NAME "crimson-chat-bouncer"
-#define BOUNCER_CAP "crimson-chat/bouncer"
-/* The batch the bouncer lists all its networks in when the app logs in */
-#define NETWORK_LISTING_BATCH "crimson-chat/networks"
 /* A server that can filter first lists only channels above this size, and lists all of them when that
  * finds fewer than the count after it, as on a small network */
 #define BUSY_ROOM_FILTER ">9"
@@ -244,7 +239,6 @@ static NetworkState read_network_state(CrimsonNetwork *network) {
 }
 
 
-/* The server room shows its network's state, so it is drawn again along with the rail and the header */
 /* Servers without the IRCv3 commands register through NickServ, which a quiet WHOIS finds once connected */
 static void probe_nickserv(CrimsonNetwork *network) {
 	if (!network->client || can_network(network, "draft/account-registration"))
@@ -254,6 +248,7 @@ static void probe_nickserv(CrimsonNetwork *network) {
 }
 
 
+/* The server room shows its network's state, so it is drawn again along with the rail and the header */
 static void refresh_network_state(CrimsonNetwork *network) {
 	NetworkState previous = network->state;
 	network->state = read_network_state(network);
@@ -547,7 +542,7 @@ static void update_bouncer_network(Session *session, const IrcMessage *message) 
 static void adopt_bouncer_name(Session *session, IrcClient *client) {
 	const char *name = get_irc_support(get_irc_client_state(client), "NETWORK");
 	const char *given = session->record->name;
-	if (!name || g_str_equal(name, BOUNCER_DEFAULT_NAME) || (given && g_strcmp0(given, session->record->host) != 0))
+	if (!name || g_str_equal(name, BOUNCER_NAME) || (given && g_strcmp0(given, session->record->host) != 0))
 		return;
 	g_free(session->record->name);
 	session->record->name = g_strdup(name);
@@ -591,20 +586,20 @@ static void handle_control_received(IrcClient *client, const IrcMessage *message
 		announce_account_change(session->item);
 	} else if (g_str_equal(message->command, "BATCH")) {
 		follow_network_listing(session, message);
-	} else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "NETWORK") == 0) {
+	} else if (g_str_equal(message->command, CRIMSON_COMMAND) && g_strcmp0(subcommand, "NETWORK") == 0) {
 		const char *batch = get_irc_tag(message, "batch");
 		if (session->listed_ids && g_strcmp0(batch, session->listing_batch) == 0 && get_irc_parameter(message, 1))
 			g_hash_table_add(session->listed_ids, g_strdup(get_irc_parameter(message, 1)));
 		update_bouncer_network(session, message);
 	}
-	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "INVITE") == 0
+	else if (g_str_equal(message->command, CRIMSON_COMMAND) && g_strcmp0(subcommand, "INVITE") == 0
 		&& get_irc_parameter(message, 3))
 		session->chat->events.invite_ready(session, get_irc_parameter(message, 1), get_irc_parameter(message, 2),
 			get_irc_parameter(message, 3), session->chat->data);
-	else if (g_str_equal(message->command, "CRIMSON") && g_strcmp0(subcommand, "ADMIN") == 0) {
+	else if (g_str_equal(message->command, CRIMSON_COMMAND) && g_strcmp0(subcommand, "ADMIN") == 0) {
 		session->is_admin = TRUE;
-		g_free(session->web_port);
-		session->web_port = g_strdup(get_irc_parameter(message, 1));
+		g_free(session->website);
+		session->website = g_strdup(get_irc_parameter(message, 1));
 		announce_account_change(session->item);
 	} else if (g_str_equal(message->command, "FAIL"))
 		session->chat->events.show_message(get_irc_parameter(message, count_irc_parameters(message) - 1),
@@ -770,9 +765,10 @@ void remove_account(Session *session) {
 	guint position = 0;
 	if (g_list_store_find(chat->accounts, session->item, &position))
 		g_list_store_remove(chat->accounts, position);
+	session->item->session = NULL;
 	g_object_unref(session->item);
 	g_free(session->control_error);
-	g_free(session->web_port);
+	g_free(session->website);
 	g_free(session->listing_batch);
 	g_clear_pointer(&session->listed_ids, g_hash_table_unref);
 	free_account_record(session->record);
@@ -794,21 +790,21 @@ void trust_certificate(Session *session, const char *hash) {
 void add_bouncer_network(Session *session, GHashTable *attributes) {
 	g_autofree char *text = format_irc_attributes(attributes);
 	if (session->control)
-		send_irc_client_command(session->control, "CRIMSON", "ADDNETWORK", text, NULL);
+		send_irc_client_command(session->control, CRIMSON_COMMAND, "ADDNETWORK", text, NULL);
 }
 
 
 void change_bouncer_network(CrimsonNetwork *network, GHashTable *attributes) {
 	g_autofree char *text = format_irc_attributes(attributes);
 	if (network->session->control)
-		send_irc_client_command(network->session->control, "CRIMSON", "CHANGENETWORK", network->bouncer_id, text,
+		send_irc_client_command(network->session->control, CRIMSON_COMMAND, "CHANGENETWORK", network->bouncer_id, text,
 			NULL);
 }
 
 
 void delete_bouncer_network(CrimsonNetwork *network) {
 	if (network->session->control)
-		send_irc_client_command(network->session->control, "CRIMSON", "DELNETWORK", network->bouncer_id, NULL);
+		send_irc_client_command(network->session->control, CRIMSON_COMMAND, "DELNETWORK", network->bouncer_id, NULL);
 }
 
 
@@ -819,9 +815,25 @@ void reconnect_network(CrimsonNetwork *network) {
 		connect_session(network->session);
 	/* The bouncer reconnects to the server itself */
 	else if (network->bouncer_id && control)
-		send_irc_client_command(control, "CRIMSON", "RECONNECT", network->bouncer_id, NULL);
+		send_irc_client_command(control, CRIMSON_COMMAND, "RECONNECT", network->bouncer_id, NULL);
 	else
 		connect_network(network);
+}
+
+
+char *build_bouncer_address(Session *session, const char *website, const char *path) {
+	if (!website || !*website)
+		return NULL;
+	if (g_str_has_prefix(website, "https://"))
+		return g_strconcat(website, path, NULL);
+	guint64 port = 0;
+	if (!g_ascii_string_to_unsigned(website, 10, 1, G_MAXUINT16, &port, NULL))
+		return NULL;
+	const char *host = session->record->host;
+	g_autofree char *wrapped = strchr(host, ':') ? g_strdup_printf("[%s]", host) : g_strdup(host);
+	if (port == HTTPS_PORT)
+		return g_strdup_printf("https://%s%s", wrapped, path);
+	return g_strdup_printf("https://%s:%" G_GUINT64_FORMAT "%s", wrapped, port, path);
 }
 
 

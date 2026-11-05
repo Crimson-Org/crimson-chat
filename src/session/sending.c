@@ -5,10 +5,13 @@
 #include "session/questions.h"
 #include "app/settings.h"
 
-/* Room for the sender's own nick, user and host, which the server adds when it passes a line on */
+#define MULTILINE_CAP "draft/multiline"
+#define MULTILINE_BYTES_KEY "max-bytes="
+#define MULTILINE_LINES_KEY "max-lines="
 /* Bytes after the first of a UTF-8 character start with the bits 10, so a cut never splits a character */
 #define UTF8_TOP_BITS 0xc0
 #define UTF8_CONTINUATION 0x80
+/* Room for the sender's own nick, user and host, which the server adds when it passes a line on */
 #define LINE_BYTES 400
 /* How much of a message a reply quotes where the server strips reply tags */
 #define REPLY_EXCERPT_CHARS 30
@@ -97,7 +100,7 @@ static void send_multiline(CrimsonRoom *room, const char *command, char **lines,
 	g_autofree char *reference = create_irc_identifier();
 	g_autofree char *opening = g_strconcat("+", reference, NULL);
 	g_autofree char *closing = g_strconcat("-", reference, NULL);
-	g_autoptr(IrcMessage) start = create_irc_message("BATCH", opening, "draft/multiline", room->name, NULL);
+	g_autoptr(IrcMessage) start = create_irc_message("BATCH", opening, MULTILINE_CAP, room->name, NULL);
 	if (line->label)
 		set_irc_tag(start, "label", line->label);
 	if (line->reply_to)
@@ -119,6 +122,28 @@ static void send_multiline(CrimsonRoom *room, const char *command, char **lines,
 }
 
 
+/* A server names the most bytes and lines one multiline message may hold, and a longer one goes as single lines */
+static gboolean fits_multiline(CrimsonRoom *room, char **lines) {
+	IrcState *state = get_network_state(room->network);
+	const char *value = state ? g_hash_table_lookup(state->available_caps, MULTILINE_CAP) : NULL;
+	guint64 most_bytes = G_MAXUINT64, most_lines = G_MAXUINT64;
+	g_auto(GStrv) limits = g_strsplit(value ? value : "", ",", -1);
+	for (int index = 0; limits[index]; index++) {
+		if (g_str_has_prefix(limits[index], MULTILINE_BYTES_KEY))
+			most_bytes = g_ascii_strtoull(limits[index] + strlen(MULTILINE_BYTES_KEY), NULL, 10);
+		else if (g_str_has_prefix(limits[index], MULTILINE_LINES_KEY))
+			most_lines = g_ascii_strtoull(limits[index] + strlen(MULTILINE_LINES_KEY), NULL, 10);
+	}
+	guint64 bytes = 0, count = 0;
+	for (int index = 0; lines[index]; index++) {
+		g_autoptr(GPtrArray) pieces = split_long_text(lines[index], LINE_BYTES - strlen(room->name));
+		bytes += strlen(lines[index]) + (index ? 1 : 0);
+		count += pieces->len;
+	}
+	return bytes <= most_bytes && count <= most_lines;
+}
+
+
 static void send_text_as(CrimsonRoom *room, const char *command, const char *text, gboolean is_action,
 	CrimsonMessage *reply_to) {
 	CrimsonNetwork *network = room->network;
@@ -131,7 +156,8 @@ static void send_text_as(CrimsonRoom *room, const char *command, const char *tex
 	MessageKind kind = is_action ? MESSAGE_ACTION : g_str_equal(command, "NOTICE") ? MESSAGE_NOTICE : MESSAGE_TEXT;
 	note_user_target(network, room->name);
 	gboolean is_long = count > 1 || strlen(text) > LINE_BYTES - strlen(room->name);
-	if (is_long && !is_action && can_network(network, "draft/multiline") && can_network(network, "batch")) {
+	if (is_long && !is_action && can_network(network, MULTILINE_CAP) && can_network(network, "batch")
+		&& fits_multiline(room, lines)) {
 		g_autoptr(CrimsonMessage) line = add_own_message(room, kind, text, reply_to);
 		send_multiline(room, command, lines, line);
 		track_pending(room, line);

@@ -2,9 +2,9 @@
 
 #include "session/questions.h"
 
-/* How long a server may take to answer a command before its replies stop counting as the answer */
 /* A question is bracketed by two PINGs, so replies in between belong to it, and the second PONG ends it */
 #define BRACKET_PONGS 2
+/* How long a server may take to answer a command before its replies stop counting as the answer */
 #define QUESTION_WAIT_SECONDS 60
 /* How long after the replies end, or after a message went out, a reply about the same person or room still answers
  * it, as when a service or another server of the network answers late */

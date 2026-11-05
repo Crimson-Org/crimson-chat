@@ -5,12 +5,9 @@
 #include "session/session.h"
 #include "session/uploads.h"
 #include "window/window.h"
+#include "irc/protocol.h"
 
 #define UPLOAD_SECONDS 60
-/* Where the bouncer takes pictures and files, as a whole address or its website's port, and the largest file */
-#define AVATARS_TOKEN "crimson-chat/AVATARS"
-#define FILES_TOKEN "crimson-chat/FILES"
-#define FILE_LIMIT_TOKEN "crimson-chat/FILE-LIMIT"
 #define FILE_ATTRIBUTES G_FILE_ATTRIBUTE_STANDARD_SIZE "," G_FILE_ATTRIBUTE_STANDARD_CONTENT_TYPE
 /* Long names are cut in the middle in the line sent to the room, so the line keeps its address whole */
 #define SHARED_NAME_CHARS 60
@@ -26,11 +23,7 @@ static SoupSession *uploads;
 static char *find_bouncer_url(CrimsonNetwork *network, const char *token, const char *path) {
 	IrcState *state = get_network_state(network);
 	const char *value = state && network->bouncer_id ? get_irc_support(state, token) : NULL;
-	if (!value || !*value)
-		return NULL;
-	if (g_str_has_prefix(value, "https://"))
-		return g_strdup(value);
-	return g_strdup_printf("https://%s:%s%s", network->session->record->host, value, path);
+	return build_bouncer_address(network->session, value, path);
 }
 
 

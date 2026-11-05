@@ -9,6 +9,7 @@ struct Database {
 	sqlite3 *connection;
 };
 
+/* The first shape of the tables, which MIGRATIONS then bring up to date, so new and old databases take one path */
 static const char SCHEMA[] =
 	"PRAGMA journal_mode = WAL;"
 	/* With the write-ahead log a crash loses at most the last moments of history, never the file itself */
@@ -39,6 +40,57 @@ static const char SCHEMA[] =
 	" network_id INTEGER NOT NULL REFERENCES networks(id) ON DELETE CASCADE,"
 	" folded TEXT NOT NULL, time TEXT NOT NULL, PRIMARY KEY (network_id, folded));";
 
+/* Each change to tables that may already hold data, in order, run once each as the database's user_version counts
+ * them, with foreign keys paused so tables can be rebuilt as SQLite describes */
+static const char *const MIGRATIONS[] = {
+	/* Ids of removed users and networks are never given out again, so nothing kept for an old one finds a new one */
+	"CREATE TABLE new_users ("
+	" id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, password TEXT NOT NULL,"
+	" is_admin INTEGER NOT NULL);"
+	"INSERT INTO new_users SELECT id, name, password, is_admin FROM users;"
+	"DROP TABLE users;"
+	"ALTER TABLE new_users RENAME TO users;"
+	"CREATE TABLE new_networks ("
+	" id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+	" name TEXT, host TEXT NOT NULL, port INTEGER NOT NULL, tls INTEGER NOT NULL,"
+	" nickname TEXT, username TEXT, realname TEXT, password TEXT, sasl_username TEXT, sasl_password TEXT);"
+	"INSERT INTO new_networks SELECT id, user_id, name, host, port, tls, nickname, username, realname, password,"
+	" sasl_username, sasl_password FROM networks;"
+	"DROP TABLE networks;"
+	"ALTER TABLE new_networks RENAME TO networks;",
+};
+
+
+static int read_schema_version(sqlite3 *connection) {
+	sqlite3_stmt *statement = NULL;
+	int version = 0;
+	if (sqlite3_prepare_v2(connection, "PRAGMA user_version;", -1, &statement, NULL) == SQLITE_OK
+		&& sqlite3_step(statement) == SQLITE_ROW)
+		version = sqlite3_column_int(statement, 0);
+	sqlite3_finalize(statement);
+	return version;
+}
+
+
+/* All waiting migrations go in one transaction, so a failure leaves the database as it was */
+static gboolean migrate(sqlite3 *connection, char **failure) {
+	int version = read_schema_version(connection);
+	int newest = (int)G_N_ELEMENTS(MIGRATIONS);
+	if (version >= newest)
+		return TRUE;
+	sqlite3_exec(connection, "PRAGMA foreign_keys = OFF; BEGIN;", NULL, NULL, NULL);
+	gboolean is_done = TRUE;
+	for (int index = version; index < newest && is_done; index++)
+		is_done = sqlite3_exec(connection, MIGRATIONS[index], NULL, NULL, failure) == SQLITE_OK;
+	g_autofree char *ending = g_strdup_printf("PRAGMA user_version = %d; COMMIT;", newest);
+	if (is_done)
+		is_done = sqlite3_exec(connection, ending, NULL, NULL, failure) == SQLITE_OK;
+	else
+		sqlite3_exec(connection, "ROLLBACK;", NULL, NULL, NULL);
+	sqlite3_exec(connection, "PRAGMA foreign_keys = ON;", NULL, NULL, NULL);
+	return is_done;
+}
+
 
 Database *open_database(const char *path, GError **error) {
 	sqlite3 *connection = NULL;
@@ -49,7 +101,7 @@ Database *open_database(const char *path, GError **error) {
 	}
 	sqlite3_busy_timeout(connection, BUSY_TIMEOUT_MILLISECONDS);
 	char *failure = NULL;
-	if (sqlite3_exec(connection, SCHEMA, NULL, NULL, &failure) != SQLITE_OK) {
+	if (sqlite3_exec(connection, SCHEMA, NULL, NULL, &failure) != SQLITE_OK || !migrate(connection, &failure)) {
 		g_set_error(error, G_FILE_ERROR, G_FILE_ERROR_FAILED, "%s", failure);
 		sqlite3_free(failure);
 		sqlite3_close(connection);
@@ -92,12 +144,14 @@ static char *read_text(sqlite3_stmt *statement, int column) {
 
 
 /* Runs a statement that returns no rows and reports a failure in the log */
-static void finish_change(Database *database, sqlite3_stmt *statement) {
+static gboolean finish_change(Database *database, sqlite3_stmt *statement) {
 	if (!statement)
-		return;
-	if (sqlite3_step(statement) != SQLITE_DONE)
+		return FALSE;
+	gboolean is_done = sqlite3_step(statement) == SQLITE_DONE;
+	if (!is_done)
 		g_warning("Database change failed: %s", sqlite3_errmsg(database->connection));
 	sqlite3_finalize(statement);
+	return is_done;
 }
 
 
@@ -129,8 +183,8 @@ gint64 add_user(Database *database, const char *name, const char *password_hash,
 	bind_text(statement, 1, name);
 	bind_text(statement, 2, password_hash);
 	sqlite3_bind_int(statement, 3, is_admin);
-	finish_change(database, statement);
-	return sqlite3_last_insert_rowid(database->connection);
+	/* Zero says the row was not added, since a failed insert leaves the id of an older one behind */
+	return finish_change(database, statement) ? sqlite3_last_insert_rowid(database->connection) : 0;
 }
 
 
@@ -312,8 +366,8 @@ gint64 add_network(Database *database, const NetworkRecord *record) {
 		" sasl_password, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 	bind_network(statement, record);
 	sqlite3_bind_int64(statement, 11, record->user_id);
-	finish_change(database, statement);
-	return sqlite3_last_insert_rowid(database->connection);
+	/* Zero says the row was not added, since a failed insert leaves the id of an older one behind */
+	return finish_change(database, statement) ? sqlite3_last_insert_rowid(database->connection) : 0;
 }
 
 

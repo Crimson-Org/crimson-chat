@@ -1,9 +1,9 @@
 #pragma once
 
 #include <glib.h>
+#include "irc/protocol.h"
 
-/* The usual IRC ports with and without encryption */
-#define TLS_PORT 6697
+/* The usual IRC port without encryption */
 #define PLAIN_PORT 6667
 
 /* Where the server guide lists a network: on its first page, or behind the modern or legacy servers row */

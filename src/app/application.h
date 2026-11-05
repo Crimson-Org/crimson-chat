@@ -1,5 +1,5 @@
 #pragma once
 
-#include "common/startup.h"
+#include "common/app/startup.h"
 
 extern const ApplicationSetup APPLICATION_SETUP;

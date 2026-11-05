@@ -3,6 +3,8 @@
 #include <adwaita.h>
 #include <libsoup/soup.h>
 
+/* The folder among the app's state files that holds the pictures the user chose, the only ones read from disk */
+#define OWN_PICTURES_FOLDER "pictures"
 /* An address that names an icon the app ships instead of a picture on the web */
 #define ICON_PICTURE_PREFIX "icon:"
 /* Loads a picture from the web once and shares it, keeping avatars on disk so they show at once on the next start */

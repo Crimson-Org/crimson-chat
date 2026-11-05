@@ -2,9 +2,9 @@
 #include <string.h>
 
 #include "bouncer.h"
+#include "secret.h"
 
-#define NAME_RANDOM_BYTES 16
-#define TOKEN_CHARS 20
+#define NAME_RANDOM_BYTES 10
 /* Long names are cut, keeping the end where the extension is */
 #define KEPT_NAME_CHARS 80
 #define CLEANUP_SECONDS (60 * 60)
@@ -61,12 +61,9 @@ char *store_file(Bouncer *bouncer, BouncerUser *user, GBytes *data, const char *
 			settings->largest_bytes / (double)BYTES_PER_MEGABYTE);
 		return NULL;
 	}
-	guint8 random[NAME_RANDOM_BYTES];
-	for (int index = 0; index < NAME_RANDOM_BYTES; index++)
-		random[index] = (guint8)g_random_int_range(0, G_MAXUINT8 + 1);
-	g_autofree char *token = g_compute_checksum_for_data(G_CHECKSUM_SHA256, random, sizeof random);
+	g_autofree char *token = create_secret_token(NAME_RANDOM_BYTES);
 	g_autofree char *safe = make_safe_name(file_name);
-	g_autofree char *name = g_strdup_printf("%" G_GINT64_FORMAT "-%.*s-%s", user->id, TOKEN_CHARS, token, safe);
+	g_autofree char *name = g_strdup_printf("%" G_GINT64_FORMAT "-%s-%s", user->id, token, safe);
 	g_mkdir_with_parents(settings->folder, PRIVATE_FOLDER_MODE);
 	g_autofree char *path = g_build_filename(settings->folder, name, NULL);
 	if (!g_file_set_contents_full(path, g_bytes_get_data(data, NULL), (gssize)g_bytes_get_size(data),

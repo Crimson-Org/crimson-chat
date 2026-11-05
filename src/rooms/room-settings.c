@@ -5,7 +5,7 @@
 #include "session/modes.h"
 #include "rooms/room-settings.h"
 #include "session/session.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define SETTINGS_KEY "settings"
 

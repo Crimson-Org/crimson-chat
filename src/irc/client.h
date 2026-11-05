@@ -4,9 +4,8 @@
 
 #include "message.h"
 #include "state.h"
+#include "protocol.h"
 
-/* The tag that names which of a bouncer's networks a line between Crimson Chat and its bouncer is about */
-#define IRC_NETWORK_TAG "crimson-chat/network"
 /* The capabilities a bouncer's network has only where the server behind it supports them */
 #define BOUNCER_NETWORK_CAPS "labeled-response", "account-notify", "away-notify", "extended-join", \
 	"userhost-in-names", "chghost", "setname", "invite-notify", "account-tag", "draft/message-redaction", \

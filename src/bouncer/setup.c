@@ -15,7 +15,6 @@
 /* Clears the top bit of a byte */
 #define POSITIVE_BYTE_MASK 0x7f
 #define LONGEST_ANSWER 1024
-#define SHORTEST_PASSWORD 8
 #define HASH_ITERATIONS 210000
 #define SALT_BYTES 16
 #define HASH_BYTES 32
@@ -114,10 +113,8 @@ static gboolean report_tls_failure(int status, GError **error) {
 
 
 static gboolean write_datum(const char *path, gnutls_datum_t *datum, int mode, GError **error) {
-	gboolean is_written = g_file_set_contents_full(path, (const char *)datum->data, datum->size,
-		G_FILE_SET_CONTENTS_CONSISTENT, mode, error);
-	gnutls_free(datum->data);
-	return is_written;
+	return g_file_set_contents_full(path, (const char *)datum->data, datum->size, G_FILE_SET_CONTENTS_CONSISTENT, mode,
+		error);
 }
 
 
@@ -173,11 +170,13 @@ gboolean create_certificate(const char *host, const char *certificate_path, cons
 		gnutls_x509_crt_deinit(certificate);
 	if (key)
 		gnutls_x509_privkey_deinit(key);
-	if (!report_tls_failure(status, error))
-		return FALSE;
-	if (!write_datum(key_path, &key_text, PRIVATE_FILE_MODE, error)) {
-		gnutls_free(certificate_text.data);
-		return FALSE;
-	}
-	return write_datum(certificate_path, &certificate_text, PUBLIC_FILE_MODE, error);
+	gboolean is_written = report_tls_failure(status, error)
+		&& write_datum(key_path, &key_text, PRIVATE_FILE_MODE, error)
+		&& write_datum(certificate_path, &certificate_text, PUBLIC_FILE_MODE, error);
+	/* The exported texts are freed on every path, the private key's after wiping it */
+	if (key_text.data)
+		memset(key_text.data, 0, key_text.size);
+	gnutls_free(key_text.data);
+	gnutls_free(certificate_text.data);
+	return is_written;
 }

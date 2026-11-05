@@ -145,7 +145,7 @@ static void activate(GApplication *application) {
 	}
 	window = create_window(GTK_APPLICATION(application), chat);
 	gtk_window_present(GTK_WINDOW(window->window));
-	run_after_frame(GTK_WIDGET(window->window), start_chat_later, window);
+	run_after_frame(GTK_WIDGET(window->window), start_chat_later, window, NULL);
 }
 
 
@@ -156,22 +156,6 @@ static void open_links(GApplication *application, GFile **files, int count, cons
 		g_autofree char *link = g_file_get_uri(files[index]);
 		open_application_link(get_main_window(), link);
 	}
-}
-
-
-static void show_about(GSimpleAction *action, GVariant *parameter, gpointer application) {
-	AdwDialog *dialog = adw_about_dialog_new();
-	adw_about_dialog_set_application_name(ADW_ABOUT_DIALOG(dialog), get_application_identity()->name);
-	adw_about_dialog_set_application_icon(ADW_ABOUT_DIALOG(dialog), get_application_identity()->id);
-	adw_about_dialog_set_version(ADW_ABOUT_DIALOG(dialog), get_application_identity()->version);
-	adw_dialog_present(dialog, GTK_WIDGET(gtk_application_get_active_window(application)));
-}
-
-
-static void open_settings(GSimpleAction *action, GVariant *parameter, gpointer application) {
-	Window *window = get_main_window();
-	if (window)
-		show_settings(GTK_WIDGET(window->window));
 }
 
 
@@ -229,7 +213,7 @@ static void finish_quitting(gpointer application) {
 
 
 /* The window and tray icon go first, and the connections close once the display has seen them leave */
-static void quit(GSimpleAction *action, GVariant *parameter, gpointer application) {
+static void quit(GApplication *application) {
 	Window *window = get_main_window();
 	if (window)
 		withdraw_window(window);
@@ -247,35 +231,27 @@ static void start_up(GApplication *application) {
 	g_autofree char *away = load_away_message();
 	set_chat_away(chat, away);
 	static const GActionEntry ENTRIES[] = {
-		{"about", show_about, NULL, NULL, NULL, {0}},
-		{"settings", open_settings, NULL, NULL, NULL, {0}},
 		{"add-server", add_server, NULL, NULL, NULL, {0}},
 		{"add-bouncer", add_bouncer, NULL, NULL, NULL, {0}},
 		{"show", show_window, NULL, NULL, NULL, {0}},
 		{"open-room", open_room_action, "s", NULL, NULL, {0}},
 		{"mark-room-read", mark_room_read_action, "s", NULL, NULL, {0}},
-		{"quit", quit, NULL, NULL, NULL, {0}},
-	};
-	static const struct {
-		const char *action, *accelerators[3];
-	} SHORTCUTS[] = {
-		{"app.settings", {"<Control>comma", "<Control><Shift>s", NULL}},
-		{"app.quit", {"<Control>q", NULL}},
-		{"win.hide", {"<Control>w", NULL}},
-		{"win.search", {"<Control>f", "<Control>k", NULL}},
-		{"win.search-messages", {"<Control><Shift>f", NULL}},
-		{"win.join-room", {"<Control>j", NULL}},
-		{"win.message-someone", {"<Control>n", NULL}},
-		{"win.step-room(-1)", {"<Alt>Up", "<Control>Page_Up", NULL}},
-		{"win.step-room(1)", {"<Alt>Down", "<Control>Page_Down", NULL}},
-		{"win.go-back", {"<Alt>Left", "Back", NULL}},
 	};
 	g_action_map_add_action_entries(G_ACTION_MAP(application), ENTRIES, G_N_ELEMENTS(ENTRIES), application);
-	for (guint index = 0; index < G_N_ELEMENTS(SHORTCUTS); index++)
-		gtk_application_set_accels_for_action(GTK_APPLICATION(application), SHORTCUTS[index].action,
-			SHORTCUTS[index].accelerators);
 }
 
+
+static const Shortcut SHORTCUTS[] = {
+	{"app.settings", {"<Control>comma", "<Control><Shift>s", NULL}},
+	{"win.hide", {"<Control>w", NULL}},
+	{"win.search", {"<Control>f", "<Control>k", NULL}},
+	{"win.search-messages", {"<Control><Shift>f", NULL}},
+	{"win.join-room", {"<Control>j", NULL}},
+	{"win.message-someone", {"<Control>n", NULL}},
+	{"win.step-room(-1)", {"<Alt>Up", "<Control>Page_Up", NULL}},
+	{"win.step-room(1)", {"<Alt>Down", "<Control>Page_Down", NULL}},
+	{"win.go-back", {"<Alt>Left", "Back", NULL}},
+};
 
 const ApplicationSetup APPLICATION_SETUP = {
 	.identity = {"io.github.CrimsonOrg.CrimsonChat", TEXT_APPLICATION_NAME, "crimson-chat", APPLICATION_VERSION},
@@ -283,4 +259,8 @@ const ApplicationSetup APPLICATION_SETUP = {
 	.activate = activate,
 	.open = open_links,
 	.parameter_summary = TEXT_LINKS_OPTION,
+	.show_settings = show_settings,
+	.quit = quit,
+	.shortcuts = SHORTCUTS,
+	.shortcut_count = G_N_ELEMENTS(SHORTCUTS),
 };

@@ -1,6 +1,6 @@
 #include "lang/en.h"
 #include "app/settings.h"
-#include "common/startup.h"
+#include "common/app/startup.h"
 #include "conversation/composer.h"
 #include "window/profile.h"
 #include "conversation/formatting.h"
@@ -12,7 +12,8 @@
 #include "app/sounds.h"
 #include "window/window.h"
 #include "conversation/pictures.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
+#include "common/text/numbers.h"
 
 /* A message a search or reply took the user to glows this long, starting once the scroll has settled */
 /* People who are away show faded in the member list */
@@ -1210,8 +1211,9 @@ static gboolean fill_members(gpointer data) {
 		g_ptr_array_add(nicks, (gpointer)g_array_index(ranked, RankedMember, index).nick);
 	g_ptr_array_add(nicks, NULL);
 	/* The panel's title counts the people in the room */
+	g_autofree char *shown_count = format_count(ranked->len);
 	g_autofree char *title = ranked->len ? g_strdup_printf(ranked->len == 1 ? TEXT_MEMBERS_ONE : TEXT_MEMBERS_COUNT,
-		ranked->len) : g_strdup(TEXT_MEMBERS_TITLE);
+		shown_count) : g_strdup(TEXT_MEMBERS_TITLE);
 	adw_window_title_set_title(ADW_WINDOW_TITLE(conversation->members_title), title);
 	/* Most room changes leave the members as they were, and filling the list again would draw all its rows again */
 	GListModel *members = G_LIST_MODEL(conversation->members);

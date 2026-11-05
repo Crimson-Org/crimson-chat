@@ -24,6 +24,8 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(IrcMessage, free_irc_message)
 
 /* Returns NULL for an empty or malformed line */
 IrcMessage *parse_irc_line(const char *line);
+/* Whether every parameter but the last is one word, since another would split into more parameters */
+gboolean can_format_irc_message(const IrcMessage *message);
 /* The line without its ending CR LF */
 char *format_irc_line(const IrcMessage *message);
 
@@ -40,6 +42,12 @@ const char *get_last_irc_parameter(const IrcMessage *message);
 #define CTCP_ACTION "ACTION"
 /* Whether the text after the opening mark is the given query, as a whole word in any case */
 gboolean starts_ctcp_command(const char *text, const char *command);
+/* Client queries are answered a few times per period at most, so a flood of them cannot hold up the user's lines */
+typedef struct {
+	gint64 started;
+	guint count;
+} CtcpLimit;
+gboolean may_answer_ctcp(CtcpLimit *limit);
 
 /* A tag without a value reads as an empty string, and a missing tag as NULL */
 const char *get_irc_tag(const IrcMessage *message, const char *name);

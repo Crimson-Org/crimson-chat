@@ -1,7 +1,7 @@
 #include <adwaita.h>
 
-#include "common/key-store.h"
-#include "common/themes.h"
+#include "common/storage/key-store.h"
+#include "common/themes/themes.h"
 #include "app/settings.h"
 
 /* A saved override holds its target, its kind, its end and its value */

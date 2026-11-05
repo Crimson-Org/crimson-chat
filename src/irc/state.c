@@ -3,6 +3,8 @@
 
 #include "state.h"
 
+/* Owners, admins, operators and half-operators, by the mode letters servers agree on, whatever symbols they use */
+#define MODERATOR_MODES "qaoh"
 #define DEFAULT_PREFIX "(qaohv)~&@%+"
 #define DEFAULT_CHANNEL_TYPES "#&"
 #define DEFAULT_CHANNEL_MODES "beI,k,l,imnpst"
@@ -38,9 +40,19 @@ static void free_channel(IrcChannel *channel) {
 }
 
 
+const char *skip_irc_status_symbols(IrcState *state, const char *target) {
+	const char *symbols = get_irc_support(state, "STATUSMSG");
+	while (symbols && *target && strchr(symbols, *target) && is_irc_channel_name(state, target + 1))
+		target++;
+	return target;
+}
+
+
 static void apply_prefix(IrcState *state, const char *value) {
 	const char *close = value ? strchr(value, ')') : NULL;
-	if (!value || *value != '(' || !close) {
+	/* Each mode has its symbol, so a server listing fewer of either gets the usual ones instead */
+	gboolean is_paired = close && strlen(close + 1) == (gsize)(close - value - 1);
+	if (!value || *value != '(' || !is_paired) {
 		value = DEFAULT_PREFIX;
 		close = strchr(value, ')');
 	}
@@ -369,7 +381,8 @@ static void rename_user(IrcState *state, const char *old_nick, const char *new_n
 	while (g_hash_table_iter_next(&iterator, NULL, &channel)) {
 		GHashTable *members = ((IrcChannel *)channel)->members;
 		char *symbols = NULL;
-		if (g_hash_table_steal_extended(members, old_folded, NULL, (gpointer *)&symbols))
+		g_autofree char *old_key = NULL;
+		if (g_hash_table_steal_extended(members, old_folded, (gpointer *)&old_key, (gpointer *)&symbols))
 			g_hash_table_insert(members, g_strdup(new_folded), symbols);
 	}
 	IrcUser *user = NULL;
@@ -456,7 +469,13 @@ static gboolean takes_mode_parameter(IrcState *state, char mode, gboolean is_add
 gboolean is_irc_channel_moderator(IrcState *state, IrcChannel *channel) {
 	g_autofree char *own = fold_state_name(state, state->nick);
 	const char *symbols = g_hash_table_lookup(channel->members, own);
-	return symbols && strpbrk(symbols, "~&@%");
+	for (const char *mode = MODERATOR_MODES; symbols && *mode; mode++) {
+		const char *found = strchr(state->prefix_modes, *mode);
+		gsize index = found ? (gsize)(found - state->prefix_modes) : 0;
+		if (found && index < strlen(state->prefix_symbols) && strchr(symbols, state->prefix_symbols[index]))
+			return TRUE;
+	}
+	return FALSE;
 }
 
 

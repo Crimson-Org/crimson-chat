@@ -5,10 +5,6 @@ set -eu
 script_directory=$(cd "$(dirname "$0")" && pwd)
 cd "$script_directory/.."
 
-crimson_remove() {
-	rm -rf "$1"
-}
-
 export PROGRAM="crimson-chat"
 export BOUNCER="crimson-chat-bouncer"
 export APPLICATION_ID="io.github.CrimsonOrg.CrimsonChat"
@@ -17,20 +13,15 @@ export PREFIX="${HOME}/.local"
 export STD="c11"
 export WARN="-Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter"
 export OPT="-O2 -g"
-export PKGS="gtk4 libadwaita-1 libsoup-3.0"
-export BOUNCER_PKGS="gio-2.0 gio-unix-2.0 sqlite3 gnutls gdk-pixbuf-2.0"
+export GTK_MINOR="16"
+export ADWAITA_MINOR="7"
+export PKGS="gtk4 >= 4.${GTK_MINOR} libadwaita-1 >= 1.${ADWAITA_MINOR} libsoup-3.0 >= 3.4"
+export BOUNCER_PKGS="gio-2.0 >= 2.74 gio-unix-2.0 sqlite3 gnutls >= 3.6.13 gdk-pixbuf-2.0"
 export DEFINES="-D_GNU_SOURCE -DAPPLICATION_VERSION=\"${VERSION}\""
+export VERSION_CHECKS="-DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_${GTK_MINOR} -DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_4_${GTK_MINOR} -DADW_VERSION_MIN_REQUIRED=ADW_VERSION_1_${ADWAITA_MINOR} -DADW_VERSION_MAX_ALLOWED=ADW_VERSION_1_${ADWAITA_MINOR}"
 export INCLUDES="-Isrc -Isubprojects/crimson-core/src"
+export HEADERS="src/*/*.h subprojects/crimson-core/src/*/*.h subprojects/crimson-core/src/*/*/*.h"
+export LIBS="-lm"
 export EXTRA_PROGRAMS="build/${BOUNCER}"
-printf '==> %s\n' 'remove ${PREFIX}/bin/${PROGRAM}'
-crimson_remove "${PREFIX}/bin/${PROGRAM}"
-printf '==> %s\n' 'remove ${PREFIX}/bin/${BOUNCER}'
-crimson_remove "${PREFIX}/bin/${BOUNCER}"
-printf '==> %s\n' 'remove ${PREFIX}/share/applications/${APPLICATION_ID}.desktop'
-crimson_remove "${PREFIX}/share/applications/${APPLICATION_ID}.desktop"
-printf '==> %s\n' 'remove ${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg'
-crimson_remove "${PREFIX}/share/icons/hicolor/scalable/apps/${APPLICATION_ID}.svg"
-printf '==> %s\n' 'remove ${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg'
-crimson_remove "${PREFIX}/share/icons/hicolor/symbolic/apps/${APPLICATION_ID}-symbolic.svg"
-printf '==> %s\n' 'remove ${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml'
-crimson_remove "${PREFIX}/share/metainfo/${APPLICATION_ID}.metainfo.xml"
+printf '==> %s\n' 'sh subprojects/crimson-core/scripts/uninstall.sh'
+sh subprojects/crimson-core/scripts/uninstall.sh

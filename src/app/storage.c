@@ -1,5 +1,6 @@
-#include "common/key-store.h"
+#include "common/storage/key-store.h"
 #include "app/storage.h"
+#include "irc/protocol.h"
 
 /* Fields of a saved room, of its activity and of an avatar, one tab separated line each */
 #define ROOM_FIELDS 8
@@ -12,7 +13,6 @@
 #define ORDER_FILE "server-order.ini"
 #define ORDER_GROUP "order"
 #define ACCOUNT_PREFIX "account "
-#define DEFAULT_PORT 6697
 #define CACHED_ROOMS_PER_NETWORK 200
 #define CACHED_AVATARS_PER_NETWORK 2000
 
@@ -85,7 +85,7 @@ GPtrArray *load_accounts(void) {
 		record->id = g_strdup(group + strlen(ACCOUNT_PREFIX));
 		record->name = read_text(file, group, "name");
 		record->host = read_text(file, group, "host");
-		record->port = read_key_integer(file, group, "port", DEFAULT_PORT, 1, G_MAXUINT16);
+		record->port = read_key_integer(file, group, "port", IRC_TLS_PORT, 1, G_MAXUINT16);
 		record->uses_tls = !g_key_file_has_key(file, group, "tls", NULL)
 			|| g_key_file_get_boolean(file, group, "tls", NULL);
 		record->is_bouncer = g_key_file_get_boolean(file, group, "bouncer", NULL);
@@ -135,10 +135,7 @@ void save_accounts(GPtrArray *accounts) {
 				g_strv_length(record->channels));
 	}
 	g_autofree char *path = get_config_file_path(ACCOUNTS_FILE);
-	g_autofree char *folder = g_path_get_dirname(path);
-	make_private_folder(folder);
-	g_autofree char *text = g_key_file_to_data(file, NULL, NULL);
-	g_file_set_contents_full(path, text, -1, G_FILE_SET_CONTENTS_CONSISTENT, PRIVATE_FILE_MODE, NULL);
+	save_private_key_file(file, path);
 }
 
 
@@ -310,9 +307,7 @@ void save_network_order(GListModel *networks) {
 	g_autoptr(GKeyFile) file = g_key_file_new();
 	g_key_file_set_string_list(file, ORDER_GROUP, "servers", (const char *const *)keys->pdata, keys->len);
 	g_autofree char *path = get_state_file_path(ORDER_FILE);
-	g_autofree char *folder = g_path_get_dirname(path);
-	make_private_folder(folder);
-	g_key_file_save_to_file(file, path, NULL);
+	save_key_file(file, path);
 }
 
 

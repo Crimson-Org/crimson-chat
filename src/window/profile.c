@@ -10,7 +10,7 @@
 #include "window/wizards.h"
 #include "conversation/pictures.h"
 #include "session/uploads.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define PROFILE_WIDTH 400
 /* A person's profile opens at its full height, so it does not grow when the details arrive */
@@ -56,14 +56,15 @@ char *describe_idle(gint64 seconds) {
 }
 
 
-/* WHOIS marks the rooms where someone is an operator or has voice, which the room names do not need */
-static char *list_rooms(const char *channels) {
-	if (!channels)
+/* WHOIS marks the rooms where someone is an operator or has voice, with the symbols the server uses, which the
+ * room names do not need */
+static char *list_rooms(IrcState *state, const char *channels) {
+	if (!channels || !state)
 		return NULL;
 	g_auto(GStrv) names = g_strsplit(channels, " ", -1);
 	g_autoptr(GString) list = g_string_new(NULL);
 	for (int index = 0; names[index]; index++) {
-		const char *name = names[index] + strspn(names[index], "~&@%+");
+		const char *name = names[index] + strspn(names[index], state->prefix_symbols);
 		if (*name)
 			g_string_append_printf(list, "%s%s", list->len ? ", " : "", name);
 	}
@@ -75,6 +76,8 @@ static void add_row(ProfileView *view, const char *title, const char *value) {
 	if (!value || !*value)
 		return;
 	GtkWidget *row = adw_action_row_new();
+	/* Values come from the server and other people, so they show as typed */
+	adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), value);
 	adw_action_row_set_subtitle_selectable(ADW_ACTION_ROW(row), TRUE);
@@ -97,6 +100,7 @@ static void add_homepage_row(ProfileView *view, const char *url) {
 	if (!url || (!g_str_has_prefix(url, "https://") && !g_str_has_prefix(url, "http://")))
 		return;
 	GtkWidget *row = adw_action_row_new();
+	adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), TEXT_HOMEPAGE);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), url);
 	gtk_widget_add_css_class(row, "property");
@@ -171,7 +175,7 @@ static void show_details(Profile *profile, gpointer data) {
 	add_row(view, TEXT_PROFILE_AWAY, profile->away);
 	g_autofree char *idle = profile->idle_seconds > 0 || profile->server ? describe_idle(profile->idle_seconds) : NULL;
 	add_row(view, TEXT_PROFILE_IDLE, idle);
-	g_autofree char *rooms = list_rooms(profile->channels);
+	g_autofree char *rooms = list_rooms(get_network_state(view->network), profile->channels);
 	add_row(view, TEXT_PROFILE_ROOMS, rooms);
 	add_homepage_row(view, find_metadata(view->network->server_room, view->nick, "homepage"));
 	fill_person_metadata(view);

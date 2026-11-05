@@ -10,7 +10,7 @@
 #include "session/session.h"
 #include "app/settings.h"
 #include "conversation/pictures.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 /* The track of an upload ring shows faintly behind its progress */
 #define RING_TRACK_ALPHA 0.2

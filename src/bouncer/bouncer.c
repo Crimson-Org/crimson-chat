@@ -2,6 +2,8 @@
 
 #include "bouncer.h"
 #include "setup.h"
+#include "../irc/protocol.h"
+#include "secret.h"
 
 #define LONGEST_USER_NAME 32
 
@@ -57,19 +59,12 @@ static GIOStream *secure_connection(Bouncer *bouncer, GSocketConnection *connect
 }
 
 
-/* The bouncer's own address as the client reached it, in the form a web address takes */
-static char *describe_local_host(GSocketConnection *connection) {
-	g_autoptr(GSocketAddress) local = g_socket_connection_get_local_address(connection, NULL);
-	if (!G_IS_INET_SOCKET_ADDRESS(local))
-		return g_strdup("localhost");
-	GInetAddress *inet = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(local));
-	g_autofree char *text = g_inet_address_to_string(inet);
-	/* A socket listening on both kinds of address sees IPv4 clients as IPv6 addresses wrapping them */
-	if (g_str_has_prefix(text, "::ffff:") && strchr(text, '.'))
-		return g_strdup(text + strlen("::ffff:"));
-	if (g_inet_address_get_family(inet) == G_SOCKET_FAMILY_IPV6)
-		return g_strdup_printf("[%s]", text);
-	return g_steal_pointer(&text);
+/* The address a client connects from without its port, which failed logins are counted by */
+static char *describe_remote_host(GSocketConnection *connection) {
+	g_autoptr(GSocketAddress) remote = g_socket_connection_get_remote_address(connection, NULL);
+	if (!G_IS_INET_SOCKET_ADDRESS(remote))
+		return g_strdup("unknown");
+	return g_inet_address_to_string(g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(remote)));
 }
 
 
@@ -77,9 +72,9 @@ static gboolean take_irc_connection(GSocketService *service, GSocketConnection *
 	gpointer data) {
 	g_autofree char *address = NULL;
 	g_autoptr(GIOStream) secured = secure_connection(data, connection, &address);
-	g_autofree char *local_host = describe_local_host(connection);
+	g_autofree char *host = describe_remote_host(connection);
 	if (secured)
-		accept_downstream(data, secured, address, local_host);
+		accept_downstream(data, secured, address, host);
 	return TRUE;
 }
 
@@ -88,8 +83,9 @@ static gboolean take_web_connection(GSocketService *service, GSocketConnection *
 	gpointer data) {
 	g_autofree char *address = NULL;
 	g_autoptr(GIOStream) secured = secure_connection(data, connection, &address);
+	g_autofree char *host = describe_remote_host(connection);
 	if (secured)
-		serve_web(data, secured);
+		serve_web(data, secured, host);
 	return TRUE;
 }
 
@@ -155,18 +151,8 @@ gboolean listen_bouncer(Bouncer *bouncer, const char *irc_address, const char *w
 }
 
 
-BouncerUser *log_in_user(Bouncer *bouncer, const char *name, const char *password) {
-	for (guint index = 0; index < bouncer->users->len; index++) {
-		BouncerUser *user = g_ptr_array_index(bouncer->users, index);
-		if (g_strcmp0(user->name, name) == 0)
-			return check_password(password, user->password_hash) ? user : NULL;
-	}
-	/* Hashing anyway keeps an unknown name from answering faster than a wrong password */
-	static char *stand_in = NULL;
-	if (!stand_in)
-		stand_in = hash_password(BOUNCER_NAME);
-	check_password(password, stand_in);
-	return NULL;
+const char *get_bouncer_website(Bouncer *bouncer) {
+	return bouncer->public_url ? bouncer->public_url : bouncer->web_port;
 }
 
 
@@ -217,6 +203,7 @@ void remove_user(BouncerUser *user) {
 		if (downstream->user == user)
 			close_downstream(downstream);
 	}
+	forget_web_sessions(bouncer, user->id, NULL);
 	remove_user_avatars(bouncer, user->id);
 	remove_user_files(bouncer, user->id);
 	delete_user(bouncer->database, user->id);
@@ -244,8 +231,7 @@ BouncerUser *register_user(Bouncer *bouncer, const char *name, const char *passw
 
 
 char *create_invite(Bouncer *bouncer, BouncerUser *creator, int uses) {
-	g_autofree char *first = create_irc_identifier(), *second = create_irc_identifier();
-	char *token = g_strconcat(first, second, NULL);
+	char *token = create_secret_token(SIGN_IN_TOKEN_BYTES);
 	add_invite(bouncer->database, token, uses, creator->id);
 	return token;
 }
@@ -291,7 +277,7 @@ void announce_network(Upstream *upstream, GHashTable *attributes) {
 	g_autoptr(GHashTable) owned = attributes;
 	g_autofree char *network_id = g_strdup_printf("%" G_GINT64_FORMAT, upstream->record.id);
 	g_autofree char *text = attributes ? format_irc_attributes(attributes) : g_strdup("*");
-	g_autoptr(IrcMessage) message = create_irc_message("CRIMSON", "NETWORK", network_id, text, NULL);
+	g_autoptr(IrcMessage) message = create_irc_message(CRIMSON_COMMAND, "NETWORK", network_id, text, NULL);
 	message->source = g_strdup(BOUNCER_NAME);
 	for (GList *item = upstream->user->bouncer->downstreams; item; item = item->next) {
 		Downstream *downstream = item->data;

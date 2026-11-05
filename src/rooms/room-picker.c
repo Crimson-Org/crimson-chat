@@ -3,8 +3,11 @@
 #include "lang/en.h"
 #include "rooms/room-picker.h"
 #include "window/wizards.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
+#include "common/text/numbers.h"
 
+/* The wait before asking the server again counts down by this step */
+#define COUNT_DOWN_STEP_SECONDS 1
 #define PICKER_WIDTH 460
 #define PICKER_HEIGHT 680
 /* The busiest rooms shown, since a big network lists tens of thousands */
@@ -181,7 +184,7 @@ static void bind_row(GtkSignalListItemFactory *factory, GtkListItem *item, Picke
 	gtk_widget_set_visible(topic, room && room->topic && *room->topic);
 	/* The topic is cut to one line in the list, so pointing at the room shows all of it */
 	gtk_widget_set_tooltip_text(check, room && room->topic && *room->topic ? room->topic : NULL);
-	g_autofree char *users = joined ? g_strdup(TEXT_ALREADY_JOINED) : g_strdup_printf("%u", room ? room->users : 0);
+	g_autofree char *users = joined ? g_strdup(TEXT_ALREADY_JOINED) : format_count(room ? room->users : 0);
 	gtk_label_set_text(g_object_get_data(G_OBJECT(check), "users"), users);
 }
 
@@ -240,7 +243,7 @@ static void wait_for_rooms(guint seconds, gpointer data) {
 	picker->wait_left = seconds + 1;
 	count_down(picker);
 	if (!picker->wait_source)
-		picker->wait_source = g_timeout_add_seconds(1, count_down, picker);
+		picker->wait_source = g_timeout_add_seconds(COUNT_DOWN_STEP_SECONDS, count_down, picker);
 }
 
 

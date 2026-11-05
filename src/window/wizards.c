@@ -6,7 +6,8 @@
 #include "session/known-networks.h"
 #include "rooms/room-picker.h"
 #include "window/wizards.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
+#include "irc/protocol.h"
 
 /* Room for one character in UTF-8 with its ending zero */
 #define UTF8_CHARACTER_BYTES 8
@@ -16,7 +17,6 @@
 #define ICON_SIZE 72
 #define HELP_WIDTH_CHARS 34
 #define NETWORK_AVATAR_SIZE 40
-#define HTTPS_PORT 443
 #define LINK_SCHEME "crimson-chat"
 
 /* The answers a guide has collected so far */
@@ -257,6 +257,8 @@ static void find_new_network(GListModel *networks, guint position, guint removed
 
 
 static void follow_login(CrimsonAccount *account, Guide *guide) {
+	if (!account->session)
+		return;
 	if (read_account_state(account->session) == NETWORK_CONNECTED)
 		finish_connecting(guide);
 	else
@@ -421,7 +423,7 @@ static void continue_from_address(Guide *guide) {
 static void push_address_step(Guide *guide) {
 	GtkWidget *list = create_boxed_list();
 	guide->host = add_entry(list, TEXT_ADDRESS, NULL, FALSE);
-	guide->port = add_port(list, TLS_PORT);
+	guide->port = add_port(list, IRC_TLS_PORT);
 	guide->tls = adw_switch_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(guide->tls), TEXT_USE_TLS);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(guide->tls), NULL);
@@ -449,6 +451,8 @@ static const struct {
 static GtkWidget *create_network_row(const char *name, const char *about, const char *picture, const char *icon,
 	GtkWidget *mark) {
 	GtkWidget *row = adw_action_row_new();
+	/* Network names may come from a bouncer, so they show as typed */
+	adw_preferences_row_set_use_markup(ADW_PREFERENCES_ROW(row), FALSE);
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), name);
 	adw_action_row_set_subtitle(ADW_ACTION_ROW(row), about);
 	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
@@ -569,7 +573,7 @@ static void continue_to_login(Guide *guide) {
 static AdwNavigationPage *create_bouncer_address_step(Guide *guide, const BouncerHint *hint) {
 	GtkWidget *list = create_boxed_list();
 	guide->host = add_entry(list, TEXT_ADDRESS, hint ? hint->host : NULL, FALSE);
-	guide->port = add_port(list, hint && hint->port ? hint->port : TLS_PORT);
+	guide->port = add_port(list, hint && hint->port ? hint->port : IRC_TLS_PORT);
 	GtkWidget *button = create_button(TEXT_CONTINUE, G_CALLBACK(continue_to_login), guide);
 	watch_required(button, guide->host, NULL);
 	return create_step(TEXT_BOUNCER_ADDRESS_TITLE, NULL, "network-server-symbolic", list,
@@ -621,7 +625,7 @@ void open_application_link(Window *window, const char *link) {
 		.name = g_hash_table_lookup(query, "name"),
 		.host = g_hash_table_lookup(query, "host"),
 		.username = g_hash_table_lookup(query, "username"),
-		.port = port ? (int)g_ascii_strtoll(port, NULL, 10) : TLS_PORT,
+		.port = port ? (int)g_ascii_strtoll(port, NULL, 10) : IRC_TLS_PORT,
 	};
 	if (hint.host)
 		show_bouncer_guide(window, &hint);
@@ -629,13 +633,14 @@ void open_application_link(Window *window, const char *link) {
 
 
 static void create_invite(AdwAlertDialog *alert, const char *response, gpointer data) {
-	Session *session = data;
-	if (g_strcmp0(response, "create") != 0 || !session->control)
+	CrimsonAccount *account = g_object_get_data(G_OBJECT(alert), "account");
+	Session *session = account->session;
+	if (g_strcmp0(response, "create") != 0 || !session || !session->control)
 		return;
 	static const char *const USES[] = {"1", "5", "25", "*"};
 	guint chosen = gtk_drop_down_get_selected(g_object_get_data(G_OBJECT(alert), "uses"));
 	const char *uses = USES[MIN(chosen, G_N_ELEMENTS(USES) - 1)];
-	send_irc_client_command(session->control, "CRIMSON", "INVITE", "CREATE", uses, NULL);
+	send_irc_client_command(session->control, CRIMSON_COMMAND, "INVITE", "CREATE", uses, NULL);
 }
 
 
@@ -652,7 +657,8 @@ void show_invite_dialog(Window *window, Session *session) {
 	g_object_set_data(G_OBJECT(alert), "uses", uses);
 	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "create", TEXT_CREATE_LINK, NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "create", ADW_RESPONSE_SUGGESTED);
-	g_signal_connect(alert, "response", G_CALLBACK(create_invite), session);
+	g_object_set_data_full(G_OBJECT(alert), "account", g_object_ref(session->item), g_object_unref);
+	g_signal_connect(alert, "response", G_CALLBACK(create_invite), NULL);
 	adw_dialog_present(alert, GTK_WIDGET(window->window));
 }
 
@@ -667,10 +673,11 @@ static void copy_link(AdwAlertDialog *alert, const char *response, gpointer data
 }
 
 
-void show_invite_link(Window *window, Session *session, const char *token, const char *uses, const char *port) {
-	gboolean is_default_port = g_ascii_strtoll(port, NULL, 10) == HTTPS_PORT;
-	g_autofree char *link = g_strdup_printf("https://%s%s%s/invite?token=%s", session->record->host,
-		is_default_port ? "" : ":", is_default_port ? "" : port, token);
+void show_invite_link(Window *window, Session *session, const char *token, const char *uses, const char *website) {
+	g_autofree char *path = g_strdup_printf("/invite?token=%s", token);
+	g_autofree char *link = build_bouncer_address(session, website, path);
+	if (!link)
+		return;
 	AdwDialog *alert = adw_alert_dialog_new(TEXT_INVITE_READY,
 		g_strcmp0(uses, "*") == 0 ? TEXT_INVITE_READY_ANYONE : TEXT_INVITE_READY_BODY);
 	GtkWidget *entry = gtk_entry_new();

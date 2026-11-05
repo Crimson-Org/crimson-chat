@@ -1,6 +1,7 @@
 #include <string.h>
 
 #include "bouncer.h"
+#include "../irc/protocol.h"
 
 #define JOIN_LINE_BYTES 400
 
@@ -150,8 +151,9 @@ static void handle_status(IrcClient *client, IrcClientStatus status, const char 
 		return;
 	upstream->is_welcomed = FALSE;
 	g_free(upstream->error);
-	g_free(upstream->registering_account);
-	g_free(upstream->registering_password);
+	/* A registration only counts within one connection, so a reconnect forgets it */
+	g_clear_pointer(&upstream->registering_account, g_free);
+	g_clear_pointer(&upstream->registering_password, g_free);
 	upstream->error = status == IRC_CLIENT_DISCONNECTED && reason ? g_strdup(reason) : NULL;
 	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	add_attribute(attributes, "state", describe_upstream_state(upstream));
@@ -304,8 +306,9 @@ static void keep_new_login(Upstream *upstream, const IrcMessage *message) {
 /* Whether the message is a client query or its answer, such as VERSION, rather than a /me action */
 static gboolean is_ctcp_query(const IrcMessage *message) {
 	const char *text = get_last_irc_parameter(message);
-	gboolean is_text = g_str_equal(message->command, "PRIVMSG") || g_str_equal(message->command, "NOTICE");
-	return is_text && text && *text == CTCP_MARK && !starts_ctcp_command(text + 1, CTCP_ACTION);
+	/* Answers to the user's own queries come as NOTICE and reach the apps like any other line */
+	return g_str_equal(message->command, "PRIVMSG") && text && *text == CTCP_MARK
+		&& !starts_ctcp_command(text + 1, CTCP_ACTION);
 }
 
 
@@ -328,7 +331,7 @@ static void answer_ctcp(Upstream *upstream, const IrcMessage *message) {
 	}
 	else if (starts_ctcp_command(request, "CLIENTINFO"))
 		answer = g_strdup("CLIENTINFO ACTION CLIENTINFO PING TIME VERSION");
-	if (!answer || !g_str_equal(message->command, "PRIVMSG"))
+	if (!answer || !may_answer_ctcp(&upstream->ctcp_limit))
 		return;
 	g_autofree char *line = g_strdup_printf("%c%s%c", CTCP_MARK, answer, CTCP_MARK);
 	send_irc_client_command(upstream->client, "NOTICE", sender, line, NULL);
@@ -348,7 +351,7 @@ static IrcMessage *keep_welcome_message(Upstream *upstream, const IrcMessage *me
 		g_free(upstream->welcome_message);
 		upstream->welcome_message = longer;
 	} else if (g_str_equal(command, "376") && upstream->welcome_message) {
-		g_autoptr(IrcMessage) kept = create_irc_message("CRIMSON", "MOTD", NULL);
+		g_autoptr(IrcMessage) kept = create_irc_message(CRIMSON_COMMAND, "MOTD", NULL);
 		kept->source = g_strdup(message->source);
 		g_autofree char *now = format_irc_time_now();
 		set_irc_tag(kept, "time", get_irc_tag(message, "time") ? get_irc_tag(message, "time") : now);
@@ -358,6 +361,21 @@ static IrcMessage *keep_welcome_message(Upstream *upstream, const IrcMessage *me
 		return g_steal_pointer(&kept);
 	}
 	return NULL;
+}
+
+
+/* A nick the user picked becomes the one the bouncer registers with from then on, once the server took it */
+static void save_requested_nick(Upstream *upstream, const char *nick) {
+	g_clear_pointer(&upstream->requested_nick, g_free);
+	g_free(upstream->record.nickname);
+	upstream->record.nickname = g_strdup(nick);
+	save_network(upstream->user->bouncer->database, &upstream->record);
+	IrcClientSettings settings;
+	fill_client_settings(&settings, &upstream->record, upstream->user->name);
+	change_irc_client_settings(upstream->client, &settings);
+	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+	add_attribute(attributes, "nickname", nick);
+	announce_network(upstream, attributes);
 }
 
 
@@ -404,6 +422,10 @@ static void handle_message(IrcClient *client, const IrcMessage *message, GPtrArr
 	}
 	const char *command = message->command;
 	keep_new_login(upstream, message);
+	const char *new_nick = g_str_equal(command, "NICK") ? get_irc_parameter(message, 0) : NULL;
+	if (new_nick && upstream->requested_nick && is_own_nick(get_irc_client_state(upstream->client), new_nick)
+		&& is_own_nick(get_irc_client_state(upstream->client), upstream->requested_nick))
+		save_requested_nick(upstream, new_nick);
 	if (g_str_equal(command, "JOIN") || g_str_equal(command, "PART") || g_str_equal(command, "KICK"))
 		remember_channel(upstream, message);
 	g_autoptr(IrcMessage) copy = copy_irc_message(message);
@@ -446,6 +468,9 @@ void free_upstream(Upstream *upstream) {
 	g_hash_table_unref(upstream->channel_keys);
 	g_free(upstream->welcome_message);
 	g_free(upstream->error);
+	g_free(upstream->registering_account);
+	g_free(upstream->registering_password);
+	g_free(upstream->requested_nick);
 	g_free(upstream);
 }
 
@@ -484,22 +509,6 @@ static void note_requested_join(Upstream *upstream, const IrcMessage *message) {
 	g_auto(GStrv) values = g_strsplit(keys, ",", -1);
 	for (int index = 0; names[index] && values[index]; index++)
 		g_hash_table_insert(upstream->channel_keys, fold_state_name(state, names[index]), g_strdup(values[index]));
-}
-
-
-/* A nick the user picks becomes the one the bouncer registers with from then on */
-static void save_requested_nick(Upstream *upstream, const char *nick) {
-	if (!nick || !*nick)
-		return;
-	g_free(upstream->record.nickname);
-	upstream->record.nickname = g_strdup(nick);
-	save_network(upstream->user->bouncer->database, &upstream->record);
-	IrcClientSettings settings;
-	fill_client_settings(&settings, &upstream->record, upstream->user->name);
-	change_irc_client_settings(upstream->client, &settings);
-	GHashTable *attributes = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
-	add_attribute(attributes, "nickname", nick);
-	announce_network(upstream, attributes);
 }
 
 
@@ -550,8 +559,10 @@ void forward_to_upstream(Upstream *upstream, Downstream *origin, const IrcMessag
 			get_irc_parameter(copy, 3));
 	if (g_str_equal(command, "JOIN"))
 		note_requested_join(upstream, copy);
-	else if (g_str_equal(command, "NICK"))
-		save_requested_nick(upstream, get_irc_parameter(copy, 0));
+	else if (g_str_equal(command, "NICK") && get_irc_parameter(copy, 0)) {
+		g_free(upstream->requested_nick);
+		upstream->requested_nick = g_strdup(get_irc_parameter(copy, 0));
+	}
 	send_irc_client_message(upstream->client, copy);
 	if (!is_echoable(command) || !get_irc_parameter(copy, 0) || get_irc_client_status(upstream->client)
 		!= IRC_CLIENT_REGISTERED)

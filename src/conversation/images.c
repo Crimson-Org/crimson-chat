@@ -3,10 +3,10 @@
 #include <libsoup/soup.h>
 #include <string.h>
 
-#include "common/identity.h"
+#include "common/app/identity.h"
 #include "conversation/images.h"
 #include "window/window.h"
-#include "common/key-store.h"
+#include "common/storage/key-store.h"
 
 #define LARGEST_IMAGE_BYTES (10 * 1024 * 1024)
 #define SIZE_PLACEHOLDER "{size}"
@@ -14,9 +14,9 @@
 /* No picture shows larger than this on a sharp screen, so a bigger one is scaled down while it is decoded instead
  * of handed at full size to the window to upload while it draws */
 #define LARGEST_SHOWN_PIXELS 640
-/* Some picture hosts refuse requests that do not name the program asking */
-#define USER_AGENT "CrimsonChat/" APPLICATION_VERSION
 #define CACHE_FOLDER "pictures"
+/* Kept pictures nobody showed for this long are removed, so the folder only holds people still seen */
+#define KEPT_PICTURE_DAYS 30
 /* Next to each kept picture, the request header and value that ask its server whether it changed */
 #define VERSION_SUFFIX ".version"
 
@@ -30,6 +30,9 @@ typedef struct {
 	char *url, *path;
 	gboolean is_kept, is_cached;
 	GBytes *bytes;
+	/* Stops a download that grows past the largest picture, counted as it arrives */
+	GCancellable *cancellable;
+	guint64 received;
 	char *version_header, *version;
 } Fetch;
 
@@ -44,16 +47,25 @@ static void free_fetch(Fetch *fetch) {
 	g_free(fetch->url);
 	g_free(fetch->path);
 	g_clear_pointer(&fetch->bytes, g_bytes_unref);
+	g_clear_object(&fetch->cancellable);
 	g_free(fetch->version_header);
 	g_free(fetch->version);
 	g_free(fetch);
 }
 
 
+static void remove_old_pictures(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+	g_autofree char *folder = get_cache_file_path(CACHE_FOLDER);
+	remove_old_files(folder, KEPT_PICTURE_DAYS);
+}
+
+
 static void ensure_tables(void) {
 	if (web)
 		return;
-	web = soup_session_new_with_options("timeout", TIMEOUT_SECONDS, "user-agent", USER_AGENT, NULL);
+	g_autoptr(GTask) trimming = g_task_new(NULL, NULL, NULL, NULL);
+	g_task_run_in_thread(trimming, remove_old_pictures);
+	web = soup_session_new_with_options("timeout", TIMEOUT_SECONDS, "user-agent", get_user_agent(), NULL);
 	loaded = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
 	watchers = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify)g_ptr_array_unref);
 	fetching = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -70,7 +82,8 @@ SoupSession *get_web_session(void) {
 static char *build_cache_path(const char *url, const char *suffix) {
 	g_autofree char *name = g_compute_checksum_for_string(G_CHECKSUM_SHA256, url, -1);
 	g_autofree char *file = g_strconcat(name, suffix, NULL);
-	return g_build_filename(g_get_user_cache_dir(), get_application_identity()->slug, CACHE_FOLDER, file, NULL);
+	g_autofree char *folder = get_cache_file_path(CACHE_FOLDER);
+	return g_build_filename(folder, file, NULL);
 }
 
 
@@ -199,6 +212,11 @@ static void read_picture_file(GTask *task, gpointer source, gpointer data, GCanc
 		g_task_return_error(task, error);
 		return;
 	}
+	if (fetch->is_kept) {
+		g_autofree char *version_path = g_strconcat(fetch->path, VERSION_SUFFIX, NULL);
+		mark_file_used(fetch->path);
+		mark_file_used(version_path);
+	}
 	g_autoptr(GBytes) bytes = g_bytes_new_take(contents, length);
 	GdkTexture *texture = decode_picture(bytes, &error);
 	if (texture)
@@ -252,6 +270,22 @@ static gboolean accept_trusted_certificate(SoupMessage *message, GTlsCertificate
 }
 
 
+/* A picture larger than the limit stops downloading as soon as its size is known or passed, so no address can
+ * fill the memory */
+static void check_announced_size(SoupMessage *message, Fetch *fetch) {
+	goffset length = soup_message_headers_get_content_length(soup_message_get_response_headers(message));
+	if (length > LARGEST_IMAGE_BYTES)
+		g_cancellable_cancel(fetch->cancellable);
+}
+
+
+static void count_received_bytes(SoupMessage *message, guint size, Fetch *fetch) {
+	fetch->received += size;
+	if (fetch->received > LARGEST_IMAGE_BYTES)
+		g_cancellable_cancel(fetch->cancellable);
+}
+
+
 /* A kept picture is requested again only where its server named a version, and an unchanged one costs no
  * download, while a server that named none changes the address for a new picture */
 static void download_image(Fetch *fetch) {
@@ -268,7 +302,12 @@ static void download_image(Fetch *fetch) {
 	if (parts)
 		soup_message_headers_replace(soup_message_get_request_headers(message), parts[0], parts[1]);
 	g_signal_connect(message, "accept-certificate", G_CALLBACK(accept_trusted_certificate), NULL);
-	soup_session_send_and_read_async(web, message, G_PRIORITY_LOW, NULL, finish_download, fetch);
+	g_signal_connect(message, "got-headers", G_CALLBACK(check_announced_size), fetch);
+	g_signal_connect(message, "got-body-data", G_CALLBACK(count_received_bytes), fetch);
+	g_clear_object(&fetch->cancellable);
+	fetch->cancellable = g_cancellable_new();
+	fetch->received = 0;
+	soup_session_send_and_read_async(web, message, G_PRIORITY_LOW, fetch->cancellable, finish_download, fetch);
 }
 
 
@@ -295,6 +334,19 @@ static void read_image(Fetch *fetch) {
 }
 
 
+/* A picture on disk is only one the user chose, in the app's own folder, since an address from someone else could
+ * name any file, such as one that never ends */
+static char *find_own_picture_path(const char *url) {
+	g_autofree char *path = g_filename_from_uri(url, NULL, NULL);
+	g_autofree char *folder = get_state_file_path(OWN_PICTURES_FOLDER);
+	g_autofree char *parent = path ? g_path_get_dirname(path) : NULL;
+	g_autofree char *name = path ? g_path_get_basename(path) : NULL;
+	if (!parent || !g_str_equal(parent, folder) || *name == '.')
+		return NULL;
+	return g_steal_pointer(&path);
+}
+
+
 static void request_image(GtkWidget *widget, const char *url, gboolean is_kept) {
 	ensure_tables();
 	g_object_set_data_full(G_OBJECT(widget), "image-url", g_strdup(url), g_free);
@@ -309,12 +361,12 @@ static void request_image(GtkWidget *widget, const char *url, gboolean is_kept) 
 	g_hash_table_add(fetching, g_strdup(url));
 	Fetch *fetch = g_new0(Fetch, 1);
 	fetch->url = g_strdup(url);
-	gboolean is_own = g_str_has_prefix(url, "file://");
-	fetch->is_kept = is_kept && !is_own;
-	fetch->path = is_own ? g_filename_from_uri(url, NULL, NULL) : is_kept ? build_cache_path(url, "") : NULL;
+	gboolean is_file = g_str_has_prefix(url, "file://");
+	fetch->is_kept = is_kept && !is_file;
+	fetch->path = is_file ? find_own_picture_path(url) : is_kept ? build_cache_path(url, "") : NULL;
 	if (fetch->path)
 		read_image(fetch);
-	else if (is_own)
+	else if (is_file)
 		finish_fetch(fetch, NULL);
 	else
 		download_image(fetch);
@@ -324,7 +376,8 @@ static void request_image(GtkWidget *widget, const char *url, gboolean is_kept) 
 /* Pictures only come over HTTPS, since a plain address would show who reads the chat to anyone on the way, or
  * from the user's own chosen pictures on disk */
 static gboolean is_secure_link(const char *url) {
-	return url && (g_str_has_prefix(url, "https://") || g_str_has_prefix(url, "file://"));
+	g_autofree char *own = url && g_str_has_prefix(url, "file://") ? find_own_picture_path(url) : NULL;
+	return url && (g_str_has_prefix(url, "https://") || own);
 }
 
 

@@ -3,11 +3,11 @@
 #include "casemap.h"
 #include "message.h"
 
-/* The keys of the IRCv3 metadata registry followed for every person and room, which the bouncer subscribes to
- * before it joins anything so the server sends them with each join */
 /* The fields and token of the WHO request that learns a channel's people's accounts and whether they are away */
 #define WHO_FIELDS "%tcuhnfa,152"
 #define WHO_TOKEN "152"
+/* The keys of the IRCv3 metadata registry followed for every person and room, which the bouncer subscribes to
+ * before it joins anything so the server sends them with each join */
 #define FOLLOWED_PROFILE_KEYS "avatar", "display-name", "color", "status", "pronouns", "homepage", "bot"
 
 /* Someone seen in a shared channel, as far as the server has told */
@@ -86,6 +86,8 @@ gboolean has_irc_cap(IrcState *state, const char *name);
 char *fold_state_name(IrcState *state, const char *name);
 gboolean is_irc_channel_name(IrcState *state, const char *name);
 gboolean is_own_nick(IrcState *state, const char *nick);
+/* A channel target may start with status symbols, as in @#channel for its operators only, which this skips */
+const char *skip_irc_status_symbols(IrcState *state, const char *target);
 IrcChannel *find_irc_channel(IrcState *state, const char *name);
 IrcUser *find_irc_user(IrcState *state, const char *nick);
 /* Whether the connection's own nick is a channel's owner, admin, operator or half-operator */

@@ -1,6 +1,4 @@
-/* Start Crimson Chat, an IRC client with its own bouncer
- *
- */
+/* Start Crimson Chat, an IRC client with its own bouncer */
 
 #include "app/application.h"
 

@@ -6,11 +6,11 @@
 #include "conversation/pictures.h"
 #include "rooms/room-look.h"
 #include "window/wizards.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
+#include "irc/protocol.h"
 
 #define DIALOG_WIDTH 480
 #define DIALOG_HEIGHT 640
-#define DEFAULT_TLS_PORT 6697
 #define DEFAULT_PLAIN_PORT 6667
 #define SERVER_AVATAR_SIZE 96
 /* The people offered for a new private chat: how many show at once, their picture size and how far back each room
@@ -123,8 +123,8 @@ static void switch_tls(AdwSwitchRow *row, GParamSpec *spec, ServerForm *form) {
 	gboolean uses_tls = adw_switch_row_get_active(row);
 	int port = (int)adw_spin_row_get_value(ADW_SPIN_ROW(form->port));
 	if (uses_tls && port == DEFAULT_PLAIN_PORT)
-		adw_spin_row_set_value(ADW_SPIN_ROW(form->port), DEFAULT_TLS_PORT);
-	else if (!uses_tls && port == DEFAULT_TLS_PORT)
+		adw_spin_row_set_value(ADW_SPIN_ROW(form->port), IRC_TLS_PORT);
+	else if (!uses_tls && port == IRC_TLS_PORT)
 		adw_spin_row_set_value(ADW_SPIN_ROW(form->port), DEFAULT_PLAIN_PORT);
 }
 
@@ -209,7 +209,7 @@ static void build_server_form(ServerForm *form, GtkWidget *page) {
 	}
 	GtkWidget *server = add_group(page, TEXT_SERVER, NULL);
 	const char *port_text = lookup_attribute(network, "port");
-	int port = record ? record->port : port_text ? (int)g_ascii_strtoll(port_text, NULL, 10) : DEFAULT_TLS_PORT;
+	int port = record ? record->port : port_text ? (int)g_ascii_strtoll(port_text, NULL, 10) : IRC_TLS_PORT;
 	form->name = add_entry_row(server, TEXT_NAME, record ? record->name : lookup_attribute(network, "name"));
 	form->host = add_entry_row(server, TEXT_ADDRESS, record ? record->host : lookup_attribute(network, "host"));
 	form->port = add_port_row(server, port);
@@ -603,10 +603,10 @@ void show_room_invite_dialog(Window *window, CrimsonRoom *room) {
 
 
 static void finish_trust(AdwAlertDialog *alert, const char *response, gpointer data) {
-	Session *session = g_object_get_data(G_OBJECT(alert), "session");
+	CrimsonAccount *account = g_object_get_data(G_OBJECT(alert), "account");
 	const char *hash = g_object_get_data(G_OBJECT(alert), "hash");
-	if (g_strcmp0(response, "trust") == 0)
-		trust_certificate(session, hash);
+	if (g_strcmp0(response, "trust") == 0 && account->session)
+		trust_certificate(account->session, hash);
 }
 
 
@@ -630,7 +630,7 @@ void ask_certificate_trust(Window *window, Session *session, const char *hash) {
 	adw_alert_dialog_set_body(ADW_ALERT_DIALOG(alert), body);
 	adw_alert_dialog_add_responses(ADW_ALERT_DIALOG(alert), "cancel", TEXT_CANCEL, "trust", TEXT_TRUST, NULL);
 	adw_alert_dialog_set_response_appearance(ADW_ALERT_DIALOG(alert), "trust", ADW_RESPONSE_SUGGESTED);
-	g_object_set_data(G_OBJECT(alert), "session", session);
+	g_object_set_data_full(G_OBJECT(alert), "account", g_object_ref(session->item), g_object_unref);
 	g_object_set_data_full(G_OBJECT(alert), "hash", g_strdup(hash), g_free);
 	g_signal_connect(alert, "response", G_CALLBACK(finish_trust), NULL);
 	g_signal_connect(alert, "closed", G_CALLBACK(forget_trust_alert), NULL);
