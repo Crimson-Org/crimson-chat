@@ -17,6 +17,7 @@
 #define PICTURES_PER_LINE 8
 #define GROUP_GAP_MICROSECONDS (5 * 60 * G_USEC_PER_SEC)
 #define TEXT_WIDTH_CHARS 62
+#define MESSAGE_GUTTER (MESSAGE_AVATAR_SIZE + SPACING_SNUG)
 #define PREVIEW_WIDTH 320
 #define PREVIEW_HEIGHT 220
 #define LINK_PICTURE_HEIGHT 140
@@ -139,8 +140,10 @@ static void run_menu_action(GtkButton *button, RowContext *context) {
 }
 
 
+/* The items read like the other menus' items, in their plain weight, with what cannot be undone in red */
 static GtkWidget *create_menu_button(const char *label, const char *icon, const char *action, RowContext *context) {
 	GtkWidget *button = gtk_button_new();
+	gtk_widget_add_css_class(button, g_str_equal(action, "delete") ? "destructive-item" : "plain-item");
 	GtkWidget *content = adw_button_content_new();
 	adw_button_content_set_label(ADW_BUTTON_CONTENT(content), label);
 	adw_button_content_set_icon_name(ADW_BUTTON_CONTENT(content), icon);
@@ -211,7 +214,11 @@ static void open_message_menu(RowContext *context, double x, double y) {
 		gtk_box_append(GTK_BOX(box), create_menu_button(TEXT_DELETE, "user-trash-symbolic", "delete", context));
 	gtk_popover_set_child(GTK_POPOVER(popover), box);
 	gtk_widget_set_parent(popover, context->bubble);
-	GdkRectangle point = {(int)x, (int)y, 1, 1};
+	/* The menu opens under the bubble from where it was clicked, so it never covers the message it acts on, and
+	 * towards the chat, as the menu about a person does */
+	gtk_popover_set_has_arrow(GTK_POPOVER(popover), FALSE);
+	gtk_widget_set_halign(popover, GTK_ALIGN_START);
+	GdkRectangle point = {(int)x, gtk_widget_get_height(context->bubble), 1, 1};
 	gtk_popover_set_pointing_to(GTK_POPOVER(popover), &point);
 	g_signal_connect(popover, "closed", G_CALLBACK(gtk_widget_unparent), NULL);
 	gtk_popover_popup(GTK_POPOVER(popover));
@@ -320,9 +327,7 @@ static GtkWidget *create_reply_quote(CrimsonMessage *message, CrimsonRoom *room,
 
 
 static char *build_text_markup(CrimsonMessage *message, const char *text) {
-	/* Markdown stars and underscores from other apps show as the emphasis they stand for */
-	g_autofree char *emphasised = convert_markdown(text);
-	g_autofree char *markup = format_irc_markup(emphasised);
+	g_autofree char *markup = format_message_markup(text);
 	if (message->kind != MESSAGE_ACTION)
 		return g_steal_pointer(&markup);
 	g_autofree char *sender = g_markup_escape_text(message->sender ? message->sender : "", -1);
@@ -809,6 +814,10 @@ static GtkWidget *create_text_line(RowParts *parts) {
 	parts->body = create_wrapping_label("body");
 	ask_before_label_links(parts->body);
 	gtk_label_set_max_width_chars(GTK_LABEL(parts->body), TEXT_WIDTH_CHARS);
+	/* Text that wraps fills the bubble's width, where a label would otherwise take only the width its lines need and
+	 * leave the rest of the bubble empty, and the box stops this from widening the bubble */
+	gtk_widget_set_hexpand(parts->body, TRUE);
+	gtk_widget_set_hexpand(content, FALSE);
 	gtk_box_append(GTK_BOX(content), parts->body);
 	parts->reveal = gtk_toggle_button_new();
 	gtk_widget_add_css_class(parts->reveal, "flat");
@@ -1081,6 +1090,7 @@ static void show_reactions(RowParts *parts, CrimsonMessage *message, CrimsonRoom
 		return;
 	GtkWidget *reactions = create_reactions(message, room, &parts->context);
 	gtk_widget_set_halign(reactions, message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START);
+	set_class(reactions, "own", message->is_own);
 	gtk_box_append(GTK_BOX(parts->reactions_slot), reactions);
 }
 
@@ -1089,6 +1099,9 @@ static GtkWidget *show_message_line(RowParts *parts, CrimsonMessage *message, Cr
 	gboolean ends_group) {
 	GtkAlign side = message->is_own ? GTK_ALIGN_END : GTK_ALIGN_START;
 	gtk_widget_set_halign(parts->line, side);
+	/* The side away from the speaker keeps the avatar column free, so neither side's bubbles reach past the other's */
+	gtk_widget_set_margin_start(parts->line, message->is_own ? MESSAGE_GUTTER : 0);
+	gtk_widget_set_margin_end(parts->line, message->is_own ? 0 : MESSAGE_GUTTER);
 	gtk_widget_set_halign(parts->tailed, side);
 	/* A message arriving while its chat is open rises in with its tail */
 	set_class(parts->tailed, "fresh-message", is_message_arriving(message));

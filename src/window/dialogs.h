@@ -2,6 +2,19 @@
 
 #include "window/window.h"
 
+/* Every dialog that holds a page, such as settings, a profile, a guide or a list to pick from, has one size, so they
+ * all match */
+#define DIALOG_WIDTH 460
+#define DIALOG_HEIGHT 660
+/* The picture or emblem that lies half over a banded page's band, so a new size changes the 48 px in style.css too */
+#define DIALOG_PICTURE_SIZE 96
+
+/* A dialog page that opens on a band in the accent's colours behind the header, with the picture over the band's
+ * lower edge, the details under it scrolling when they do not fit, and a button such as Leave Room kept at the bottom
+ * when there is one, so the space above it reads as the page's own */
+GtkWidget *create_banded_page(GtkWidget *header, GtkWidget *picture, GtkWidget *details, GtkWidget *footer);
+/* The picture of a banded page without a person or room, such as a guide's step, its icon on a disc */
+GtkWidget *create_dialog_emblem(const char *icon);
 /* The header every settings dialog shares: Cancel closes it untouched, and nothing changes until the suggested
  * button at the other end is pressed */
 GtkWidget *create_form_header(AdwDialog *dialog, const char *action, GtkWidget **save);

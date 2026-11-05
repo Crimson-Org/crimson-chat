@@ -27,5 +27,6 @@
 		<file>icons/scalable/actions/crimson-attach-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-send-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-sent-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-badge-symbolic.svg</file>
 	</gresource>
 </gresources>

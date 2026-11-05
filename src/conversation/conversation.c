@@ -1374,6 +1374,7 @@ static GtkWidget *create_header(Conversation *conversation) {
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(conversation->back_button), "win.go-back");
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), conversation->back_button);
 	GtkWidget *title = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_COMPACT);
+	gtk_widget_add_css_class(title, "conversation-heading");
 	conversation->avatar = adw_avatar_new(HEADER_AVATAR_SIZE, NULL, TRUE);
 	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_set_valign(texts, GTK_ALIGN_CENTER);
@@ -1404,6 +1405,10 @@ static GtkWidget *create_header(Conversation *conversation) {
 	gtk_widget_set_tooltip_text(conversation->search_button, TEXT_SEARCH_MESSAGES);
 	g_signal_connect(conversation->search_button, "clicked", G_CALLBACK(click_search), conversation);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(header), conversation->search_button);
+	/* The buttons keep their own square size in the taller title bar, rather than stretching to its height */
+	GtkWidget *buttons[] = {conversation->back_button, conversation->members_button, conversation->search_button};
+	for (guint index = 0; index < G_N_ELEMENTS(buttons); index++)
+		gtk_widget_set_valign(buttons[index], GTK_ALIGN_CENTER);
 	return header;
 }
 

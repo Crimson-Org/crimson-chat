@@ -29,6 +29,9 @@
 
 struct Composer {
 	GtkWidget *box, *reply_bar, *reply_name, *reply_text, *field, *placeholder, *send_button, *share_button;
+	/* The quote of what is being answered, in its writer's name colour, whose class is kept to swap it */
+	GtkWidget *reply_quote;
+	char *reply_color;
 	GtkTextBuffer *buffer;
 	CrimsonRoom *room;
 	CrimsonMessage *reply_to;
@@ -86,8 +89,14 @@ static void cancel_reply(Composer *composer) {
 void reply_in_composer(Composer *composer, CrimsonMessage *message) {
 	g_set_object(&composer->reply_to, message);
 	gtk_label_set_text(GTK_LABEL(composer->reply_name), message->sender ? message->sender : "");
-	g_autofree char *plain = strip_irc_formatting(message->text);
-	gtk_label_set_text(GTK_LABEL(composer->reply_text), plain);
+	if (composer->reply_color)
+		gtk_widget_remove_css_class(composer->reply_quote, composer->reply_color);
+	g_free(composer->reply_color);
+	composer->reply_color = g_strdup_printf("name-color-%d", pick_name_color(message->sender));
+	gtk_widget_add_css_class(composer->reply_quote, composer->reply_color);
+	/* The answered line reads as the chat shows it, with its bold and italic words */
+	g_autofree char *markup = format_message_markup(message->text);
+	gtk_label_set_markup(GTK_LABEL(composer->reply_text), markup);
 	gtk_revealer_set_reveal_child(GTK_REVEALER(composer->reply_bar), TRUE);
 	focus_composer_field(composer);
 }
@@ -579,13 +588,16 @@ static void choose_file(GtkButton *button, Composer *composer) {
 
 
 static GtkWidget *create_reply_bar(Composer *composer) {
-	GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_COMPACT);
+	GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SNUG);
 	gtk_widget_add_css_class(bar, "reply-bar");
 	GtkWidget *icon = gtk_image_new_from_icon_name("mail-reply-sender-symbolic");
 	gtk_widget_add_css_class(icon, "accent");
 	gtk_box_append(GTK_BOX(bar), icon);
 	GtkWidget *texts = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	gtk_widget_set_hexpand(texts, TRUE);
+	/* What is being answered looks like the quote it will become in the bubble */
+	gtk_widget_add_css_class(texts, "reply-quote");
+	composer->reply_quote = texts;
 	composer->reply_name = gtk_label_new(NULL);
 	gtk_label_set_xalign(GTK_LABEL(composer->reply_name), 0);
 	gtk_widget_add_css_class(composer->reply_name, "reply-name");

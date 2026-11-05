@@ -11,10 +11,7 @@
 
 /* Room for one character in UTF-8 with its ending zero */
 #define UTF8_CHARACTER_BYTES 8
-#define GUIDE_WIDTH 460
-#define GUIDE_HEIGHT 680
 #define CONTENT_WIDTH 400
-#define ICON_SIZE 72
 #define HELP_WIDTH_CHARS 34
 #define NETWORK_AVATAR_SIZE 40
 #define LINK_SCHEME "crimson-chat"
@@ -66,8 +63,8 @@ static Guide *create_guide(Window *window, const char *title) {
 	guide->window = window;
 	guide->dialog = adw_dialog_new();
 	adw_dialog_set_title(guide->dialog, title);
-	adw_dialog_set_content_width(guide->dialog, GUIDE_WIDTH);
-	adw_dialog_set_content_height(guide->dialog, GUIDE_HEIGHT);
+	adw_dialog_set_content_width(guide->dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(guide->dialog, DIALOG_HEIGHT);
 	guide->pages = ADW_NAVIGATION_VIEW(adw_navigation_view_new());
 	adw_dialog_set_child(guide->dialog, GTK_WIDGET(guide->pages));
 	g_object_set_data_full(G_OBJECT(guide->dialog), "guide", guide, (GDestroyNotify)free_guide);
@@ -106,16 +103,12 @@ GtkWidget *create_help_button(const char *text) {
 }
 
 
-/* One step of a guide: an icon, a heading, a short explanation, the questions, the button onwards and the
- * help its corner button pops up */
+/* One step of a guide, built like a profile: an emblem over the band, a heading, a short explanation, the questions,
+ * the button onwards at the bottom and the help its corner button pops up */
 static AdwNavigationPage *create_step(const char *title, const char *description, const char *icon,
 	GtkWidget *content, GtkWidget *button, const char *help) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_NORMAL);
 	gtk_widget_add_css_class(box, "guide-step");
-	GtkWidget *image = gtk_image_new_from_icon_name(icon);
-	gtk_image_set_pixel_size(GTK_IMAGE(image), ICON_SIZE);
-	gtk_widget_add_css_class(image, "guide-icon");
-	gtk_box_append(GTK_BOX(box), image);
 	gtk_box_append(GTK_BOX(box), create_label(title, "title-1"));
 	if (description)
 		gtk_box_append(GTK_BOX(box), create_label(description, "guide-description"));
@@ -123,26 +116,15 @@ static AdwNavigationPage *create_step(const char *title, const char *description
 		gtk_widget_set_margin_top(content, SPACING_NORMAL);
 		gtk_box_append(GTK_BOX(box), content);
 	}
-	if (button) {
-		gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
-		gtk_widget_set_margin_top(button, SPACING_NORMAL);
-		gtk_box_append(GTK_BOX(box), button);
-	}
 	GtkWidget *clamp = adw_clamp_new();
 	adw_clamp_set_maximum_size(ADW_CLAMP(clamp), CONTENT_WIDTH);
 	adw_clamp_set_child(ADW_CLAMP(clamp), box);
-	GtkWidget *scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), clamp);
-	GtkWidget *toolbar = adw_toolbar_view_new();
-	/* The heading in the page already names the step, so the header bar only carries Back and Close */
+	/* The heading in the page already names the step, so the header bar only carries Back, help and Close */
 	GtkWidget *header = adw_header_bar_new();
 	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
 	if (help)
 		adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_help_button(help));
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
-	return adw_navigation_page_new(toolbar, title);
+	return adw_navigation_page_new(create_banded_page(header, create_dialog_emblem(icon), clamp, button), title);
 }
 
 

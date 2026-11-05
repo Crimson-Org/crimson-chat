@@ -22,14 +22,15 @@ static const struct {
 	{'t', TEXT_SETTING_TOPIC_LOCK, TEXT_SETTING_TOPIC_LOCK_NOTE, TRUE},
 };
 
-/* The lists a room keeps, and the RPL_ISUPPORT token a server names a list with where not every server has it */
+/* The lists a room keeps, the RPL_ISUPPORT token a server names a list with where not every server has it, and the
+ * icon its empty page shows */
 static const struct {
 	char letter;
-	const char *token, *title;
+	const char *token, *title, *icon;
 } LISTS[] = {
-	{'b', NULL, TEXT_LIST_BANS},
-	{'e', "EXCEPTS", TEXT_LIST_EXCEPTIONS},
-	{'I', "INVEX", TEXT_LIST_INVITES},
+	{'b', NULL, TEXT_LIST_BANS, "action-unavailable-symbolic"},
+	{'e', "EXCEPTS", TEXT_LIST_EXCEPTIONS, "emblem-ok-symbolic"},
+	{'I', "INVEX", TEXT_LIST_INVITES, "contact-new-symbolic"},
 };
 
 /* The settings page of one room, with the rows that follow what the server says */
@@ -47,7 +48,7 @@ typedef struct {
 typedef struct {
 	CrimsonRoom *room;
 	char letter;
-	GtkWidget *entries;
+	GtkWidget *entries, *empty;
 	gulong changed_handler;
 } ListPage;
 
@@ -224,6 +225,7 @@ static void fill_list_page(ListPage *page) {
 		gtk_list_box_append(GTK_LIST_BOX(page->entries), row);
 	}
 	gtk_widget_set_visible(page->entries, entries && entries->len);
+	gtk_widget_set_visible(page->empty, !entries || !entries->len);
 }
 
 
@@ -260,10 +262,21 @@ static AdwNavigationPage *create_list_page(CrimsonRoom *room, guint index) {
 	gtk_widget_set_margin_top(page->entries, SPACING_NORMAL);
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), page->entries);
 	adw_preferences_page_add(ADW_PREFERENCES_PAGE(content), ADW_PREFERENCES_GROUP(group));
+	/* An empty list says so in the middle of the page, in the words of the list's row on the settings page, and
+	 * lets every click through to the field above it */
+	page->empty = adw_status_page_new();
+	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page->empty), LISTS[index].icon);
+	adw_status_page_set_title(ADW_STATUS_PAGE(page->empty), TEXT_LIST_EMPTY);
+	gtk_widget_add_css_class(page->empty, "compact");
+	gtk_widget_set_valign(page->empty, GTK_ALIGN_CENTER);
+	gtk_widget_set_can_target(page->empty, FALSE);
+	GtkWidget *overlay = gtk_overlay_new();
+	gtk_overlay_set_child(GTK_OVERLAY(overlay), content);
+	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), page->empty);
 	IrcState *state = NULL;
 	IrcChannel *channel = find_room_channel(room, &state);
 	gtk_widget_set_sensitive(adding, channel && is_irc_channel_moderator(state, channel));
-	AdwNavigationPage *navigation = wrap_page(content, LISTS[index].title);
+	AdwNavigationPage *navigation = wrap_page(overlay, LISTS[index].title);
 	g_object_set_data_full(G_OBJECT(navigation), SETTINGS_KEY, page, (GDestroyNotify)free_list_page);
 	page->changed_handler = g_signal_connect_swapped(room, "changed", G_CALLBACK(fill_list_page), page);
 	fill_list_page(page);

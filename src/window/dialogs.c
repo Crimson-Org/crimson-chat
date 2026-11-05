@@ -9,10 +9,8 @@
 #include "common/widgets/spacing.h"
 #include "irc/protocol.h"
 
-#define DIALOG_WIDTH 480
-#define DIALOG_HEIGHT 640
+#define EMBLEM_ICON_SIZE 48
 #define DEFAULT_PLAIN_PORT 6667
-#define SERVER_AVATAR_SIZE 96
 /* The people offered for a new private chat: how many show at once, their picture size and how far back each room
  * is read to see who spoke last */
 #define PEOPLE_SHOWN 10
@@ -27,9 +25,9 @@ typedef struct {
 	GtkWidget *name, *host, *port, *tls, *server_password;
 	Session *editing;
 	CrimsonNetwork *bouncer_network;
-	/* The server the form changes, whose picture sits at the top */
+	/* The server the form changes, whose picture with its button to change it leads the form over the band */
 	CrimsonNetwork *network;
-	GtkWidget *avatar;
+	GtkWidget *avatar, *picture;
 } ServerForm;
 
 /* The rows of the bouncer form */
@@ -98,17 +96,56 @@ GtkWidget *create_form_header(AdwDialog *dialog, const char *action, GtkWidget *
 }
 
 
-/* A form dialog with Cancel and a suggested button in its header, around a preferences page */
-static AdwDialog *create_form_dialog(const char *title, const char *action, GtkWidget *page, GtkWidget **save) {
+GtkWidget *create_banded_page(GtkWidget *header, GtkWidget *picture, GtkWidget *details, GtkWidget *footer) {
+	GtkWidget *page = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	GtkWidget *band = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+	gtk_widget_add_css_class(band, "page-band");
+	gtk_box_append(GTK_BOX(band), header);
+	gtk_box_append(GTK_BOX(page), band);
+	gtk_widget_add_css_class(picture, "page-picture");
+	gtk_widget_set_halign(picture, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(page), picture);
+	/* A preferences page scrolls by itself, and anything else gets a scroller of its own */
+	GtkWidget *scroller = details;
+	if (!ADW_IS_PREFERENCES_PAGE(details)) {
+		scroller = gtk_scrolled_window_new();
+		gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+		gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), details);
+	}
+	gtk_widget_set_vexpand(scroller, TRUE);
+	gtk_box_append(GTK_BOX(page), scroller);
+	if (footer) {
+		gtk_widget_add_css_class(footer, "page-footer");
+		gtk_widget_set_halign(footer, GTK_ALIGN_CENTER);
+		gtk_box_append(GTK_BOX(page), footer);
+	}
+	return page;
+}
+
+
+GtkWidget *create_dialog_emblem(const char *icon) {
+	GtkWidget *image = gtk_image_new_from_icon_name(icon);
+	gtk_image_set_pixel_size(GTK_IMAGE(image), EMBLEM_ICON_SIZE);
+	/* The icon takes the disc's size, since a size asked of the disc itself would count the margin that lays it
+	 * over the band */
+	gtk_widget_set_size_request(image, DIALOG_PICTURE_SIZE, DIALOG_PICTURE_SIZE);
+	GtkWidget *emblem = adw_bin_new();
+	adw_bin_set_child(ADW_BIN(emblem), image);
+	gtk_widget_add_css_class(emblem, "dialog-emblem");
+	return emblem;
+}
+
+
+/* A form dialog with Cancel and a suggested button in its header, around a preferences page, built like a profile
+ * with its picture over a band and a button such as Remove kept at the bottom */
+static AdwDialog *create_form_dialog(const char *title, const char *action, GtkWidget *page, GtkWidget *picture,
+	GtkWidget *footer, GtkWidget **save) {
 	AdwDialog *dialog = adw_dialog_new();
 	adw_dialog_set_title(dialog, title);
 	adw_dialog_set_content_width(dialog, DIALOG_WIDTH);
 	adw_dialog_set_content_height(dialog, DIALOG_HEIGHT);
 	GtkWidget *header = create_form_header(dialog, action, save);
-	GtkWidget *toolbar = adw_toolbar_view_new();
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), page);
-	adw_dialog_set_child(dialog, toolbar);
+	adw_dialog_set_child(dialog, create_banded_page(header, picture, page, footer));
 	return dialog;
 }
 
@@ -192,20 +229,17 @@ static const char *lookup_attribute(CrimsonNetwork *network, const char *name) {
 static void build_server_form(ServerForm *form, GtkWidget *page) {
 	const AccountRecord *record = form->editing ? form->editing->record : NULL;
 	CrimsonNetwork *network = form->bouncer_network;
-	/* The server's picture leads the form, the way a profile leads with its person, and clicking it changes it */
+	/* The server's picture leads the form, the way a profile leads with its person, and its button changes it */
 	if (form->network) {
-		GtkWidget *picture = adw_preferences_group_new();
-		GtkWidget *avatar = adw_avatar_new(SERVER_AVATAR_SIZE, form->network->name, TRUE);
-		gtk_widget_add_css_class(avatar, "room-avatar");
+		/* Round, as the rail shows the server */
+		GtkWidget *avatar = adw_avatar_new(DIALOG_PICTURE_SIZE, form->network->name, TRUE);
 		gtk_widget_set_halign(avatar, GTK_ALIGN_CENTER);
 		const char *network_picture = pick_network_picture(form->network);
-		g_autofree char *sized = fill_image_size(network_picture, SERVER_AVATAR_SIZE * SHARP_SCREEN_SCALE);
+		g_autofree char *sized = fill_image_size(network_picture, DIALOG_PICTURE_SIZE * SHARP_SCREEN_SCALE);
 		show_avatar_image(ADW_AVATAR(avatar), sized);
 		GtkWidget *choice = offer_picture_choice(avatar, form->window, form->network, PICTURE_SERVER, NULL, TRUE);
 		form->avatar = avatar;
-		gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
-		adw_preferences_group_add(ADW_PREFERENCES_GROUP(picture), choice);
-		adw_preferences_page_add(ADW_PREFERENCES_PAGE(page), ADW_PREFERENCES_GROUP(picture));
+		form->picture = choice;
 	}
 	GtkWidget *server = add_group(page, TEXT_SERVER, NULL);
 	const char *port_text = lookup_attribute(network, "port");
@@ -234,7 +268,9 @@ static void open_server_form(Window *window, Session *editing, CrimsonNetwork *b
 	form->network = network;
 	GtkWidget *page = adw_preferences_page_new();
 	build_server_form(form, page);
-	form->dialog = create_form_dialog(TEXT_SERVER_SETTINGS, TEXT_SAVE, page, &form->save_button);
+	/* A server not yet added has no picture, so its emblem stands in */
+	GtkWidget *picture = form->picture ? form->picture : create_dialog_emblem("network-server-symbolic");
+	form->dialog = create_form_dialog(TEXT_SERVER_SETTINGS, TEXT_SAVE, page, picture, NULL, &form->save_button);
 	g_object_set_data_full(G_OBJECT(form->dialog), "form", form, g_free);
 	g_signal_connect(form->save_button, "clicked", G_CALLBACK(save_server_form), form);
 	check_server_form(NULL, form);
@@ -312,14 +348,12 @@ void show_bouncer_dialog(Window *window, Session *editing) {
 	form->port = add_port_row(group, record->port);
 	form->username = add_entry_row(group, TEXT_USERNAME, record->sasl_username);
 	form->password = add_password_row(group, TEXT_PASSWORD, record->sasl_password);
-	GtkWidget *danger = add_group(page, NULL, NULL);
 	GtkWidget *remove = gtk_button_new_with_label(TEXT_REMOVE_BOUNCER);
 	gtk_widget_add_css_class(remove, "destructive-action");
 	gtk_widget_add_css_class(remove, "pill");
-	gtk_widget_set_halign(remove, GTK_ALIGN_CENTER);
 	g_signal_connect(remove, "clicked", G_CALLBACK(click_bouncer_removal), form);
-	adw_preferences_group_add(ADW_PREFERENCES_GROUP(danger), remove);
-	form->dialog = create_form_dialog(TEXT_BOUNCER_SETTINGS, TEXT_SAVE, page, &form->save_button);
+	form->dialog = create_form_dialog(TEXT_BOUNCER_SETTINGS, TEXT_SAVE, page,
+		create_dialog_emblem("network-server-symbolic"), remove, &form->save_button);
 	g_object_set_data_full(G_OBJECT(form->dialog), "form", form, g_free);
 	g_signal_connect(form->save_button, "clicked", G_CALLBACK(save_bouncer_form), form);
 	g_signal_connect(form->host, "changed", G_CALLBACK(check_bouncer_form), form);

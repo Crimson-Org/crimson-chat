@@ -132,7 +132,7 @@ void show_conversation_room(Conversation *conversation, CrimsonRoom *room, gbool
 void build_rooms_ahead(Conversation *conversation, CrimsonNetwork *network);
 CrimsonRoom *get_conversation_room(Conversation *conversation);
 void refresh_conversation(Conversation *conversation);
-/* The open room's card, whose members button opens the members beside it, or the profile of the person a private
+/* The open room's card, whose Members row opens the members beside it, or the profile of the person a private
  * chat is with */
 void show_conversation_details(Conversation *conversation);
 /* Searches the open room's messages, in a dialog that shows a picked one in the chat */

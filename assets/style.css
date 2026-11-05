@@ -5,15 +5,18 @@
 	--bubble-round: 18px;
 	--bubble-joined: 6px;
 	--bubble-tail-corner: 8px;
-	--accent-bg-color: #c8102e;
-	--accent-fg-color: #ffffff;
-	--accent-color: color-mix(in srgb, var(--accent-bg-color) 80%, var(--window-fg-color));
-	/* Everything below follows the light or dark style through libadwaita's own colours */
-	--bubble-own: color-mix(in srgb, var(--accent-bg-color) 24%, var(--view-bg-color));
-	--bubble-other: color-mix(in srgb, var(--window-fg-color) 7%, var(--view-bg-color));
-	--chat-wall: color-mix(in srgb, var(--accent-bg-color) 5%, var(--window-bg-color));
+	/* Everything below follows the light or dark style through libadwaita's own colours, where cards sit just
+	 * lighter than the window in both, so other people's bubbles stand off the wall as cards do */
+	/* Own bubbles take the text accent, which is lighter than the button accent in dark themes, so they stand off a
+	 * dark wall as clearly as other people's do */
+	--bubble-own: color-mix(in srgb, var(--accent-color) 24%, var(--card-bg-color));
+	--bubble-other: var(--card-bg-color);
+	/* The wall takes the sidebar's recessed colour, darker than cards in light and dark themes alike, so every bubble
+	 * stands off the wall */
+	--chat-wall: color-mix(in srgb, var(--accent-bg-color) 4%, var(--sidebar-bg-color));
 	--pill-bg: color-mix(in srgb, var(--window-fg-color) 32%, transparent);
-	--rail-bg: color-mix(in srgb, var(--window-fg-color) 6%, var(--window-bg-color));
+	/* The rail takes the title bar's colour, so the two frame the window together */
+	--rail-bg: var(--headerbar-bg-color);
 	/* The faint lines parting the chat from its neighbours, the same as beside the server rail */
 	--divider: alpha(currentColor, 0.08);
 	/* What lifts bubbles, reactions and avatars off the chat's wall */
@@ -65,26 +68,23 @@ headerbar.title-bar {
 	background-color: alpha(currentColor, 0.07);
 }
 
-/* The rail shows no keyboard focus ring, since the glowing circle already marks the chosen server */
-.rail-list > row:focus-visible,
-.rail-all:focus-visible {
+/* The rail shows no keyboard focus ring, since the ring around the picture already marks the chosen server */
+.rail-list > row:focus-visible {
 	outline: none;
 }
 
-/* The chosen server sits on a glowing circle a little wider than its picture, so it shows whatever the picture is */
+/* The chosen server's ring sits a little outside its picture, so it shows whatever the picture is */
 .rail-picture {
 	padding: var(--spacing-fine);
 	border-radius: var(--pill-radius);
 }
 
-.rail-list > row:selected .rail-picture,
-.rail-all.chosen {
-	background-image: linear-gradient(160deg, var(--accent-bg-color),
-		color-mix(in srgb, var(--accent-bg-color) 35%, transparent));
-	box-shadow: 0 0 6px color-mix(in srgb, var(--accent-bg-color) 40%, transparent);
+/* The chosen server gets a faint outline, quiet enough that the open chat still leads */
+.rail-list > row:selected .rail-picture {
+	box-shadow: inset 0 0 0 2px alpha(currentColor, 0.25);
 }
 
-/* A faint shadow lifts the chosen server's picture off its circle */
+/* A faint shadow lifts the chosen server's picture inside its ring */
 .rail-list > row:selected avatar {
 	box-shadow: 0 0 4px alpha(black, 0.45);
 }
@@ -92,23 +92,6 @@ headerbar.title-bar {
 /* Switching servers is instant, so only the dimming of a server still connecting fades */
 .rail-list > row avatar {
 	transition: opacity 400ms ease-out;
-}
-
-.rail-all {
-	min-width: 48px;
-	min-height: 48px;
-	border-radius: var(--pill-radius);
-	padding: 0;
-	margin: var(--spacing-compact) 0 var(--spacing-tight) 0;
-	background-color: alpha(currentColor, 0.08);
-}
-
-.rail-kind {
-	-gtk-icon-size: 14px;
-	padding: var(--spacing-tight);
-	margin: -4px;
-	border-radius: var(--pill-radius);
-	background-color: var(--rail-bg);
 }
 
 /* The circle in the rail's colour under a server's badge, placed where the badge sat on the bare picture */
@@ -147,9 +130,10 @@ headerbar.title-bar {
 	color: var(--accent-fg-color);
 }
 
-/* The chat list */
+/* The chat list, a sidebar in the colours every Crimson app gives its sidebars */
 .room-column {
-	background-color: var(--window-bg-color);
+	background-color: var(--sidebar-bg-color);
+	color: var(--sidebar-fg-color);
 }
 
 /* The first and last chats keep the same 6px gap from the list's ends as from its sides */
@@ -209,8 +193,14 @@ headerbar.title-bar {
 	min-height: 26px;
 }
 
-.room-preview {
+.room-preview,
+.room-sender {
 	font-size: 17px;
+}
+
+/* Who wrote the latest line reads as a name, a step brighter than the line itself */
+.room-sender {
+	color: alpha(currentColor, 0.85);
 }
 
 .list-title {
@@ -265,16 +255,24 @@ headerbar.title-bar {
 	color: var(--accent-color);
 }
 
+/* A list with its own field starts as far under the header as a settings page does */
 .picker {
-	margin: 0 var(--spacing-roomy) var(--spacing-roomy);
+	margin: var(--spacing-large);
 }
 
 .picker-list {
 	background: none;
 }
 
+/* A room already joined shows only the word Joined, with no tick box that would read as picked */
+.picker-row.joined > check {
+	opacity: 0;
+}
+
+/* Every room keeps the height of a name with a topic under it, whether or not the room has a topic */
 .picker-row {
 	padding: var(--spacing-snug) var(--spacing-compact);
+	min-height: 46px;
 }
 
 /* The tick box keeps the same gap to the room's name as avatars do in the chat list */
@@ -293,15 +291,19 @@ headerbar.title-bar {
 
 /* The conversation */
 /* The wall carries the same film grain as Crimson Music's panels, tiled over its colours */
-.chat-background {
+.chat-background,
+.welcome-page {
 	background-color: var(--chat-wall);
 	background-image: url("resource:///io/github/CrimsonOrg/CrimsonChat/grain.png"),
-		radial-gradient(ellipse at 20% 0%, alpha(var(--accent-bg-color), 0.10), transparent 60%),
-		radial-gradient(ellipse at 90% 100%, alpha(color-mix(in srgb, var(--accent-bg-color) 70%, black), 0.10),
+		radial-gradient(ellipse at 20% 0%, alpha(var(--accent-bg-color), 0.07), transparent 60%),
+		radial-gradient(ellipse at 90% 100%, alpha(color-mix(in srgb, var(--accent-bg-color) 70%, black), 0.07),
 		transparent 55%);
 	background-repeat: repeat, no-repeat, no-repeat;
 	background-size: 128px 128px, auto, auto;
-	/* A faint line parts the chat from the side panel, ending where the composer's own line takes over */
+}
+
+/* A faint line parts the chat from the side panel, ending where the composer's own line takes over */
+.chat-background {
 	box-shadow: inset 1px 0 var(--divider);
 }
 
@@ -324,8 +326,14 @@ headerbar.title-bar {
 	padding: 1px var(--spacing-roomy);
 }
 
+/* Bubbles of one person sit close, and a new person starts a clearly larger gap */
 .message-row.group-start {
-	padding-top: var(--spacing-snug);
+	padding-top: var(--spacing-normal);
+}
+
+/* The room's picture in the header starts on the same line as the avatars in the chat and the paperclip below it */
+.conversation-heading {
+	margin-left: 10px;
 }
 
 .conversation-title {
@@ -360,7 +368,8 @@ headerbar.title-bar {
 	transition: box-shadow 350ms ease-out, background-color 350ms ease-out;
 }
 
-.bubble.spotlit {
+.bubble.spotlit,
+.bubble.mention.spotlit {
 	box-shadow: 0 0 0 2px var(--accent-color), 0 0 18px 2px alpha(var(--accent-color), 0.55);
 }
 
@@ -416,6 +425,8 @@ headerbar.title-bar {
 	border-left: 9px solid var(--bubble-own);
 }
 
+/* A message that names the user keeps the colour of other people's bubbles with a bar in the accent down its side,
+ * a highlight that never reads as one of the user's own or as keyboard focus */
 .bubble.mention {
 	box-shadow: inset 3px 0 var(--accent-color), var(--message-shadow);
 }
@@ -438,13 +449,11 @@ headerbar.title-bar {
 	color: alpha(currentColor, 0.5);
 }
 
-/* A /me action reads as narration in an open dashed frame rather than a filled speech bubble */
+/* A /me action reads as narration, plain words on the wall rather than a filled speech bubble */
 .bubble.action,
 .bubble.own.action {
 	background-color: transparent;
 	box-shadow: none;
-	border: 1px dashed alpha(currentColor, 0.3);
-	border-radius: var(--bubble-round);
 }
 
 .bubble.action.mention {
@@ -547,8 +556,15 @@ headerbar.title-bar {
 	}
 }
 
+/* Reactions line up with their bubble's edge rather than its tail, past the gap each reaction keeps after it */
 .reactions {
 	padding: 0;
+	margin-left: var(--spacing-snug);
+}
+
+.reactions.own {
+	margin-left: 0;
+	margin-right: var(--spacing-tight);
 }
 
 .reactions > flowboxchild {
@@ -688,7 +704,7 @@ headerbar.title-bar {
 	color: #ffffff;
 	border-radius: var(--pill-radius);
 	padding: var(--spacing-fine) var(--spacing-normal);
-	margin: var(--spacing-snug) var(--spacing-large);
+	margin: var(--spacing-normal) var(--spacing-large);
 }
 
 /* The message after an event always starts a group, whose own room above it is the gap under the pill */
@@ -754,6 +770,12 @@ headerbar.title-bar {
 	box-shadow: inset 0 1px alpha(#ffffff, 0.12);
 }
 
+/* The reply's arrow takes the paperclip's place under it, so the quote starts where the message box does */
+.reply-bar > image {
+	min-width: 44px;
+	margin-left: -10px;
+}
+
 .reply-bar {
 	padding: var(--spacing-tight) var(--spacing-tight) var(--spacing-snug) var(--spacing-tight);
 }
@@ -778,6 +800,8 @@ headerbar.title-bar {
 	min-width: 44px;
 	min-height: 44px;
 	margin-right: var(--spacing-snug);
+	/* The paperclip reaches into the composer's padding, so its picture lines up with the avatars in the chat */
+	margin-left: -6px;
 }
 
 .share-button image {
@@ -819,12 +843,16 @@ headerbar.title-bar {
 
 /* Guides */
 .guide-step {
-	margin: var(--spacing-normal) var(--spacing-large) 36px var(--spacing-large);
+	margin: var(--spacing-normal) var(--spacing-large) var(--spacing-large);
 }
 
-.guide-icon {
+/* An emblem is a disc like a profile's picture, holding an icon in the accent, with a faint ring that keeps its edge
+ * clear on a dark dialog */
+.dialog-emblem {
+	border-radius: var(--pill-radius);
+	background-color: var(--card-bg-color);
 	color: var(--accent-color);
-	margin-top: var(--spacing-normal);
+	box-shadow: inset 0 0 0 1px alpha(currentColor, 0.3), 0 4px 16px alpha(black, 0.35);
 }
 
 .guide-description {
@@ -834,7 +862,8 @@ headerbar.title-bar {
 /* The member list */
 /* The same faint line as beside the chat parts the members from it while they lie over the chat */
 .member-panel {
-	background-color: var(--window-bg-color);
+	background-color: var(--secondary-sidebar-bg-color);
+	color: var(--secondary-sidebar-fg-color);
 	box-shadow: inset 1px 0 var(--divider);
 }
 
@@ -874,7 +903,47 @@ headerbar.title-bar {
 .name-color-7 { color: #d6409f; }
 
 .profile {
-	margin: 0 var(--spacing-large) var(--spacing-large);
+	margin: var(--spacing-normal) var(--spacing-large) var(--spacing-large);
+}
+
+/* A banded page, such as a profile or a guide's step, opens on a band in the accent's colours with the same grain as
+ * the chat, behind the header's buttons, with room under them for the top half of the 96 px picture and a gap */
+.page-band {
+	padding-bottom: 56px;
+	background-color: color-mix(in srgb, var(--accent-bg-color) 10%, var(--dialog-bg-color));
+	background-image: url("resource:///io/github/CrimsonOrg/CrimsonChat/grain.png"),
+		radial-gradient(ellipse at 15% 0%, alpha(var(--accent-bg-color), 0.42), transparent 70%),
+		radial-gradient(ellipse at 100% 100%, alpha(color-mix(in srgb, var(--accent-bg-color) 60%, black), 0.32),
+		transparent 65%);
+	background-repeat: repeat, no-repeat, no-repeat;
+	background-size: 128px 128px, auto, auto;
+}
+
+/* The picture lies half over the band's lower edge */
+.page-picture {
+	margin-top: -48px;
+}
+
+/* Buttons such as Cancel keep a clear face over the band */
+.page-band > headerbar button.text-button:not(.suggested-action) {
+	background-color: alpha(var(--dialog-bg-color), 0.8);
+}
+
+.page-band > headerbar button.text-button:not(.suggested-action):hover {
+	background-color: var(--dialog-bg-color);
+}
+
+.page-footer {
+	margin: var(--spacing-normal) var(--spacing-large) var(--spacing-large);
+}
+
+.page-band > headerbar {
+	background: none;
+	box-shadow: none;
+}
+
+.page-picture avatar {
+	box-shadow: 0 4px 16px alpha(black, 0.35);
 }
 
 /* A menu item that cannot be undone, such as leaving a room */
@@ -907,6 +976,40 @@ headerbar.title-bar {
 .plain-item {
 	font-weight: normal;
 	padding: var(--spacing-small) var(--spacing-normal);
+}
+
+/* Every item of the menus built from buttons has one height, with or without an icon */
+.plain-item,
+.destructive-item {
+	min-height: 26px;
+}
+
+/* The menus built from buttons mark the keyboard's place with a fill, as GTK's own menus do, rather than a ring */
+.plain-item:focus-visible,
+.destructive-item:focus-visible,
+.quick-reaction:focus-visible {
+	outline: none;
+	background-color: alpha(currentColor, 0.1);
+}
+
+/* libadwaita bolds a button's label of its own, so menu items made of buttons keep it plain as menu items are */
+.plain-item label,
+.destructive-item label {
+	font-weight: normal;
+}
+
+.menu-title label {
+	font-weight: bold;
+}
+
+/* The minutes end where the row above them ends, and keep clear of the menu's lower edge */
+.override-minutes {
+	margin: var(--spacing-small) 0 var(--spacing-tight) 0;
+}
+
+/* The quick reactions keep the same inset from the menu's sides as the rows under them */
+.reaction-strip {
+	margin: 0 var(--spacing-tight);
 }
 
 /* The corner's circle around the spinner, which grows into a pill holding what it waits for */
@@ -975,12 +1078,21 @@ headerbar.title-bar {
 	background-color: color-mix(in srgb, var(--warning-bg-color) 85%, white);
 }
 
-/* The pronouns under the user's own name read as a line of the profile until clicked into, and the status as a
- * bubble that opens its menu */
+/* The pronouns and the status under the user's own name are two pills of one look, the pronouns typed into and the
+ * status opening its menu */
 .pronouns-field {
-	min-height: 28px;
-	background: none;
+	min-height: 36px;
+	padding: 0 var(--spacing-roomy);
+	border-radius: var(--pill-radius);
+	background-color: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
 	color: alpha(currentColor, 0.7);
+}
+
+/* While empty, the pronouns line and the status read as actions, in the accent colour rather than faded */
+.pronouns-field placeholder,
+.status-bubble .dim-label {
+	color: var(--accent-color);
+	opacity: 1;
 }
 
 .status-bubble {
@@ -993,6 +1105,7 @@ headerbar.title-bar {
 	min-height: 36px;
 	padding: 0 var(--spacing-normal);
 	background: none;
+	font-weight: normal;
 }
 
 .status-menu {
@@ -1019,7 +1132,7 @@ headerbar.title-bar {
 }
 
 .registration {
-	margin: var(--spacing-small) var(--spacing-large) var(--spacing-large);
+	margin: var(--spacing-normal) var(--spacing-large) var(--spacing-large);
 }
 
 /* While a server is dragged in the rail, a line marks the gap it would land in */
@@ -1056,7 +1169,7 @@ headerbar.title-bar {
 }
 
 .found-messages {
-	margin: var(--spacing-normal);
+	margin-top: var(--spacing-tight);
 }
 
 .found-message {
@@ -1091,4 +1204,41 @@ headerbar.title-bar {
 
 .suggestion {
 	padding: var(--spacing-small) var(--spacing-compact);
+}
+
+/* Settings pages keep the same 24 px sides as every other dialog, where libadwaita's page adds 3 px of its own */
+preferencespage > scrolledwindow > viewport > clamp > box {
+	margin-left: 21px;
+	margin-right: 21px;
+}
+
+/* Under a banded page's picture, a settings page starts as close as a profile's details do */
+.page-picture + preferencespage > scrolledwindow > viewport > clamp > box {
+	margin-top: var(--spacing-normal);
+}
+
+/* The settings tabs sit under a faint line, keep clear of the dialog's rounded lower edge, and their names keep the
+ * 16 px minimum */
+viewswitcherbar {
+	box-shadow: inset 0 1px var(--divider);
+}
+
+viewswitcherbar viewswitcher {
+	margin-bottom: var(--spacing-small);
+}
+
+viewswitcher button > stack > box.narrow {
+	font-size: 16px;
+	font-weight: normal;
+}
+
+/* Over the rail, the main menu button centres on the 76 px rail, past the 6 px start of the header and half of its
+ * own 34 px */
+.over-rail .main-menu {
+	margin-left: 15px;
+}
+
+/* A settings page that goes on below its lower edge shows a line there, so its last card never looks finished */
+preferencespage > scrolledwindow > undershoot.bottom {
+	box-shadow: inset 0 -1px var(--divider);
 }

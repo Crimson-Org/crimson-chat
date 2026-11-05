@@ -150,7 +150,8 @@ static char *describe_preview(const char *text) {
 }
 
 
-char *describe_room_preview(CrimsonRoom *room) {
+char *describe_room_preview(CrimsonRoom *room, char **sender) {
+	*sender = NULL;
 	if (room->kind == ROOM_SERVER)
 		return describe_room_subtitle(room);
 	if (is_room_typing(room) && get_settings()->shows_typing)
@@ -158,12 +159,11 @@ char *describe_room_preview(CrimsonRoom *room) {
 	if (room->new_reaction_text && room->new_reaction_time >= room->last_time)
 		return g_strdup(room->new_reaction_text);
 	if (room->preview && *room->preview) {
-		g_autofree char *plain = describe_preview(room->preview);
 		if (room->is_preview_own)
-			return g_strdup_printf(TEXT_PREVIEW_OWN, plain);
-		if (room->kind == ROOM_CHANNEL && room->preview_sender)
-			return g_strdup_printf(TEXT_PREVIEW_SENDER, room->preview_sender, plain);
-		return g_steal_pointer(&plain);
+			*sender = g_strdup(TEXT_PREVIEW_OWN);
+		else if (room->kind == ROOM_CHANNEL && room->preview_sender)
+			*sender = g_strdup_printf(TEXT_PREVIEW_SENDER, room->preview_sender);
+		return describe_preview(room->preview);
 	}
 	if (room->kind == ROOM_CHANNEL && room->topic)
 		return strip_irc_formatting(room->topic);

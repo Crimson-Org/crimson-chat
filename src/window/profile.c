@@ -12,11 +12,7 @@
 #include "session/uploads.h"
 #include "common/widgets/spacing.h"
 
-#define PROFILE_WIDTH 400
-/* A person's profile opens at its full height, so it does not grow when the details arrive */
-#define PROFILE_HEIGHT 620
 #define TOPIC_LINES 6
-#define PROFILE_AVATAR_SIZE 96
 /* How many letters the pronouns and status lines under the user's own name make room for */
 #define PRONOUNS_WIDTH 16
 #define STATUS_WIDTH 28
@@ -45,14 +41,20 @@ static void free_profile_view(ProfileView *view) {
 }
 
 
+/* One of something reads as a word of its own, such as "1 minute ago", and more as the count */
+static char *describe_count(gint64 count, const char *one, const char *many) {
+	return count == 1 ? g_strdup(one) : g_strdup_printf(many, (int)count);
+}
+
+
 char *describe_idle(gint64 seconds) {
 	if (seconds < SECONDS_PER_MINUTE)
 		return g_strdup(TEXT_IDLE_NOW);
 	if (seconds < SECONDS_PER_HOUR)
-		return g_strdup_printf(TEXT_IDLE_MINUTES, (int)(seconds / SECONDS_PER_MINUTE));
+		return describe_count(seconds / SECONDS_PER_MINUTE, TEXT_IDLE_MINUTE, TEXT_IDLE_MINUTES);
 	if (seconds < SECONDS_PER_DAY)
-		return g_strdup_printf(TEXT_IDLE_HOURS, (int)(seconds / SECONDS_PER_HOUR));
-	return g_strdup_printf(TEXT_IDLE_DAYS, (int)(seconds / SECONDS_PER_DAY));
+		return describe_count(seconds / SECONDS_PER_HOUR, TEXT_IDLE_HOUR, TEXT_IDLE_HOURS);
+	return describe_count(seconds / SECONDS_PER_DAY, TEXT_IDLE_DAY, TEXT_IDLE_DAYS);
 }
 
 
@@ -155,6 +157,14 @@ static void show_account_line(GtkWidget *line, const char *account) {
 }
 
 
+/* An empty list would show as a bare edge, and a stack whose page is hidden shows its spinner instead, so the whole
+ * stack goes while there are no rows */
+static void show_detail_rows(ProfileView *view) {
+	gtk_widget_set_visible(view->stack, gtk_widget_get_first_child(view->rows) != NULL);
+	gtk_stack_set_visible_child_name(GTK_STACK(view->stack), "details");
+}
+
+
 static void show_details(Profile *profile, gpointer data) {
 	ProfileView *view = data;
 	if (!profile) {
@@ -164,7 +174,7 @@ static void show_details(Profile *profile, gpointer data) {
 	}
 	if (!profile->is_found) {
 		gtk_label_set_text(GTK_LABEL(view->realname), TEXT_PROFILE_OFFLINE);
-		gtk_stack_set_visible_child_name(GTK_STACK(view->stack), "details");
+		show_detail_rows(view);
 		return;
 	}
 	/* A real name that only repeats the nick says nothing */
@@ -179,8 +189,7 @@ static void show_details(Profile *profile, gpointer data) {
 	add_row(view, TEXT_PROFILE_ROOMS, rooms);
 	add_homepage_row(view, find_metadata(view->network->server_room, view->nick, "homepage"));
 	fill_person_metadata(view);
-	gtk_widget_set_visible(view->rows, gtk_widget_get_first_child(view->rows) != NULL);
-	gtk_stack_set_visible_child_name(GTK_STACK(view->stack), "details");
+	show_detail_rows(view);
 }
 
 
@@ -193,6 +202,14 @@ static void send_message(GtkButton *button, ProfileView *view) {
 }
 
 
+/* A profile with no title, only the close button on its band */
+static GtkWidget *create_profile_header(void) {
+	GtkWidget *header = adw_header_bar_new();
+	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
+	return header;
+}
+
+
 void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	CrimsonNetwork *network = room->network;
 	ProfileView *view = g_new0(ProfileView, 1);
@@ -200,18 +217,17 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	view->network = network;
 	view->nick = g_strdup(nick);
 	view->dialog = adw_dialog_new();
-	adw_dialog_set_content_width(view->dialog, PROFILE_WIDTH);
-	adw_dialog_set_content_height(view->dialog, PROFILE_HEIGHT);
+	adw_dialog_set_content_width(view->dialog, DIALOG_WIDTH);
+	/* A person's profile opens at its full height, so it does not grow when the details arrive */
+	adw_dialog_set_content_height(view->dialog, DIALOG_HEIGHT);
 	g_object_set_data_full(G_OBJECT(view->dialog), "view", view, (GDestroyNotify)free_profile_view);
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_SNUG);
 	gtk_widget_add_css_class(box, "profile");
-	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, nick, TRUE);
+	GtkWidget *avatar = adw_avatar_new(DIALOG_PICTURE_SIZE, nick, TRUE);
 	const char *url = pick_person_picture(room, nick);
-	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * SHARP_SCREEN_SCALE);
+	g_autofree char *sized = fill_image_size(url, DIALOG_PICTURE_SIZE * SHARP_SCREEN_SCALE);
 	show_avatar_image(ADW_AVATAR(avatar), sized);
 	GtkWidget *choice = offer_picture_choice(avatar, window, network, PICTURE_PERSON, nick, FALSE);
-	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), choice);
 	view->name = gtk_label_new(nick);
 	gtk_label_set_wrap(GTK_LABEL(view->name), TRUE);
 	gtk_label_set_justify(GTK_LABEL(view->name), GTK_JUSTIFY_CENTER);
@@ -238,12 +254,9 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	GtkWidget *message = gtk_button_new_with_label(TEXT_SEND_MESSAGE);
 	gtk_widget_add_css_class(message, "pill");
 	gtk_widget_add_css_class(message, "suggested-action");
-	gtk_widget_set_halign(message, GTK_ALIGN_CENTER);
-	gtk_widget_set_margin_top(message, SPACING_SNUG);
 	g_signal_connect(message, "clicked", G_CALLBACK(send_message), view);
 	IrcState *own_state = get_network_state(room->network);
 	gtk_widget_set_visible(message, !own_state || !is_own_nick(own_state, nick));
-	gtk_box_append(GTK_BOX(box), message);
 	view->stack = gtk_stack_new();
 	gtk_stack_set_vhomogeneous(GTK_STACK(view->stack), FALSE);
 	gtk_stack_add_named(GTK_STACK(view->stack), create_spinner(), "loading");
@@ -253,15 +266,8 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	gtk_widget_set_margin_top(view->rows, SPACING_NORMAL);
 	gtk_stack_add_named(GTK_STACK(view->stack), view->rows, "details");
 	gtk_box_append(GTK_BOX(box), view->stack);
-	GtkWidget *toolbar = adw_toolbar_view_new();
-	GtkWidget *header = adw_header_bar_new();
-	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	GtkWidget *scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
-	adw_dialog_set_child(view->dialog, toolbar);
+	/* The way to talk to the person sits at the bottom, where every banded page keeps its button */
+	adw_dialog_set_child(view->dialog, create_banded_page(create_profile_header(), choice, box, message));
 	adw_dialog_present(view->dialog, GTK_WIDGET(window->window));
 	fill_person_metadata(view);
 	/* The server only tells profile keys of people outside the user's rooms when asked */
@@ -270,7 +276,7 @@ void show_profile(Window *window, CrimsonRoom *room, const char *nick) {
 	if (network->state == NETWORK_CONNECTED)
 		request_profile(network, nick, show_details, view);
 	else
-		gtk_stack_set_visible_child_name(GTK_STACK(view->stack), "details");
+		show_detail_rows(view);
 }
 
 
@@ -517,7 +523,7 @@ static void refresh_own_field(GtkWidget *row, char **old, const char *current) {
 static void show_own_picture(OwnProfile *own) {
 	g_autofree char *chosen = own->upload ? g_file_get_uri(own->upload) : NULL;
 	const char *url = chosen ? chosen : *own->picture ? own->picture : NULL;
-	g_autofree char *sized = fill_image_size(url, PROFILE_AVATAR_SIZE * SHARP_SCREEN_SCALE);
+	g_autofree char *sized = fill_image_size(url, DIALOG_PICTURE_SIZE * SHARP_SCREEN_SCALE);
 	show_avatar_image(ADW_AVATAR(own->avatar), sized);
 	show_picture_removable(own->avatar, url != NULL);
 }
@@ -789,7 +795,8 @@ static GtkWidget *create_status_field(GtkWidget **field, const char *value) {
 	g_signal_connect_swapped(clear, "clicked", G_CALLBACK(clear_status), *field);
 	GtkWidget *bubble = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_add_css_class(bubble, "status-bubble");
-	gtk_widget_set_halign(bubble, GTK_ALIGN_CENTER);
+	/* The bubble fills the pronouns' width beside it, with the opener taking all of it but the clear button */
+	gtk_widget_set_hexpand(opener, TRUE);
 	gtk_box_append(GTK_BOX(bubble), opener);
 	gtk_box_append(GTK_BOX(bubble), clear);
 	g_object_set_data(G_OBJECT(*field), "status-label", label);
@@ -861,17 +868,16 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	if (has_metadata && network->client)
 		send_irc_client_command(network->client, "METADATA", "*", "GET", OWN_PROFILE_KEYS, NULL);
 	own->dialog = adw_dialog_new();
-	adw_dialog_set_content_width(own->dialog, PROFILE_WIDTH);
+	adw_dialog_set_content_width(own->dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(own->dialog, DIALOG_HEIGHT);
 	g_object_set_data_full(G_OBJECT(own->dialog), "own", own, (GDestroyNotify)free_own_profile);
 	g_signal_connect_object(network, "changed", G_CALLBACK(refresh_own_profile), own->dialog, G_CONNECT_DEFAULT);
-	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_NORMAL);
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_SNUG);
 	gtk_widget_add_css_class(box, "profile");
-	own->avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, nick, TRUE);
+	own->avatar = adw_avatar_new(DIALOG_PICTURE_SIZE, nick, TRUE);
 	GtkWidget *picture = has_metadata ? offer_picture_change(own->avatar, G_CALLBACK(change_own_picture),
 		G_CALLBACK(ask_to_remove_own_picture), own) : own->avatar;
 	show_own_picture(own);
-	gtk_widget_set_halign(picture, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), picture);
 	/* Chats show the display name where the server has them, and the nickname otherwise, as the big name does */
 	GtkWidget *list = gtk_list_box_new();
 	gtk_list_box_set_selection_mode(GTK_LIST_BOX(list), GTK_SELECTION_NONE);
@@ -885,11 +891,17 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	}
 	capitalize_nick_field(own->nick);
 	g_signal_connect(own->nick, "changed", G_CALLBACK(preview_name), own);
-	/* Pronouns and status sit with the name the way others see them, which keeps the whole page in view */
+	/* Pronouns and status sit with the name the way others see them, as two pills of one width on one row, which
+	 * keeps the whole page in view */
 	if (has_metadata) {
+		GtkWidget *pills = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SNUG);
+		gtk_box_set_homogeneous(GTK_BOX(pills), TRUE);
+		gtk_widget_set_halign(pills, GTK_ALIGN_CENTER);
 		own->pronouns = create_line_field(own->old_pronouns, TEXT_ADD_PRONOUNS, "pronouns-field", PRONOUNS_WIDTH);
 		gtk_widget_set_tooltip_text(own->pronouns, TEXT_PRONOUNS);
-		gtk_box_append(GTK_BOX(box), own->pronouns);
+		gtk_box_append(GTK_BOX(pills), own->pronouns);
+		gtk_box_append(GTK_BOX(pills), create_status_field(&own->status, own->old_status));
+		gtk_box_append(GTK_BOX(box), pills);
 	}
 	/* The real name and the account logged into sit small under the name, as on anyone's profile */
 	if (own->old_realname && nick && g_ascii_strcasecmp(own->old_realname, nick) != 0) {
@@ -905,8 +917,6 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 		: g_strdup_printf(TEXT_ON_SERVER, network->name);
 	gtk_label_set_text(GTK_LABEL(account_line), where);
 	gtk_box_append(GTK_BOX(box), account_line);
-	if (has_metadata)
-		gtk_box_append(GTK_BOX(box), create_status_field(&own->status, own->old_status));
 	own->realname = add_field(list, TEXT_REAL_NAME, own->old_realname);
 	const struct {
 		GtkWidget **row;
@@ -929,6 +939,8 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	/* Pictures travel as a profile key too, so a server without the registry has no pictures either */
 	if (!has_metadata)
 		g_ptr_array_add(missing, TEXT_PICTURE);
+	/* The fields start a group of their own, apart from the name and status above them */
+	gtk_widget_set_margin_top(list, SPACING_ROOMY);
 	gtk_box_append(GTK_BOX(box), list);
 	if (missing->len)
 		gtk_box_append(GTK_BOX(box), create_unsupported_note(missing));
@@ -967,15 +979,12 @@ void show_own_profile(Window *window, CrimsonNetwork *network) {
 	}
 	gtk_list_box_append(GTK_LIST_BOX(login), own->password);
 	gtk_box_append(GTK_BOX(box), login);
-	GtkWidget *toolbar = adw_toolbar_view_new();
 	GtkWidget *save = NULL;
 	GtkWidget *header = create_form_header(own->dialog, TEXT_SAVE, &save);
 	g_signal_connect(save, "clicked", G_CALLBACK(save_own_profile), own);
-	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_PROFILE));
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_PROFILE));
 	adw_dialog_set_title(own->dialog, TEXT_ACCOUNT_TITLE);
-	adw_dialog_set_child(own->dialog, toolbar);
+	adw_dialog_set_child(own->dialog, create_banded_page(header, picture, box, NULL));
 	adw_dialog_present(own->dialog, GTK_WIDGET(window->window));
 }
 
@@ -1010,17 +1019,18 @@ static void invite_from_details(AdwActionRow *row, RoomDetails *details) {
 }
 
 
-static GtkWidget *create_page_row(const char *title, const char *icon, GCallback activated, RoomDetails *details) {
+/* Every row that opens something ends in the same arrow */
+static GtkWidget *create_page_row(const char *title, GCallback activated, RoomDetails *details) {
 	GtkWidget *row = adw_action_row_new();
 	adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), title);
-	adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name(icon));
+	adw_action_row_add_suffix(ADW_ACTION_ROW(row), gtk_image_new_from_icon_name("go-next-symbolic"));
 	gtk_list_box_row_set_activatable(GTK_LIST_BOX_ROW(row), TRUE);
 	g_signal_connect(row, "activated", activated, details);
 	return row;
 }
 
 
-static void show_room_members(GtkButton *button, RoomDetails *details) {
+static void show_room_members(AdwActionRow *row, RoomDetails *details) {
 	adw_dialog_close(details->dialog);
 	((void (*)(gpointer))details->show_members)(details->data);
 }
@@ -1038,18 +1048,16 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 	details->show_members = show_members;
 	details->data = data;
 	details->dialog = adw_dialog_new();
-	adw_dialog_set_content_width(details->dialog, PROFILE_WIDTH);
-	adw_dialog_set_content_height(details->dialog, PROFILE_HEIGHT);
+	adw_dialog_set_content_width(details->dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(details->dialog, DIALOG_HEIGHT);
 	g_object_set_data_full(G_OBJECT(details->dialog), "details", details, (GDestroyNotify)free_room_details);
 	IrcState *state = get_network_state(room->network);
 	IrcChannel *channel = state ? find_irc_channel(state, room->name) : NULL;
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_SNUG);
 	gtk_widget_add_css_class(box, "profile");
-	GtkWidget *avatar = adw_avatar_new(PROFILE_AVATAR_SIZE, NULL, TRUE);
-	fill_room_avatar(ADW_AVATAR(avatar), room, PROFILE_AVATAR_SIZE);
+	GtkWidget *avatar = adw_avatar_new(DIALOG_PICTURE_SIZE, NULL, TRUE);
+	fill_room_avatar(ADW_AVATAR(avatar), room, DIALOG_PICTURE_SIZE);
 	GtkWidget *choice = offer_picture_choice(avatar, window, room->network, PICTURE_ROOM, room->name, FALSE);
-	gtk_widget_set_halign(choice, GTK_ALIGN_CENTER);
-	gtk_box_append(GTK_BOX(box), choice);
 	g_autofree char *title = describe_room_title(room);
 	GtkWidget *name = gtk_label_new(title);
 	gtk_widget_add_css_class(name, "title-1");
@@ -1075,13 +1083,6 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		gtk_widget_set_margin_top(text, SPACING_SMALL);
 		gtk_box_append(GTK_BOX(box), text);
 	}
-	GtkWidget *members = gtk_button_new_with_label(TEXT_SHOW_MEMBERS);
-	gtk_widget_add_css_class(members, "pill");
-	gtk_widget_add_css_class(members, "suggested-action");
-	gtk_widget_set_halign(members, GTK_ALIGN_CENTER);
-	gtk_widget_set_margin_top(members, SPACING_SNUG);
-	g_signal_connect(members, "clicked", G_CALLBACK(show_room_members), details);
-	gtk_box_append(GTK_BOX(box), members);
 	GtkWidget *rows = gtk_list_box_new();
 	gtk_list_box_set_selection_mode(GTK_LIST_BOX(rows), GTK_SELECTION_NONE);
 	gtk_widget_add_css_class(rows, "boxed-list");
@@ -1094,32 +1095,30 @@ void show_room_details(Window *window, CrimsonRoom *room, GCallback show_members
 		add_row(&rows_view, TEXT_TOPIC_SET_BY, by);
 	}
 	add_row(&rows_view, TEXT_PROFILE_SERVER, room->network->name);
-	/* Everyone sees how a joined room is set up, and its moderators change it there */
-	if (channel) {
-		gtk_list_box_append(GTK_LIST_BOX(rows), create_page_row(TEXT_INVITE_SOMEONE, "contact-new-symbolic",
-			G_CALLBACK(invite_from_details), details));
-		gtk_list_box_append(GTK_LIST_BOX(rows), create_page_row(TEXT_ROOM_SETTINGS, "go-next-symbolic",
-			G_CALLBACK(open_room_settings), details));
-	}
 	gtk_box_append(GTK_BOX(box), rows);
+	/* What the room card opens sits apart from what it tells, and everyone sees how a joined room is set up, while
+	 * its moderators change it there */
+	GtkWidget *pages = gtk_list_box_new();
+	gtk_list_box_set_selection_mode(GTK_LIST_BOX(pages), GTK_SELECTION_NONE);
+	gtk_widget_add_css_class(pages, "boxed-list");
+	gtk_widget_set_margin_top(pages, SPACING_NORMAL);
+	gtk_list_box_append(GTK_LIST_BOX(pages), create_page_row(TEXT_SHOW_MEMBERS, G_CALLBACK(show_room_members),
+		details));
+	if (channel) {
+		gtk_list_box_append(GTK_LIST_BOX(pages), create_page_row(TEXT_INVITE_SOMEONE, G_CALLBACK(invite_from_details),
+			details));
+		gtk_list_box_append(GTK_LIST_BOX(pages), create_page_row(TEXT_ROOM_SETTINGS, G_CALLBACK(open_room_settings),
+			details));
+	}
+	gtk_box_append(GTK_BOX(box), pages);
 	GtkWidget *leave = gtk_button_new_with_label(TEXT_LEAVE_ROOM);
 	gtk_widget_add_css_class(leave, "pill");
 	gtk_widget_add_css_class(leave, "room-card-leave");
-	gtk_widget_set_halign(leave, GTK_ALIGN_CENTER);
-	gtk_widget_set_margin_top(leave, SPACING_NORMAL);
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(leave), "win.leave-room");
 	g_signal_connect(leave, "clicked", G_CALLBACK(leave_from_details), details);
-	gtk_box_append(GTK_BOX(box), leave);
-	GtkWidget *scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), box);
-	GtkWidget *toolbar = adw_toolbar_view_new();
-	GtkWidget *header = adw_header_bar_new();
-	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
+	GtkWidget *page = create_banded_page(create_profile_header(), choice, box, leave);
 	details->pages = ADW_NAVIGATION_VIEW(adw_navigation_view_new());
-	adw_navigation_view_add(details->pages, adw_navigation_page_new(toolbar, title));
+	adw_navigation_view_add(details->pages, adw_navigation_page_new(page, title));
 	adw_dialog_set_child(details->dialog, GTK_WIDGET(details->pages));
 	adw_dialog_present(details->dialog, GTK_WIDGET(window->window));
 }

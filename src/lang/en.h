@@ -34,8 +34,8 @@
 #define TEXT_NOT_A_BOUNCER "This server is not a bouncer, so add it as a server instead"
 
 /* Room list previews, with the sender and then the text */
-#define TEXT_PREVIEW_SENDER "%s: %s"
-#define TEXT_PREVIEW_OWN "You: %s"
+#define TEXT_PREVIEW_SENDER "%s:"
+#define TEXT_PREVIEW_OWN "You:"
 
 /* Room details */
 #define TEXT_MEMBERS "%s members"
@@ -235,7 +235,7 @@
 
 /* Join and message dialogs, with the network's name */
 #define TEXT_MESSAGE_BODY "On %s"
-#define TEXT_NICK_PLACEHOLDER "nickname"
+#define TEXT_NICK_PLACEHOLDER "Nickname"
 #define TEXT_JOIN "Join"
 #define TEXT_OPEN_CHAT "Open Chat"
 #define TEXT_INVITE_SOMEONE "Invite Someone"
@@ -296,8 +296,6 @@
 
 /* Settings */
 #define TEXT_GENERAL "General"
-#define TEXT_APPEARANCE "Appearance"
-#define TEXT_STYLE_GROUP "Style"
 #define TEXT_STYLE "Style"
 #define TEXT_FOLLOW_SYSTEM "Follow System"
 #define TEXT_LIGHT "Light"
@@ -319,7 +317,7 @@
 #define TEXT_SOUND_GROUP "Sound"
 #define TEXT_BADGES "Badges"
 #define TEXT_BADGE_GROUP "Show Badges For"
-#define TEXT_TRAY_BADGE "Tray Icon Dot"
+#define TEXT_TRAY_BADGE "Icon Dot"
 #define TEXT_TRAY_BADGE_NOTHING "Never"
 #define TEXT_TRAY_BADGE_MENTIONS "Mentions"
 #define TEXT_TRAY_BADGE_ANY "Any Unread"
@@ -334,7 +332,7 @@
 #define TEXT_SEND_TYPING "Tell Others When I Type"
 #define TEXT_SEND_READ "Share What I Have Read"
 #define TEXT_SEND_READ_DETAIL "Your devices sync what you read"
-#define TEXT_WINDOW_GROUP "Window"
+#define TEXT_TRAY_GROUP "Tray"
 #define TEXT_CLOSE_TO_TRAY "Close to Tray"
 #define TEXT_CLOSE_TO_TRAY_DETAIL "Messages still arrive when closed"
 
@@ -413,8 +411,11 @@
 #define TEXT_PROFILE_ROOMS "Rooms"
 #define TEXT_PROFILE_SERVER "Server"
 #define TEXT_IDLE_NOW "Just now"
+#define TEXT_IDLE_MINUTE "1 minute ago"
 #define TEXT_IDLE_MINUTES "%d minutes ago"
+#define TEXT_IDLE_HOUR "1 hour ago"
 #define TEXT_IDLE_HOURS "%d hours ago"
+#define TEXT_IDLE_DAY "1 day ago"
 #define TEXT_IDLE_DAYS "%d days ago"
 #define TEXT_ACCOUNT_MENU "Account"
 #define TEXT_ACCOUNT_TITLE "Account"
@@ -461,7 +462,7 @@
 #define TEXT_SEARCH_NOTHING "Nothing found"
 
 /* Room settings */
-#define TEXT_ROOM_SETTINGS "Settings"
+#define TEXT_ROOM_SETTINGS "Room Settings"
 #define TEXT_SETTINGS_JOINING "Joining"
 #define TEXT_SETTINGS_WRITING "Writing"
 #define TEXT_SETTINGS_LISTS "People"

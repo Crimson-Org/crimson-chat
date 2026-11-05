@@ -7,6 +7,9 @@ char *format_irc_markup(const char *text);
 /* Markdown, **bold** or __bold__, *italics* or _italics_, ~~struck~~, `code`, ```blocks``` and ||spoilers||, as the
  * IRC codes every client shows, with emphasis only at the edge of a word, so snake_case and addresses stay */
 char *convert_markdown(const char *text);
+/* A message's text as the chat shows it, Markdown stars and underscores from other apps shown as the emphasis they
+ * stand for, and then as Pango markup */
+char *format_message_markup(const char *text);
 /* Where a server strips reply tags, a reply starts with >"Name: the start of their message" and its own text, which
  * shows as the same quote a tagged reply gets */
 typedef struct {

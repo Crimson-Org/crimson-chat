@@ -2,14 +2,13 @@
 
 #include "lang/en.h"
 #include "rooms/room-picker.h"
+#include "window/dialogs.h"
 #include "window/wizards.h"
 #include "common/widgets/spacing.h"
 #include "common/text/numbers.h"
 
 /* The wait before asking the server again counts down by this step */
 #define COUNT_DOWN_STEP_SECONDS 1
-#define PICKER_WIDTH 460
-#define PICKER_HEIGHT 680
 /* The busiest rooms shown, since a big network lists tens of thousands */
 #define ROOMS_SHOWN 3000
 #define LOADING_MARGIN 32
@@ -153,13 +152,21 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, Pic
 	GtkWidget *topic = create_row_label("picker-topic");
 	gtk_box_append(GTK_BOX(texts), name);
 	gtk_box_append(GTK_BOX(texts), topic);
+	/* Rows with and without a topic keep one height, with the name centred when there is none */
+	gtk_widget_set_valign(texts, GTK_ALIGN_CENTER);
 	GtkWidget *users = create_row_label("picker-users");
+	GtkWidget *people = gtk_image_new_from_icon_name("system-users-symbolic");
+	gtk_widget_add_css_class(people, "picker-users");
+	GtkWidget *count = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_TIGHT);
+	gtk_box_append(GTK_BOX(count), people);
+	gtk_box_append(GTK_BOX(count), users);
 	gtk_box_append(GTK_BOX(box), texts);
-	gtk_box_append(GTK_BOX(box), users);
+	gtk_box_append(GTK_BOX(box), count);
 	gtk_check_button_set_child(GTK_CHECK_BUTTON(check), box);
 	g_object_set_data(G_OBJECT(check), "name", name);
 	g_object_set_data(G_OBJECT(check), "topic", topic);
 	g_object_set_data(G_OBJECT(check), "users", users);
+	g_object_set_data(G_OBJECT(check), "people", people);
 	gulong handler = g_signal_connect(check, "toggled", G_CALLBACK(toggle_room), picker);
 	g_object_set_data(G_OBJECT(check), HANDLER_KEY, GSIZE_TO_POINTER(handler));
 	gtk_list_item_set_child(item, check);
@@ -178,6 +185,10 @@ static void bind_row(GtkSignalListItemFactory *factory, GtkListItem *item, Picke
 	gtk_check_button_set_active(GTK_CHECK_BUTTON(check), joined || g_hash_table_contains(picker->chosen, name));
 	g_signal_handler_unblock(check, handler);
 	gtk_widget_set_sensitive(check, !joined);
+	if (joined)
+		gtk_widget_add_css_class(check, "joined");
+	else
+		gtk_widget_remove_css_class(check, "joined");
 	gtk_label_set_text(g_object_get_data(G_OBJECT(check), "name"), name);
 	GtkWidget *topic = g_object_get_data(G_OBJECT(check), "topic");
 	gtk_label_set_text(GTK_LABEL(topic), room && room->topic ? room->topic : "");
@@ -186,6 +197,7 @@ static void bind_row(GtkSignalListItemFactory *factory, GtkListItem *item, Picke
 	gtk_widget_set_tooltip_text(check, room && room->topic && *room->topic ? room->topic : NULL);
 	g_autofree char *users = joined ? g_strdup(TEXT_ALREADY_JOINED) : format_count(room ? room->users : 0);
 	gtk_label_set_text(g_object_get_data(G_OBJECT(check), "users"), users);
+	gtk_widget_set_visible(g_object_get_data(G_OBJECT(check), "people"), !joined);
 }
 
 
@@ -282,6 +294,8 @@ static GtkWidget *create_rooms_page(Picker *picker) {
 	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
 	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), view);
 	gtk_widget_set_vexpand(scroller, TRUE);
+	/* A line at the list's lower edge shows more rooms wait below rather than a row cut off above Join */
+	gtk_widget_add_css_class(scroller, "undershoot-bottom");
 	gtk_box_append(GTK_BOX(box), scroller);
 	picker->join_button = gtk_button_new_with_label(TEXT_JOIN);
 	gtk_widget_add_css_class(picker->join_button, "pill");
@@ -308,7 +322,7 @@ AdwNavigationPage *create_room_picker_page(Window *window, CrimsonNetwork *netwo
 	gtk_stack_add_named(GTK_STACK(picker->stack), create_rooms_page(picker), "rooms");
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	GtkWidget *header = adw_header_bar_new();
-	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_ROOMS));
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_help_button(TEXT_HELP_ROOMS));
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
 	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), picker->stack);
 	AdwNavigationPage *page = adw_navigation_page_new(toolbar, TEXT_ROOMS);
@@ -324,8 +338,8 @@ AdwNavigationPage *create_room_picker_page(Window *window, CrimsonNetwork *netwo
 
 void show_room_picker(Window *window, CrimsonNetwork *network) {
 	AdwDialog *dialog = adw_dialog_new();
-	adw_dialog_set_content_width(dialog, PICKER_WIDTH);
-	adw_dialog_set_content_height(dialog, PICKER_HEIGHT);
+	adw_dialog_set_content_width(dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(dialog, DIALOG_HEIGHT);
 	GtkWidget *pages = adw_navigation_view_new();
 	adw_navigation_view_push(ADW_NAVIGATION_VIEW(pages), create_room_picker_page(window, network, dialog));
 	adw_dialog_set_child(dialog, pages);

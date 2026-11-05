@@ -550,6 +550,10 @@ static void update_view(Window *window) {
 	gboolean has_rail = count > 1;
 	window->has_rail = has_rail;
 	gtk_widget_set_visible(window->rail, has_rail);
+	if (has_rail)
+		gtk_widget_add_css_class(get_room_list_header(window->room_list), "over-rail");
+	else
+		gtk_widget_remove_css_class(get_room_list_header(window->room_list), "over-rail");
 	g_autoptr(CrimsonNetwork) wanted = find_wanted_network(window);
 	if (wanted)
 		choose_network(window, wanted);
@@ -804,6 +808,9 @@ GtkWidget *create_main_menu_button(Window *window) {
 	gtk_widget_set_can_target(dot, FALSE);
 	gtk_overlay_add_overlay(GTK_OVERLAY(overlay), dot);
 	gtk_menu_button_set_child(GTK_MENU_BUTTON(button), overlay);
+	/* A menu button holding its own child is not flattened like the header's icon buttons, so it asks to be flat */
+	gtk_widget_add_css_class(button, "flat");
+	gtk_widget_add_css_class(button, "main-menu");
 	GAction *action = g_action_map_lookup_action(G_ACTION_MAP(window->window), "away");
 	g_signal_connect_object(action, "notify::state", G_CALLBACK(show_away_dot), dot, 0);
 	show_away_dot(action, NULL, dot);
@@ -863,6 +870,9 @@ static GtkWidget *create_welcome_button(const char *label, const char *action) {
 
 static GtkWidget *create_welcome(Window *window) {
 	GtkWidget *toolbar = adw_toolbar_view_new();
+	gtk_widget_add_css_class(toolbar, "welcome-page");
+	/* The header lies over the welcome, so the welcome centres on the whole window */
+	adw_toolbar_view_set_extend_content_to_top_edge(ADW_TOOLBAR_VIEW(toolbar), TRUE);
 	GtkWidget *header = adw_header_bar_new();
 	adw_header_bar_set_show_title(ADW_HEADER_BAR(header), FALSE);
 	adw_header_bar_pack_start(ADW_HEADER_BAR(header), create_main_menu_button(window));

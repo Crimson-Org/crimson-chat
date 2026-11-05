@@ -1,12 +1,11 @@
 #include "lang/en.h"
 #include "conversation/formatting.h"
 #include "conversation/message-search.h"
+#include "window/dialogs.h"
 #include "rooms/room-look.h"
 #include "session/session.h"
 #include "common/widgets/spacing.h"
 
-#define SEARCH_WIDTH 400
-#define SEARCH_HEIGHT 620
 /* Fewer letters than this find too much to be of use */
 #define SHORTEST_SEARCH 2
 #define FOUND_TEXT_LINES 3
@@ -116,8 +115,8 @@ void show_message_search(Window *window, CrimsonRoom *room, MessagePicked picked
 	search->data = data;
 	search->dialog = adw_dialog_new();
 	adw_dialog_set_title(search->dialog, TEXT_SEARCH_MESSAGES);
-	adw_dialog_set_content_width(search->dialog, SEARCH_WIDTH);
-	adw_dialog_set_content_height(search->dialog, SEARCH_HEIGHT);
+	adw_dialog_set_content_width(search->dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(search->dialog, DIALOG_HEIGHT);
 	g_object_set_data_full(G_OBJECT(search->dialog), SEARCH_KEY, search, (GDestroyNotify)free_search);
 	GtkWidget *entry = gtk_search_entry_new();
 	g_autofree char *title = describe_room_title(room);
@@ -126,7 +125,6 @@ void show_message_search(Window *window, CrimsonRoom *room, MessagePicked picked
 	gtk_widget_set_hexpand(entry, TRUE);
 	g_signal_connect(entry, "search-changed", G_CALLBACK(change_search), search);
 	GtkWidget *header = adw_header_bar_new();
-	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), entry);
 	search->results = gtk_list_box_new();
 	gtk_list_box_set_selection_mode(GTK_LIST_BOX(search->results), GTK_SELECTION_NONE);
 	gtk_widget_add_css_class(search->results, "boxed-list");
@@ -146,9 +144,15 @@ void show_message_search(Window *window, CrimsonRoom *room, MessagePicked picked
 	gtk_stack_add_named(GTK_STACK(search->pages), create_status("edit-find-symbolic", TEXT_SEARCH_NOTHING),
 		"nothing");
 	gtk_stack_add_named(GTK_STACK(search->pages), scroller, "results");
+	/* The field and what it finds share the sides of the dialog's other lists, as the room picker lays them out */
+	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_SNUG);
+	gtk_widget_add_css_class(box, "picker");
+	gtk_box_append(GTK_BOX(box), entry);
+	gtk_widget_set_vexpand(search->pages, TRUE);
+	gtk_box_append(GTK_BOX(box), search->pages);
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), header);
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), search->pages);
+	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), box);
 	adw_dialog_set_child(search->dialog, toolbar);
 	adw_dialog_set_focus(search->dialog, entry);
 	adw_dialog_present(search->dialog, GTK_WIDGET(window->window));

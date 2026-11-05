@@ -1,10 +1,8 @@
 #include "lang/en.h"
+#include "window/dialogs.h"
 #include "window/register.h"
 #include "common/widgets/spacing.h"
 
-#define REGISTER_ICON_SIZE 64
-#define DIALOG_WIDTH 420
-#define DIALOG_HEIGHT 560
 
 /* The dialog's fields, the server it registers on and whether an answer is awaited */
 typedef struct {
@@ -132,14 +130,22 @@ static GtkWidget *create_pill_button(const char *label) {
 }
 
 
-static GtkWidget *create_form_page(Registration *registration) {
-	CrimsonNetwork *network = registration->network;
+static GtkWidget *create_step_box(void) {
 	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_NORMAL);
 	gtk_widget_add_css_class(box, "registration");
-	GtkWidget *icon = gtk_image_new_from_icon_name("avatar-default-symbolic");
-	gtk_image_set_pixel_size(GTK_IMAGE(icon), REGISTER_ICON_SIZE);
-	gtk_widget_add_css_class(icon, "accent");
-	gtk_box_append(GTK_BOX(box), icon);
+	return box;
+}
+
+
+/* Each step is built like a guide's step, with its emblem over the band and its buttons at the bottom */
+static GtkWidget *create_step_page(const char *icon, GtkWidget *details, GtkWidget *buttons) {
+	return create_banded_page(adw_header_bar_new(), create_dialog_emblem(icon), details, buttons);
+}
+
+
+static GtkWidget *create_form_page(Registration *registration) {
+	CrimsonNetwork *network = registration->network;
+	GtkWidget *box = create_step_box();
 	g_autofree char *about = g_strdup_printf(TEXT_REGISTER_ABOUT, network->name);
 	GtkWidget *intro = gtk_label_new(about);
 	gtk_label_set_wrap(GTK_LABEL(intro), TRUE);
@@ -164,9 +170,10 @@ static GtkWidget *create_form_page(Registration *registration) {
 	gtk_widget_add_css_class(registration->status, "error");
 	gtk_widget_set_visible(registration->status, FALSE);
 	gtk_box_append(GTK_BOX(box), registration->status);
+	GtkWidget *buttons = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_SNUG);
 	registration->register_button = create_pill_button(TEXT_REGISTER);
 	g_signal_connect(registration->register_button, "clicked", G_CALLBACK(send_registration), registration);
-	gtk_box_append(GTK_BOX(box), registration->register_button);
+	gtk_box_append(GTK_BOX(buttons), registration->register_button);
 	registration->login_button = create_pill_button(TEXT_LOG_IN);
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(registration->login_button), "win.own-profile");
 	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(registration->login_button),
@@ -174,19 +181,14 @@ static GtkWidget *create_form_page(Registration *registration) {
 	g_signal_connect_swapped(registration->login_button, "clicked", G_CALLBACK(adw_dialog_close),
 		registration->dialog);
 	gtk_widget_set_visible(registration->login_button, FALSE);
-	gtk_box_append(GTK_BOX(box), registration->login_button);
-	return box;
+	gtk_box_append(GTK_BOX(buttons), registration->login_button);
+	return create_step_page("avatar-default-symbolic", box, buttons);
 }
 
 
 /* The server's own words about the code it sent, such as that it went to the email address, and a field for it */
 static GtkWidget *create_code_page(Registration *registration) {
-	GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, SPACING_NORMAL);
-	gtk_widget_add_css_class(box, "registration");
-	GtkWidget *icon = gtk_image_new_from_icon_name("mail-unread-symbolic");
-	gtk_image_set_pixel_size(GTK_IMAGE(icon), REGISTER_ICON_SIZE);
-	gtk_widget_add_css_class(icon, "accent");
-	gtk_box_append(GTK_BOX(box), icon);
+	GtkWidget *box = create_step_box();
 	registration->code_text = gtk_label_new(NULL);
 	gtk_label_set_wrap(GTK_LABEL(registration->code_text), TRUE);
 	gtk_label_set_justify(GTK_LABEL(registration->code_text), GTK_JUSTIFY_CENTER);
@@ -201,8 +203,7 @@ static GtkWidget *create_code_page(Registration *registration) {
 	gtk_box_append(GTK_BOX(box), list);
 	registration->verify_button = create_pill_button(TEXT_VERIFY);
 	g_signal_connect(registration->verify_button, "clicked", G_CALLBACK(send_code), registration);
-	gtk_box_append(GTK_BOX(box), registration->verify_button);
-	return box;
+	return create_step_page("mail-unread-symbolic", box, registration->verify_button);
 }
 
 
@@ -222,13 +223,7 @@ void show_registration(Window *window, CrimsonNetwork *network) {
 	gtk_stack_set_transition_type(GTK_STACK(registration->stack), GTK_STACK_TRANSITION_TYPE_SLIDE_LEFT);
 	gtk_stack_add_named(GTK_STACK(registration->stack), create_form_page(registration), "form");
 	gtk_stack_add_named(GTK_STACK(registration->stack), create_code_page(registration), "code");
-	GtkWidget *scroller = gtk_scrolled_window_new();
-	gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
-	gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), registration->stack);
-	GtkWidget *toolbar = adw_toolbar_view_new();
-	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), adw_header_bar_new());
-	adw_toolbar_view_set_content(ADW_TOOLBAR_VIEW(toolbar), scroller);
-	adw_dialog_set_child(registration->dialog, toolbar);
+	adw_dialog_set_child(registration->dialog, registration->stack);
 	adw_dialog_present(registration->dialog, GTK_WIDGET(window->window));
 	gtk_widget_grab_focus(registration->password);
 }

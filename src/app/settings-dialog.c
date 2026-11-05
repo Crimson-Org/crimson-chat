@@ -8,8 +8,6 @@
 #include "app/settings.h"
 #include "window/window.h"
 
-#define SETTINGS_WIDTH 480
-#define SETTINGS_HEIGHT 640
 /* An override ending within this many days names its weekday rather than its date */
 #define OVERRIDE_WEEKDAY_DAYS 6
 
@@ -109,27 +107,10 @@ static void change_words(GtkEditable *row, char **words) {
 }
 
 
+/* How the app and its chats look, the style first, whose rows name themselves, so its group needs no heading */
 static void fill_general(GtkWidget *stack, Settings *settings) {
 	GtkWidget *page = add_page(stack, TEXT_GENERAL, "preferences-system-symbolic");
-	GtkWidget *chats = add_group(page, TEXT_CONVERSATIONS);
-	const SwitchSetting CHATS[] = {
-		{TEXT_SHOW_EVENTS, NULL, &settings->shows_events},
-		{TEXT_SHOW_IMAGES, NULL, &settings->shows_images},
-		{TEXT_SHOW_TYPING, NULL, &settings->shows_typing},
-		{TEXT_24_HOURS, NULL, &settings->uses_24_hours},
-	};
-	add_switches(chats, CHATS, G_N_ELEMENTS(CHATS));
-	GtkWidget *window = add_group(page, TEXT_WINDOW_GROUP);
-	const SwitchSetting WINDOW[] = {
-		{TEXT_CLOSE_TO_TRAY, TEXT_CLOSE_TO_TRAY_DETAIL, &settings->closes_to_tray},
-	};
-	add_switches(window, WINDOW, G_N_ELEMENTS(WINDOW));
-}
-
-
-static void fill_appearance(GtkWidget *stack, Settings *settings) {
-	GtkWidget *page = add_page(stack, TEXT_APPEARANCE, "applications-graphics-symbolic");
-	GtkWidget *look = add_group(page, TEXT_STYLE_GROUP);
+	GtkWidget *look = add_group(page, NULL);
 	static const char *const STYLES[] = {TEXT_FOLLOW_SYSTEM, TEXT_LIGHT, TEXT_DARK, NULL};
 	g_autoptr(GtkStringList) styles = gtk_string_list_new(STYLES);
 	GtkWidget *style = adw_combo_row_new();
@@ -141,6 +122,14 @@ static void fill_appearance(GtkWidget *stack, Settings *settings) {
 	adw_preferences_group_add(ADW_PREFERENCES_GROUP(look), style);
 	add_theme_row(look, TEXT_LIGHT_THEME, &settings->light_theme, DEFAULT_LIGHT_THEME);
 	add_theme_row(look, TEXT_DARK_THEME, &settings->dark_theme, DEFAULT_DARK_THEME);
+	GtkWidget *chats = add_group(page, TEXT_CONVERSATIONS);
+	const SwitchSetting CHATS[] = {
+		{TEXT_SHOW_EVENTS, NULL, &settings->shows_events},
+		{TEXT_SHOW_IMAGES, NULL, &settings->shows_images},
+		{TEXT_SHOW_TYPING, NULL, &settings->shows_typing},
+		{TEXT_24_HOURS, NULL, &settings->uses_24_hours},
+	};
+	add_switches(chats, CHATS, G_N_ELEMENTS(CHATS));
 }
 
 
@@ -251,7 +240,7 @@ static void fill_notifications(GtkWidget *stack, Settings *settings) {
 
 
 static void fill_badges(GtkWidget *stack, Settings *settings) {
-	GtkWidget *page = add_page(stack, TEXT_BADGES, "mail-unread-symbolic");
+	GtkWidget *page = add_page(stack, TEXT_BADGES, "crimson-badge-symbolic");
 	GtkWidget *group = add_group(page, TEXT_BADGE_GROUP);
 	const SwitchSetting BADGES[] = {
 		{TEXT_NOTIFY_MENTIONS, TEXT_NOTIFY_MENTIONS_DETAIL, &settings->shows_mention_badges},
@@ -259,6 +248,8 @@ static void fill_badges(GtkWidget *stack, Settings *settings) {
 		{TEXT_NOTIFY_ROOM_MESSAGES, NULL, &settings->shows_room_badges},
 	};
 	add_switches(group, BADGES, G_N_ELEMENTS(BADGES));
+	/* The tray's dot and closing to the tray sit together, as the two things about the tray */
+	GtkWidget *tray_group = add_group(page, TEXT_TRAY_GROUP);
 	static const char *const TRAY_BADGES[] = {TEXT_TRAY_BADGE_NOTHING, TEXT_TRAY_BADGE_MENTIONS, TEXT_TRAY_BADGE_ANY,
 		NULL};
 	g_autoptr(GtkStringList) tray_badges = gtk_string_list_new(TRAY_BADGES);
@@ -268,7 +259,11 @@ static void fill_badges(GtkWidget *stack, Settings *settings) {
 	adw_combo_row_set_model(ADW_COMBO_ROW(tray), G_LIST_MODEL(tray_badges));
 	adw_combo_row_set_selected(ADW_COMBO_ROW(tray), settings->tray_badge);
 	g_signal_connect(tray, "notify::selected", G_CALLBACK(change_tray_badge), &settings->tray_badge);
-	adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), tray);
+	adw_preferences_group_add(ADW_PREFERENCES_GROUP(tray_group), tray);
+	const SwitchSetting TRAY[] = {
+		{TEXT_CLOSE_TO_TRAY, TEXT_CLOSE_TO_TRAY_DETAIL, &settings->closes_to_tray},
+	};
+	add_switches(tray_group, TRAY, G_N_ELEMENTS(TRAY));
 	static const OverrideList ROOMS = {TEXT_OVERRIDES_GROUP, TEXT_OVERRIDES_EMPTY, TEXT_RESTORE_BADGES, TRUE};
 	add_overrides(page, settings->badge_overrides, &ROOMS);
 }
@@ -317,12 +312,11 @@ void show_settings(GtkWidget *parent) {
 	Settings *draft = copy_settings(get_settings());
 	AdwDialog *dialog = adw_dialog_new();
 	adw_dialog_set_title(dialog, TEXT_SETTINGS);
-	adw_dialog_set_content_width(dialog, SETTINGS_WIDTH);
-	adw_dialog_set_content_height(dialog, SETTINGS_HEIGHT);
+	adw_dialog_set_content_width(dialog, DIALOG_WIDTH);
+	adw_dialog_set_content_height(dialog, DIALOG_HEIGHT);
 	g_object_set_data_full(G_OBJECT(dialog), "draft", draft, (GDestroyNotify)free_settings);
 	GtkWidget *stack = adw_view_stack_new();
 	fill_general(stack, draft);
-	fill_appearance(stack, draft);
 	fill_notifications(stack, draft);
 	fill_badges(stack, draft);
 	fill_privacy(stack, draft);

@@ -85,6 +85,7 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	AdwAvatar *avatar = g_object_get_data(G_OBJECT(row), "avatar");
 	GtkWidget *name = g_object_get_data(G_OBJECT(row), "name");
 	GtkWidget *time = g_object_get_data(G_OBJECT(row), "time");
+	GtkWidget *sender = g_object_get_data(G_OBJECT(row), "sender");
 	GtkWidget *preview = g_object_get_data(G_OBJECT(row), "preview");
 	GtkWidget *badge = g_object_get_data(G_OBJECT(row), "badge");
 	GtkWidget *kind = g_object_get_data(G_OBJECT(row), "kind");
@@ -96,8 +97,11 @@ static void fill_row(GtkWidget *row, CrimsonRoom *room) {
 	gtk_widget_set_visible(kind, room->kind == ROOM_SERVER);
 	g_autofree char *moment = format_list_time(room->last_time);
 	gtk_label_set_text(GTK_LABEL(time), moment);
-	g_autofree char *line = describe_room_preview(room);
+	g_autofree char *writer = NULL;
+	g_autofree char *line = describe_room_preview(room, &writer);
 	gboolean shows_typing = is_room_typing(room) && get_settings()->shows_typing;
+	gtk_label_set_text(GTK_LABEL(sender), writer ? writer : "");
+	gtk_widget_set_visible(sender, writer != NULL);
 	show_room_line(preview, line, shows_typing);
 	gboolean shows_badge = shows_room_badge(room);
 	style_unread_badge(badge, shows_badge ? room->unread_count : 0, room->has_mention || room->new_reaction);
@@ -151,7 +155,8 @@ static GtkWidget *create_menu_item(const char *text, const char *css_class, cons
 	gboolean is_icon_first) {
 	GtkWidget *content = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SNUG);
 	GtkWidget *label = gtk_label_new(text);
-	gtk_label_set_xalign(GTK_LABEL(label), 0);
+	/* A submenu's way back is its title, centred as GTK's own submenus show theirs */
+	gtk_label_set_xalign(GTK_LABEL(label), is_icon_first ? 0.5f : 0);
 	gtk_widget_set_hexpand(label, TRUE);
 	gtk_box_append(GTK_BOX(content), label);
 	if (icon_name) {
@@ -238,6 +243,7 @@ static void close_notifications_page(GtkButton *item, gpointer data) {
 static GtkWidget *create_notifications_page(GtkWidget *popover, const char *title) {
 	GtkWidget *items = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
 	GtkWidget *back = create_menu_item(title, "plain-item", "go-previous-symbolic", TRUE);
+	gtk_widget_add_css_class(back, "menu-title");
 	g_signal_connect(back, "clicked", G_CALLBACK(close_notifications_page), NULL);
 	gtk_box_append(GTK_BOX(items), back);
 	gtk_box_append(GTK_BOX(items), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
@@ -367,6 +373,7 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	GtkWidget *top = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_TIGHT);
 	GtkWidget *kind = gtk_image_new();
 	gtk_widget_add_css_class(kind, "room-kind");
+	gtk_widget_set_valign(kind, GTK_ALIGN_CENTER);
 	GtkWidget *name = create_label("room-name", TRUE);
 	GtkWidget *time = create_label("room-time", FALSE);
 	gtk_box_append(GTK_BOX(top), kind);
@@ -374,10 +381,14 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	gtk_box_append(GTK_BOX(top), time);
 	GtkWidget *bottom = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SMALL);
 	gtk_widget_add_css_class(bottom, "room-bottom");
+	/* Who wrote the latest line stands apart from it, a step brighter, so a line that itself starts with a name
+	 * still reads right */
+	GtkWidget *sender = create_label("room-sender", FALSE);
 	GtkWidget *preview = create_label("room-preview", TRUE);
 	GtkWidget *badge = gtk_label_new(NULL);
 	gtk_widget_add_css_class(badge, "unread-badge");
 	gtk_widget_set_valign(badge, GTK_ALIGN_CENTER);
+	gtk_box_append(GTK_BOX(bottom), sender);
 	gtk_box_append(GTK_BOX(bottom), preview);
 	gtk_box_append(GTK_BOX(bottom), badge);
 	gtk_box_append(GTK_BOX(text), top);
@@ -386,6 +397,7 @@ static void set_up_row(GtkSignalListItemFactory *factory, GtkListItem *item, gpo
 	g_object_set_data(G_OBJECT(row), "avatar", avatar);
 	g_object_set_data(G_OBJECT(row), "name", name);
 	g_object_set_data(G_OBJECT(row), "time", time);
+	g_object_set_data(G_OBJECT(row), "sender", sender);
 	g_object_set_data(G_OBJECT(row), "preview", preview);
 	g_object_set_data(G_OBJECT(row), "badge", badge);
 	g_object_set_data(G_OBJECT(row), "bottom", bottom);
@@ -606,6 +618,9 @@ static GtkWidget *create_header(RoomList *list) {
 	gtk_widget_set_focus_on_click(list->search_button, FALSE);
 	g_signal_connect(list->search_button, "toggled", G_CALLBACK(toggle_search), list);
 	adw_header_bar_pack_end(ADW_HEADER_BAR(list->header), list->search_button);
+	/* The buttons keep their own square size in the taller title bar, rather than stretching to its height */
+	gtk_widget_set_valign(list->menu_button, GTK_ALIGN_CENTER);
+	gtk_widget_set_valign(list->search_button, GTK_ALIGN_CENTER);
 	return list->header;
 }
 

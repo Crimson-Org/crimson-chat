@@ -362,7 +362,7 @@ char *format_day_heading(gint64 time) {
 	g_autoptr(GDateTime) local = to_local_time(time);
 	g_autoptr(GDateTime) now = g_date_time_new_now_local();
 	gboolean is_this_year = g_date_time_get_year(local) == g_date_time_get_year(now);
-	return g_date_time_format(local, is_this_year ? "%A %e %B" : "%A %e %B %Y");
+	return g_date_time_format(local, is_this_year ? "%A %-e %B" : "%A %-e %B %Y");
 }
 
 
@@ -530,6 +530,12 @@ char *convert_markdown(const char *text) {
 		position++;
 	}
 	return g_string_free(converted, FALSE);
+}
+
+
+char *format_message_markup(const char *text) {
+	g_autofree char *emphasised = convert_markdown(text);
+	return format_irc_markup(emphasised);
 }
 
 
