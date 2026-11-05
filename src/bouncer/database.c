@@ -72,6 +72,15 @@ static int read_schema_version(sqlite3 *connection) {
 }
 
 
+static gboolean has_broken_references(sqlite3 *connection) {
+	sqlite3_stmt *statement = NULL;
+	gboolean is_broken = sqlite3_prepare_v2(connection, "PRAGMA foreign_key_check;", -1, &statement, NULL) != SQLITE_OK
+		|| sqlite3_step(statement) == SQLITE_ROW;
+	sqlite3_finalize(statement);
+	return is_broken;
+}
+
+
 /* All waiting migrations go in one transaction, so a failure leaves the database as it was */
 static gboolean migrate(sqlite3 *connection, char **failure) {
 	int version = read_schema_version(connection);
@@ -82,6 +91,11 @@ static gboolean migrate(sqlite3 *connection, char **failure) {
 	gboolean is_done = TRUE;
 	for (int index = version; index < newest && is_done; index++)
 		is_done = sqlite3_exec(connection, MIGRATIONS[index], NULL, NULL, failure) == SQLITE_OK;
+	/* Every row must still point at rows that exist, or nothing of the migration is kept */
+	if (is_done && has_broken_references(connection)) {
+		*failure = sqlite3_mprintf("%s", "A migration left rows pointing at missing rows");
+		is_done = FALSE;
+	}
 	g_autofree char *ending = g_strdup_printf("PRAGMA user_version = %d; COMMIT;", newest);
 	if (is_done)
 		is_done = sqlite3_exec(connection, ending, NULL, NULL, failure) == SQLITE_OK;

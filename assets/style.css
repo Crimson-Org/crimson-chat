@@ -1,6 +1,10 @@
 /* Crimson Chat, a messenger look in the Crimson palette */
 
 :root {
+	/* A bubble's outer corners, the corners where bubbles of one group meet, and the corner above a tail */
+	--bubble-round: 18px;
+	--bubble-joined: 6px;
+	--bubble-tail-corner: 8px;
 	--accent-bg-color: #c8102e;
 	--accent-fg-color: #ffffff;
 	--accent-color: color-mix(in srgb, var(--accent-bg-color) 80%, var(--window-fg-color));
@@ -347,7 +351,7 @@ headerbar.title-bar {
 
 .bubble {
 	background-color: var(--bubble-other);
-	border-radius: 6px 18px 18px 6px;
+	border-radius: var(--bubble-joined) var(--bubble-round) var(--bubble-round) var(--bubble-joined);
 	padding: 7px var(--spacing-normal) 5px var(--spacing-normal);
 	box-shadow: var(--message-shadow);
 }
@@ -367,25 +371,25 @@ headerbar.title-bar {
 /* A group's first bubble points at the avatar with a tail on its side, level with the avatar's middle, so the
  * corner above it is kept small enough for the side to be straight where the tail meets it */
 .bubble.first {
-	border-radius: 8px 18px 18px 6px;
+	border-radius: var(--bubble-tail-corner) var(--bubble-round) var(--bubble-round) var(--bubble-joined);
 }
 
 .bubble.own {
 	background-color: var(--bubble-own);
-	border-radius: 18px 6px 6px 18px;
+	border-radius: var(--bubble-round) var(--bubble-joined) var(--bubble-joined) var(--bubble-round);
 }
 
 .bubble.own.first {
-	border-radius: 18px 8px 6px 18px;
+	border-radius: var(--bubble-round) var(--bubble-tail-corner) var(--bubble-joined) var(--bubble-round);
 }
 
 /* Only a group's last bubble rounds its lower corner on the avatar's side */
 .bubble.group-end {
-	border-bottom-left-radius: 18px;
+	border-bottom-left-radius: var(--bubble-round);
 }
 
 .bubble.own.group-end {
-	border-bottom-right-radius: 18px;
+	border-bottom-right-radius: var(--bubble-round);
 }
 
 /* Every bubble leaves room for a tail beside it, so a group's bubbles line up under its first one */
@@ -440,7 +444,7 @@ headerbar.title-bar {
 	background-color: transparent;
 	box-shadow: none;
 	border: 1px dashed alpha(currentColor, 0.3);
-	border-radius: 18px;
+	border-radius: var(--bubble-round);
 }
 
 .bubble.action.mention {

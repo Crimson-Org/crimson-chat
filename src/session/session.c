@@ -22,15 +22,16 @@
 #define BUSY_ROOM_FILTER ">9"
 #define FEW_BUSY_ROOMS 20
 
-/* Every capability Crimson Chat understands, which servers grant where they support it, and the one that tells
- * the Crimson Chat bouncer apart */
-static const char *const CLIENT_CAPS[] = {
-	"message-tags", "server-time", "batch", "echo-message", "sasl", "cap-notify", "account-notify", "away-notify",
-	"extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname", "invite-notify", "account-tag",
-	"labeled-response", "draft/chathistory", "draft/event-playback", "draft/read-marker", "draft/message-redaction",
-	"draft/metadata-2", "draft/channel-rename", "draft/multiline", "extended-monitor", "sts", "draft/pre-away",
-	"draft/account-registration", BOUNCER_CAP, NULL,
-};
+/* Every capability Crimson Chat understands, which servers grant where they support it */
+#define UNDERSTOOD_CAPS "message-tags", "server-time", "batch", "echo-message", "sasl", "cap-notify", \
+	"account-notify", "away-notify", "extended-join", "multi-prefix", "userhost-in-names", "chghost", "setname", \
+	"invite-notify", "account-tag", "labeled-response", "draft/chathistory", "draft/event-playback", \
+	"draft/read-marker", "draft/message-redaction", "draft/metadata-2", "draft/channel-rename", "draft/multiline", \
+	"extended-monitor", "sts", "draft/pre-away", "draft/account-registration"
+static const char *const CLIENT_CAPS[] = {UNDERSTOOD_CAPS, NULL};
+/* Only a bouncer account asks for the capability that tells the Crimson Chat bouncer apart, so no other server can
+ * claim to be one */
+static const char *const BOUNCER_CLIENT_CAPS[] = {UNDERSTOOD_CAPS, BOUNCER_CAP, NULL};
 
 static void connect_network(CrimsonNetwork *network);
 
@@ -635,7 +636,7 @@ void connect_session(Session *session) {
 	fill_settings(&settings, session->record);
 	static const IrcClientEvents EVENTS = {handle_control_received, handle_control_status};
 	if (!session->control)
-		session->control = create_irc_client(&settings, CLIENT_CAPS, &EVENTS, session);
+		session->control = create_irc_client(&settings, BOUNCER_CLIENT_CAPS, &EVENTS, session);
 	else
 		change_irc_client_settings(session->control, &settings);
 	connect_irc_client(session->control);

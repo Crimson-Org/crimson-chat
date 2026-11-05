@@ -207,10 +207,11 @@ static char *format_support_token(const char *name, const char *value) {
 static GPtrArray *list_support_tokens(Downstream *downstream, Upstream *upstream) {
 	GPtrArray *tokens = g_ptr_array_new_with_free_func(g_free);
 	if (!upstream) {
-		g_ptr_array_add(tokens, g_strdup("CASEMAPPING=ascii"));
-		/* The name the admin gave the bouncer, which an app shows instead of its address */
+		g_ptr_array_add(tokens, format_support_token("CASEMAPPING", "ascii"));
+		/* The name the admin gave the bouncer, which an app shows instead of its address, escaped like any value
+		 * since a name such as Mac Mini holds a space */
 		const char *name = downstream->bouncer->name ? downstream->bouncer->name : BOUNCER_NAME;
-		g_ptr_array_add(tokens, g_strdup_printf("NETWORK=%s", name));
+		g_ptr_array_add(tokens, format_support_token("NETWORK", name));
 		return tokens;
 	}
 	GHashTableIter iterator;
@@ -225,9 +226,9 @@ static GPtrArray *list_support_tokens(Downstream *downstream, Upstream *upstream
 	 * address the app reached the bouncer by */
 	Bouncer *bouncer = downstream->bouncer;
 	if (bouncer->avatars.is_enabled && has_irc_cap(state, "draft/metadata-2"))
-		g_ptr_array_add(tokens, g_strdup_printf(AVATARS_TOKEN "=%s", get_bouncer_website(bouncer)));
+		g_ptr_array_add(tokens, format_support_token(AVATARS_TOKEN, get_bouncer_website(bouncer)));
 	if (bouncer->files.is_enabled) {
-		g_ptr_array_add(tokens, g_strdup_printf(FILES_TOKEN "=%s", get_bouncer_website(bouncer)));
+		g_ptr_array_add(tokens, format_support_token(FILES_TOKEN, get_bouncer_website(bouncer)));
 		g_ptr_array_add(tokens, g_strdup_printf(FILE_LIMIT_TOKEN "=%" G_GSIZE_FORMAT, bouncer->files.largest_bytes));
 	}
 	g_ptr_array_add(tokens, g_strdup_printf("CHATHISTORY=%d", HISTORY_PAGE_LIMIT));

@@ -6,14 +6,16 @@
 /* Hashes running at once, and checks waiting for them, beyond which a login is refused at once */
 #define MOST_RUNNING_CHECKS 2
 #define MOST_WAITING_CHECKS 32
-/* An address that fails this often within the window is refused until the window has passed */
+/* A name tried from one address that fails this often within the window is refused there until the window has
+ * passed, so a stranger sharing an address, such as behind one router, locks out no other account */
 #define MOST_FAILED_LOGINS 10
 #define FAILED_LOGIN_WINDOW_SECONDS (15 * 60)
 
 /* One name and password on their way through the checks */
 typedef struct {
 	Bouncer *bouncer;
-	char *host, *password, *hash;
+	/* The address and name tried, which failures are counted by */
+	char *attempt, *password, *hash;
 	gint64 user_id;
 	gboolean is_correct;
 	GCancellable *cancellable;
@@ -35,7 +37,7 @@ static void start_waiting_checks(void);
 
 
 static void free_check(LoginCheck *check) {
-	g_free(check->host);
+	g_free(check->attempt);
 	memset(check->password, 0, strlen(check->password));
 	g_free(check->password);
 	g_free(check->hash);
@@ -49,27 +51,27 @@ static gint64 get_seconds(void) {
 }
 
 
-static gboolean has_window_passed(gpointer host, gpointer value, gpointer data) {
+static gboolean has_window_passed(gpointer attempt, gpointer value, gpointer data) {
 	FailedLogins *failed = value;
 	return get_seconds() - failed->first >= FAILED_LOGIN_WINDOW_SECONDS;
 }
 
 
-static gboolean is_held_back(const char *host) {
+static gboolean is_held_back(const char *attempt) {
 	if (!failures)
 		failures = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 	g_hash_table_foreach_remove(failures, has_window_passed, NULL);
-	FailedLogins *failed = g_hash_table_lookup(failures, host);
+	FailedLogins *failed = g_hash_table_lookup(failures, attempt);
 	return failed && failed->count >= MOST_FAILED_LOGINS;
 }
 
 
-static void note_failure(const char *host) {
-	FailedLogins *failed = g_hash_table_lookup(failures, host);
+static void note_failure(const char *attempt) {
+	FailedLogins *failed = g_hash_table_lookup(failures, attempt);
 	if (!failed) {
 		failed = g_new0(FailedLogins, 1);
 		failed->first = get_seconds();
-		g_hash_table_insert(failures, g_strdup(host), failed);
+		g_hash_table_insert(failures, g_strdup(attempt), failed);
 	}
 	failed->count++;
 }
@@ -77,7 +79,7 @@ static void note_failure(const char *host) {
 
 static void answer_check(LoginCheck *check) {
 	if (!check->is_correct && check->hash)
-		note_failure(check->host);
+		note_failure(check->attempt);
 	if (!g_cancellable_is_cancelled(check->cancellable))
 		check->checked(check->is_correct ? find_user(check->bouncer, check->user_id) : NULL, check->data);
 	free_check(check);
@@ -134,9 +136,10 @@ static char *find_hash(Bouncer *bouncer, const char *name, gint64 *user_id) {
 void check_login(Bouncer *bouncer, const char *host, const char *name, const char *password,
 	GCancellable *cancellable, LoginChecked checked, gpointer data) {
 	LoginCheck *check = g_new0(LoginCheck, 1);
-	*check = (LoginCheck){bouncer, g_strdup(host), g_strdup(password ? password : ""), NULL, 0, FALSE,
-		cancellable ? g_object_ref(cancellable) : NULL, checked, data};
-	if (!name || !password || is_held_back(host) || g_queue_get_length(&waiting) >= MOST_WAITING_CHECKS) {
+	*check = (LoginCheck){bouncer, g_strdup_printf("%s\n%s", host, name ? name : ""),
+		g_strdup(password ? password : ""), NULL, 0, FALSE, cancellable ? g_object_ref(cancellable) : NULL, checked,
+		data};
+	if (!name || !password || is_held_back(check->attempt) || g_queue_get_length(&waiting) >= MOST_WAITING_CHECKS) {
 		g_idle_add(answer_refused_check, check);
 		return;
 	}

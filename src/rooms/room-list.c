@@ -898,6 +898,15 @@ CrimsonRoom *step_listed_room(RoomList *list, int step) {
 }
 
 
+/* The button lets go of its old action before taking the new target, so no action is ever checked against the
+ * other one's target */
+static void point_button_at(GtkWidget *button, const char *action, GVariant *target) {
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), NULL);
+	gtk_actionable_set_action_target_value(GTK_ACTIONABLE(button), target);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), action);
+}
+
+
 void show_room_list_connection(RoomList *list, const ConnectionNote *note) {
 	gtk_widget_set_visible(list->connection, note != NULL);
 	list->is_problem = note && note->is_problem;
@@ -912,12 +921,10 @@ void show_room_list_connection(RoomList *list, const ConnectionNote *note) {
 			gtk_widget_remove_css_class(note_box, "has-fix");
 		if (note->fix_label) {
 			gtk_button_set_label(GTK_BUTTON(list->connection_fix), note->fix_label);
-			gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_fix), note->fix_action);
-			gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->connection_fix), note->fix_target);
+			point_button_at(list->connection_fix, note->fix_action, note->fix_target);
 		}
 		gtk_stack_set_visible_child_name(GTK_STACK(list->connection_icons), note->is_problem ? "problem" : "waiting");
-		gtk_actionable_set_action_name(GTK_ACTIONABLE(list->connection_button), note->action);
-		gtk_actionable_set_action_target_value(GTK_ACTIONABLE(list->connection_button), note->target);
+		point_button_at(list->connection_button, note->action, note->target);
 	}
 	/* A problem keeps its explanation out, while waiting only shows it when pointed at */
 	gtk_revealer_set_reveal_child(GTK_REVEALER(list->connection_note), list->is_problem);
