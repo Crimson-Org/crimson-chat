@@ -44,14 +44,14 @@ headerbar.title-bar {
 
 .rail-list {
 	background: none;
-	padding: 4px 0;
+	padding: var(--spacing-tight) 0;
 }
 
 /* Each server row is a 68px square, the 54px picture plus 7px on every side, so hovering shades a box that keeps
  * 4px from the 76px rail's sides and, through the list's padding, from its top */
 .rail-list > row {
 	padding: 7px 0;
-	margin: 0 4px;
+	margin: 0 var(--spacing-tight);
 	border-radius: 8px;
 	background: none;
 	box-shadow: none;
@@ -69,8 +69,8 @@ headerbar.title-bar {
 
 /* The chosen server sits on a glowing circle a little wider than its picture, so it shows whatever the picture is */
 .rail-picture {
-	padding: 3px;
-	border-radius: 9999px;
+	padding: var(--spacing-fine);
+	border-radius: var(--pill-radius);
 }
 
 .rail-list > row:selected .rail-picture,
@@ -93,25 +93,25 @@ headerbar.title-bar {
 .rail-all {
 	min-width: 48px;
 	min-height: 48px;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	padding: 0;
-	margin: 10px 0 4px 0;
+	margin: var(--spacing-compact) 0 var(--spacing-tight) 0;
 	background-color: alpha(currentColor, 0.08);
 }
 
 .rail-kind {
 	-gtk-icon-size: 14px;
-	padding: 4px;
+	padding: var(--spacing-tight);
 	margin: -4px;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	background-color: var(--rail-bg);
 }
 
 /* The circle in the rail's colour under a server's badge, placed where the badge sat on the bare picture */
 .rail-badge {
 	margin: -3px -5px;
-	padding: 2px;
-	border-radius: 9999px;
+	padding: var(--spacing-hairline);
+	border-radius: var(--pill-radius);
 	background-color: var(--rail-bg);
 }
 
@@ -120,7 +120,7 @@ headerbar.title-bar {
 	min-width: 8px;
 	min-height: 8px;
 	margin: -2px -3px 0 0;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	background-color: var(--warning-bg-color);
 }
 
@@ -130,7 +130,7 @@ headerbar.title-bar {
 	min-width: 26px;
 	min-height: 26px;
 	padding: 0;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	/* A soft grey with the window text on it reads in light and dark themes alike */
 	background-color: color-mix(in srgb, var(--window-fg-color) 26%, var(--window-bg-color));
 	color: var(--window-fg-color);
@@ -156,7 +156,7 @@ headerbar.title-bar {
 
 .room-list > row {
 	padding: 0;
-	margin: 1px 6px;
+	margin: 1px var(--spacing-small);
 	border-radius: 12px;
 	transition: background-color 200ms ease-out;
 }
@@ -191,7 +191,7 @@ headerbar.title-bar {
 /* Every chat row keeps one height, taller than its two lines with a badge or reaction in them, so nothing it shows
  * changes its shape */
 .room-row {
-	padding: 9px 10px;
+	padding: 9px var(--spacing-compact);
 	min-height: 54px;
 }
 
@@ -227,7 +227,7 @@ headerbar.title-bar {
 
 .room-search {
 	min-height: 38px;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	background-color: alpha(currentColor, 0.08);
 }
 
@@ -239,7 +239,7 @@ headerbar.title-bar {
 
 /* The corner's add button is quiet, in the same grey as the connection note opposite it */
 .add-chat {
-	margin: 16px;
+	margin: var(--spacing-roomy);
 }
 
 .add-chat > button {
@@ -254,7 +254,7 @@ headerbar.title-bar {
 }
 
 .help-text {
-	margin: 6px;
+	margin: var(--spacing-small);
 }
 
 .guide-error {
@@ -262,7 +262,7 @@ headerbar.title-bar {
 }
 
 .picker {
-	margin: 0 16px 16px;
+	margin: 0 var(--spacing-roomy) var(--spacing-roomy);
 }
 
 .picker-list {
@@ -270,12 +270,12 @@ headerbar.title-bar {
 }
 
 .picker-row {
-	padding: 8px 10px;
+	padding: var(--spacing-snug) var(--spacing-compact);
 }
 
 /* The tick box keeps the same gap to the room's name as avatars do in the chat list */
 .picker-row > check {
-	margin-right: 12px;
+	margin-right: var(--spacing-normal);
 }
 
 .picker-name {
@@ -308,7 +308,7 @@ headerbar.title-bar {
 
 .messages {
 	background: none;
-	padding: 12px 0 18px 0;
+	padding: var(--spacing-normal) 0 var(--spacing-wide) 0;
 }
 
 .messages > row {
@@ -317,11 +317,11 @@ headerbar.title-bar {
 }
 
 .message-row {
-	padding: 1px 16px;
+	padding: 1px var(--spacing-roomy);
 }
 
 .message-row.group-start {
-	padding-top: 8px;
+	padding-top: var(--spacing-snug);
 }
 
 .conversation-title {
@@ -348,7 +348,7 @@ headerbar.title-bar {
 .bubble {
 	background-color: var(--bubble-other);
 	border-radius: 6px 18px 18px 6px;
-	padding: 7px 12px 5px 12px;
+	padding: 7px var(--spacing-normal) 5px var(--spacing-normal);
 	box-shadow: var(--message-shadow);
 }
 
@@ -390,12 +390,12 @@ headerbar.title-bar {
 
 /* Every bubble leaves room for a tail beside it, so a group's bubbles line up under its first one */
 .bubble {
-	margin-left: 8px;
+	margin-left: var(--spacing-snug);
 }
 
 .bubble.own {
 	margin-left: 0;
-	margin-right: 8px;
+	margin-right: var(--spacing-snug);
 }
 
 /* The tail is a triangle drawn by a wide side border between two clear ones, one pixel wider than the room left
@@ -471,7 +471,7 @@ headerbar.title-bar {
 }
 
 .bot-tag {
-	padding: 0 6px;
+	padding: 0 var(--spacing-small);
 	border-radius: 6px;
 	background-color: alpha(currentColor, 0.12);
 }
@@ -479,8 +479,8 @@ headerbar.title-bar {
 .reply-quote {
 	border-left: 3px solid currentColor;
 	border-radius: 4px;
-	padding: 2px 8px;
-	margin-bottom: 2px;
+	padding: var(--spacing-hairline) var(--spacing-snug);
+	margin-bottom: var(--spacing-hairline);
 	background-color: alpha(currentColor, 0.08);
 }
 
@@ -494,15 +494,15 @@ headerbar.title-bar {
 
 .image-preview {
 	border-radius: 12px;
-	margin: 4px 0;
+	margin: var(--spacing-tight) 0;
 	animation: rise-in 325ms ease-out;
 }
 
 /* A shared file shows as a card with the icon of its kind, and one on its way has light sweeping across it */
 .file-card {
 	min-width: 240px;
-	padding: 10px 12px;
-	margin: 4px 0;
+	padding: var(--spacing-compact) var(--spacing-normal);
+	margin: var(--spacing-tight) 0;
 	border-radius: 12px;
 	background-color: alpha(currentColor, 0.06);
 	border: 1px solid alpha(currentColor, 0.1);
@@ -549,17 +549,17 @@ headerbar.title-bar {
 
 .reactions > flowboxchild {
 	padding: 0;
-	margin: 0 4px 0 0;
+	margin: 0 var(--spacing-tight) 0 0;
 }
 
 .message-avatar {
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	box-shadow: var(--message-shadow);
 }
 
 /* Avatars of several people typing lie over each other, each ringed in the chat's colour to keep them apart */
 .typing-face {
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	box-shadow: 0 0 0 2px var(--chat-wall), var(--message-shadow);
 	transform-origin: 50% 100%;
 	animation: typing-hop 1500ms linear infinite;
@@ -655,8 +655,8 @@ headerbar.title-bar {
 
 .reaction-pill {
 	min-height: 28px;
-	padding: 0 10px;
-	border-radius: 9999px;
+	padding: 0 var(--spacing-compact);
+	border-radius: var(--pill-radius);
 	background-color: var(--bubble-other);
 	box-shadow: var(--message-shadow);
 }
@@ -682,9 +682,9 @@ headerbar.title-bar {
 .empty-pill {
 	background-color: var(--pill-bg);
 	color: #ffffff;
-	border-radius: 9999px;
-	padding: 3px 12px;
-	margin: 8px 24px;
+	border-radius: var(--pill-radius);
+	padding: var(--spacing-fine) var(--spacing-normal);
+	margin: var(--spacing-snug) var(--spacing-large);
 }
 
 /* The message after an event always starts a group, whose own room above it is the gap under the pill */
@@ -695,7 +695,7 @@ headerbar.title-bar {
 /* A run of events is one pill with a line each, rounded less so its many lines keep their shape */
 .event-pill.merged {
 	border-radius: 14px;
-	padding: 6px 14px;
+	padding: var(--spacing-small) 14px;
 }
 
 /* An event inside a run takes no room, since the run's first row shows it */
@@ -706,15 +706,15 @@ headerbar.title-bar {
 /* Where the new messages start, quieter than the day headings, with as much room below it as the row's own
  * padding and the row above leave over it */
 .read-line {
-	margin: 2px 16px 11px;
+	margin: var(--spacing-hairline) var(--spacing-roomy) 11px;
 }
 
 /* A day heading keeps the same gap above and below, so its row drops the group's own room above and an event
  * pill under it drops its top margin */
 .day-pill {
 	font-weight: 700;
-	margin-top: 10px;
-	margin-bottom: 10px;
+	margin-top: var(--spacing-compact);
+	margin-bottom: var(--spacing-compact);
 }
 
 .message-row.day-start {
@@ -727,17 +727,17 @@ headerbar.title-bar {
 
 .empty-pill {
 	font-weight: 700;
-	padding: 6px 16px;
+	padding: var(--spacing-small) var(--spacing-roomy);
 }
 
 .older-loading {
-	border-radius: 9999px;
-	padding: 8px;
-	margin: 12px;
+	border-radius: var(--pill-radius);
+	padding: var(--spacing-snug);
+	margin: var(--spacing-normal);
 }
 
 .jump-button {
-	margin: 18px;
+	margin: var(--spacing-wide);
 	min-width: 44px;
 	min-height: 44px;
 }
@@ -745,24 +745,24 @@ headerbar.title-bar {
 /* The composer along the bottom, set off from the chat by a half see-through dark line with a faint light one under
  * it, which reads as an edge on any theme */
 .composer {
-	padding: 8px 12px;
+	padding: var(--spacing-snug) var(--spacing-normal);
 	border-top: 1px solid rgba(0, 0, 0, 0.5);
 	box-shadow: inset 0 1px alpha(#ffffff, 0.12);
 }
 
 .reply-bar {
-	padding: 4px 4px 8px 4px;
+	padding: var(--spacing-tight) var(--spacing-tight) var(--spacing-snug) var(--spacing-tight);
 }
 
 .composer-pill {
 	background-color: alpha(currentColor, 0.07);
 	border-radius: 22px;
-	padding: 0 16px;
+	padding: 0 var(--spacing-roomy);
 }
 
 .composer-field {
 	background: none;
-	padding: 8px 0;
+	padding: var(--spacing-snug) 0;
 }
 
 .composer-placeholder {
@@ -773,7 +773,7 @@ headerbar.title-bar {
 .share-button {
 	min-width: 44px;
 	min-height: 44px;
-	margin-right: 8px;
+	margin-right: var(--spacing-snug);
 }
 
 .share-button image {
@@ -782,7 +782,7 @@ headerbar.title-bar {
 
 /* The emoji button inside the field reaches into its end padding, so the text keeps its room */
 .emoji-button {
-	margin: 6px -10px 6px 4px;
+	margin: var(--spacing-small) -10px var(--spacing-small) var(--spacing-tight);
 }
 
 .emoji-button > button {
@@ -815,12 +815,12 @@ headerbar.title-bar {
 
 /* Guides */
 .guide-step {
-	margin: 12px 24px 36px 24px;
+	margin: var(--spacing-normal) var(--spacing-large) 36px var(--spacing-large);
 }
 
 .guide-icon {
 	color: var(--accent-color);
-	margin-top: 12px;
+	margin-top: var(--spacing-normal);
 }
 
 .guide-description {
@@ -847,11 +847,11 @@ headerbar.title-bar {
 .member-list > row {
 	padding: 0;
 	border-radius: 10px;
-	margin: 1px 6px;
+	margin: 1px var(--spacing-small);
 }
 
 .member-row {
-	padding: 3px 8px;
+	padding: var(--spacing-fine) var(--spacing-snug);
 	font-size: 17px;
 }
 
@@ -870,14 +870,14 @@ headerbar.title-bar {
 .name-color-7 { color: #d6409f; }
 
 .profile {
-	margin: 0 24px 24px;
+	margin: 0 var(--spacing-large) var(--spacing-large);
 }
 
 /* A menu item that cannot be undone, such as leaving a room */
 .destructive-item {
 	color: var(--destructive-color);
 	font-weight: normal;
-	padding: 6px 12px;
+	padding: var(--spacing-small) var(--spacing-normal);
 }
 
 
@@ -902,24 +902,24 @@ headerbar.title-bar {
 
 .plain-item {
 	font-weight: normal;
-	padding: 6px 12px;
+	padding: var(--spacing-small) var(--spacing-normal);
 }
 
 /* The corner's circle around the spinner, which grows into a pill holding what it waits for */
 .connection-pill {
-	margin: 16px;
+	margin: var(--spacing-roomy);
 	border-radius: 24px;
 	background-color: color-mix(in srgb, var(--window-fg-color) 12%, var(--window-bg-color));
 	box-shadow: 0 2px 8px alpha(black, 0.3);
 }
 
 .connection-note-box {
-	padding: 8px 18px 8px 0;
+	padding: var(--spacing-snug) var(--spacing-wide) var(--spacing-snug) 0;
 }
 
 /* With a fix the pill ends in the button, kept as far from the edge as from the top and bottom */
 .connection-note-box.has-fix {
-	padding-right: 8px;
+	padding-right: var(--spacing-snug);
 }
 
 /* While the server is away the send button only spins, plainly visible rather than faded */
@@ -933,8 +933,8 @@ headerbar.title-bar {
 /* The fix in a connection note is a small button at the end of its row */
 .connection-fix {
 	min-height: 32px;
-	padding: 0 16px;
-	border-radius: 9999px;
+	padding: 0 var(--spacing-roomy);
+	border-radius: var(--pill-radius);
 }
 
 /* A picture the user can change shows a button in its corner while pointed at, which chooses a picture or removes
@@ -945,7 +945,7 @@ headerbar.title-bar {
 	min-width: 28px;
 	min-height: 28px;
 	padding: 0;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	background-color: color-mix(in srgb, var(--window-fg-color) 18%, var(--window-bg-color));
 	box-shadow: 0 1px 4px alpha(black, 0.35);
 }
@@ -960,7 +960,7 @@ headerbar.title-bar {
 	min-width: 22px;
 	min-height: 22px;
 	padding: 0;
-	border-radius: 9999px;
+	border-radius: var(--pill-radius);
 	background-color: var(--warning-bg-color);
 	color: var(--warning-fg-color);
 	font-weight: 800;
@@ -980,19 +980,19 @@ headerbar.title-bar {
 }
 
 .status-bubble {
-	padding: 0 4px;
-	border-radius: 9999px;
+	padding: 0 var(--spacing-tight);
+	border-radius: var(--pill-radius);
 	background-color: color-mix(in srgb, var(--window-fg-color) 8%, transparent);
 }
 
 .status-bubble > menubutton > button {
 	min-height: 36px;
-	padding: 0 12px;
+	padding: 0 var(--spacing-normal);
 	background: none;
 }
 
 .status-menu {
-	padding: 4px;
+	padding: var(--spacing-tight);
 }
 
 /* The pen beside the user's own name only shows while the name is pointed at */
@@ -1008,14 +1008,14 @@ headerbar.title-bar {
 
 /* The offer to register or log in, a strip above the chats */
 .account-banner {
-	margin: 8px 8px 0;
-	padding: 6px 4px 6px 12px;
+	margin: var(--spacing-snug) var(--spacing-snug) 0;
+	padding: var(--spacing-small) var(--spacing-tight) var(--spacing-small) var(--spacing-normal);
 	border-radius: 14px;
 	background-color: color-mix(in srgb, var(--accent-bg-color) 22%, var(--window-bg-color));
 }
 
 .registration {
-	margin: 6px 24px 24px;
+	margin: var(--spacing-small) var(--spacing-large) var(--spacing-large);
 }
 
 /* While a server is dragged in the rail, a line marks the gap it would land in */
@@ -1029,7 +1029,7 @@ headerbar.title-bar {
 
 /* The banner's button and close sit a little tighter, so its words fit beside the rail */
 .account-banner > .connection-fix {
-	padding: 0 12px;
+	padding: 0 var(--spacing-normal);
 }
 
 .account-banner > button.circular {
@@ -1040,28 +1040,28 @@ headerbar.title-bar {
 /* A person's own status line on their profile, and the mark of a bot */
 .profile-status {
 	font-style: italic;
-	margin-top: 4px;
+	margin-top: var(--spacing-tight);
 }
 
 .bot-badge {
-	padding: 1px 10px;
-	border-radius: 9999px;
+	padding: 1px var(--spacing-compact);
+	border-radius: var(--pill-radius);
 	font-size: 0.85em;
 	font-weight: bold;
 	background-color: color-mix(in srgb, var(--accent-bg-color) 30%, var(--window-bg-color));
 }
 
 .found-messages {
-	margin: 12px;
+	margin: var(--spacing-normal);
 }
 
 .found-message {
-	padding: 10px 12px;
+	padding: var(--spacing-compact) var(--spacing-normal);
 }
 
 .link-card {
-	padding: 10px 12px;
-	margin: 4px 0;
+	padding: var(--spacing-compact) var(--spacing-normal);
+	margin: var(--spacing-tight) 0;
 	border-radius: 12px;
 	background-color: alpha(currentColor, 0.06);
 	border-left: 3px solid var(--accent-color);
@@ -1069,7 +1069,7 @@ headerbar.title-bar {
 
 .link-picture {
 	border-radius: 8px;
-	margin-bottom: 4px;
+	margin-bottom: var(--spacing-tight);
 }
 
 .link-site {
@@ -1086,5 +1086,5 @@ headerbar.title-bar {
 }
 
 .suggestion {
-	padding: 6px 10px;
+	padding: var(--spacing-small) var(--spacing-compact);
 }
