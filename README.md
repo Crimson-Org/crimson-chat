@@ -3,8 +3,8 @@
 </p>
 
 <h1 align="center">Crimson Chat</h1>
-<p align="center">An <a href="https://ircv3.net">IRCv3</a> client for Linux with replies, reactions, typing indicators and synced history.<br>
-Comes with a bouncer that keeps you online while away.<br>
+<p align="center">An <a href="https://ircv3.net">IRCv3</a> client for Linux, with its own bouncer.<br>
+Chat on IRC with replies, reactions, typing indicators and synced history.<br>
 Old protocol, new manners.</p>
 
 <p align="center">
@@ -29,7 +29,7 @@ Old protocol, new manners.</p>
 
 ## Why
 
-Crimson Chat brings IRC history, replies, reactions and read markers into a modern messenger.\
+IRC that feels like a modern messenger, while people on ordinary IRC clients can still follow along.\
 The bouncer keeps your networks connected even when your computer is off.
 
 ## About
@@ -54,10 +54,6 @@ Moderators manage room settings, bans and invites from the room's page.
 
 `crimson-chat-bouncer` keeps you connected while you are away, saves the chat history and sends that history to all your devices.\
 Admins invite people with links from the bouncer's website.
-
-### Notifications
-
-Mentions and private messages show desktop notifications, and closing the window keeps you connected in the tray.
 
 ## Building
 
