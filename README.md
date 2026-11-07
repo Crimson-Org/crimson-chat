@@ -29,8 +29,8 @@ Old protocol, new manners.</p>
 
 ## Why
 
-IRC networks have history, replies, reactions and read markers, but most clients still show a wall of scrolling text.\
-Crimson Chat acts like a modern messenger, and the bouncer keeps your networks connected when your computer is off.
+Crimson Chat brings IRC history, replies, reactions and read markers into a modern messenger.\
+The bouncer keeps your networks connected even when your computer is off.
 
 ## About
 
@@ -61,8 +61,8 @@ Mentions and private messages show desktop notifications, and closing the window
 
 ## Building
 
-You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), [libsoup](https://libsoup.gnome.org), [gdk-pixbuf](https://gitlab.gnome.org/GNOME/gdk-pixbuf), [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org).\
-On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel libsoup-devel gdk-pixbuf-devel sqlite3-devel libgnutls-devel`.
+You need a [C compiler](https://gcc.gnu.org/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/), [libsoup](https://libsoup.gnome.org), [gdk-pixbuf](https://gitlab.gnome.org/GNOME/gdk-pixbuf), [SQLite](https://sqlite.org) and [GnuTLS](https://gnutls.org).\
+On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc pkg-config gtk4-devel libadwaita-devel libsoup-devel gdk-pixbuf-devel sqlite3-devel libgnutls-devel`.
 
 Steps:
  1. Clone using `git clone --recurse-submodules https://github.com/Crimson-Org/crimson-chat`
